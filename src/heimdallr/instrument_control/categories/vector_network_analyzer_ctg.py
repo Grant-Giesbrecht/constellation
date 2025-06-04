@@ -40,3 +40,10 @@ class VectorNetworkAnalyzerCtg1(VectorNetworkAnalyzerCtg0):
 	def get_trace(self, trace:int):
 		
 		pass
+
+class VectorNetworkAnalyzerCtg2(VectorNetworkAnalyzerCtg1):
+	
+	def __init__(self, address:str, log:LogPile):
+		super().__init__(address, log)
+	
+	

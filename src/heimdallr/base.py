@@ -85,7 +85,11 @@ class Identifier:
 		
 		self.remote_id = "" # Rich name authenticated by the server and used to lookup the remote address
 		self.remote_addr = "" # String IP address of driver host, pipe, then instrument VISA address.
+	
+	def short_str(self):
 		
+		return f"(driver-class: {self.dvr}, remote-id: {self.remote_id})"
+	
 	def __str__(self):
 		
 		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\nremote-addr: {self.remote_addr}"
@@ -124,31 +128,52 @@ class Driver(ABC):
 		# Connect instrument
 		self.connect()
 	
+	def lowdebug(self, message:str, detail:str=""):
+		self.log.lowdebug(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+	
+	def debug(self, message:str, detail:str=""):
+		self.log.debug(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+	
+	def info(self, message:str, detail:str=""):
+		self.log.info(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+	
+	def warning(self, message:str, detail:str=""):
+		self.log.warning(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+	
+	def error(self, message:str, detail:str=""):
+		self.log.error(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+		
+	def critical(self, message:str, detail:str=""):
+		self.log.critical(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+	
 	def connect(self, check_id:bool=True):
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.log.error(f"Cannot use default connect() function, instrument does recognize SCPI commands.")
+			self.error(f"Cannot use default connect() function, instrument does recognize SCPI commands.", detail=f"{self.id}")
 			return
 		
 		# Attempt to connect
 		try:
 			self.inst = self.rm.open_resource(self.address)
 			self.online = True
+			self.debug(f"Connected to address >{self.address}<.", detail=f"{self.id}")
 			
 			if check_id:
 				self.query_id()
 			
 		except Exception as e:
-			self.log.error(f"Failed to connect to address: {self.address}. ({e})")
+			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
 			self.online = False
 	
 	def preset(self):
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.log.error(f"Cannot use default preset() function, instrument does recognize SCPI commands.")
+			self.error(f"Cannot use default preset() function, instrument does recognize SCPI commands.", detail=f"{self.id}")
 			return
+		
+		self.debug(f"Preset.", detail=f"{self.id}")
 		
 		self.write("*RST")
 	
@@ -157,7 +182,7 @@ class Driver(ABC):
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.log.error(f"Cannot use default query_id() function, instrument does recognize SCPI commands.")
+			self.error(f"Cannot use default query_id() function, instrument does recognize SCPI commands.", detail=f"{self.id}")
 			return
 		
 		# Query IDN model
@@ -165,28 +190,28 @@ class Driver(ABC):
 		
 		if self.id.idn_model is not None:
 			self.online = True
-			self.log.debug(f"Instrument connection state: >ONLINE<")
+			self.debug(f"Connection state: >ONLINE<")
 			
 			if self.expected_idn is None or self.expected_idn == "":
-				self.log.debug("Cannot verify hardware. No verification string provided.")
+				self.debug("Cannot verify hardware. No verification string provided.")
 				return
 			
 			# Check if model is right
 			if self.expected_idn.upper() in self.id.idn_model.upper():
 				self.verified_hardware = True
-				self.log.debug(f"Hardware verification >PASSED<", detail=f"Received string: {self.id.idn_model}")
+				self.debug(f"Hardware verification >PASSED<", detail=f"Received string: {self.id.idn_model}")
 			else:
 				self.verified_hardware = False
-				self.log.debug(f"Hardware verification >FAILED<", detail=f"Received string: {self.id.idn_model}")
+				self.debug(f"Hardware verification >FAILED<", detail=f"Received string: {self.id.idn_model}")
 		else:
-			self.log.debug(f"Instrument connection state: >OFFLINE<")
+			self.debug(f"Connection state: >OFFLINE<")
 			self.online = False
 		
 	def close(self):
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.log.error(f"Cannot use default close() function, instrument does recognize SCPI commands.")
+			self.error(f"Cannot use default close() function, instrument does recognize SCPI commands.")
 			return
 		
 		self.inst.close()
@@ -201,7 +226,7 @@ class Driver(ABC):
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.log.error(f"Cannot use default wait_ready() function, instrument does recognize SCPI commands.")
+			self.error(f"Cannot use default wait_ready() function, instrument does recognize SCPI commands.")
 			return
 		
 		self.write(f"*OPC")
@@ -235,19 +260,19 @@ class Driver(ABC):
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.log.error(f"Cannot use default write() function, instrument does recognize SCPI commands.")
+			self.error(f"Cannot use default write() function, instrument does recognize SCPI commands.")
 			return
 		
 		if not self.online:
-			self.log.warning(f"Cannot write when offline. ()")
+			self.warning(f"Cannot write when offline. ()")
 			return
 			
 		try:
 			self.inst.write(cmd)
+			self.lowdebug(f"Wrote to instrument: >{cmd}<")
 		except Exception as e:
-			self.log.error(f"Failed to write to instrument {self.address}. ({e})")
+			self.error(f"Failed to write to instrument {self.address}. ({e})")
 			self.online = False
-		
 	def id_str(self):
 		pass
 	
@@ -256,16 +281,18 @@ class Driver(ABC):
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.log.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
+			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
 			return
 		
 		if not self.online:
-			self.log.warning(f"Cannot write when offline. ()")
+			self.warning(f"Cannot write when offline. ()")
 		
 		try:
-			return self.inst.write()
+			rv = self.inst.read()
+			self.lowdebug(f"Read from instrument: >:a{rv}<")
+			return rv
 		except Exception as e:
-			self.log.error(f"Failed to read from instrument {self.address}. ({e})")
+			self.error(f"Failed to read from instrument {self.address}. ({e})")
 			self.online = False
 			return None
 	
@@ -274,16 +301,17 @@ class Driver(ABC):
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.log.error(f"Cannot use default query() function, instrument does recognize SCPI commands.")
+			self.error(f"Cannot use default query() function, instrument does recognize SCPI commands.")
 			return
 		
 		if not self.online:
-			self.log.warning(f"Cannot write when offline. ()")
+			self.warning(f"Cannot write when offline. ()")
 		
 		try:
-			return self.inst.query(cmd)
+			rv = self.inst.query(cmd)
+			self.lowdebug(f"Queried instrument, >{cmd}<, receiving >:a{rv}<.")
 		except Exception as e:
-			self.log.error(f"Failed to query instrument {self.address}. ({e})")
+			self.error(f"Failed to query instrument {self.address}. ({e})")
 			self.online = False
 			return None
 

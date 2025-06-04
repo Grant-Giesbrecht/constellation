@@ -1,8 +1,6 @@
-''' Driver for PNA E8364B VNA
+''' Driver for Rhode & Schwarz ZVA
 
-* Only supports a single window
-
-Manual: https://www.testworld.com/wp-content/uploads/user-guide-help-agilent-e8362b-e8363b-e8364b-e8361a-n5230a-n5242a-pna-series-microwave-network-analyzers.pdf
+Manual (Requires login and R&S approval): https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/dl_common_library/dl_manuals/gb_1/z/zva_2/ZVA_ZVB_ZVT_OperatingManual_en_33.pdf
 '''
 
 from heimdallr.base import *
@@ -85,6 +83,14 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg1):
 		self.write(f"SYSTEM:DISPLAY:UPDATE ONCE")
 	
 	def get_channel_data(self, channel:int):
+		'''
+		
+		Channel Data:
+			* x: X data list (float)
+			* y: Y data list (float)
+			* x_units: Units of x-axis
+			* y_units: UNits of y-axis
+		'''
 		
 		self.log.warning(f"Binary transfer not implemented. Defaulting to slower ASCII.")
 		
@@ -109,8 +115,16 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg1):
 		imag_tokens = imag_data.split(",")
 		trace = [complex(float(re), float(im)) for re, im in zip(real_tokens, imag_tokens)]
 		
-		# Query data
-		return self.query(f"CALC{channel}:DATA? SDATA")
+		# Get frequency range
+		f0 = self.get_freq_start()
+		fe = self.get_freq_end()
+		fnum = self.get_num_points()
+		freqs_Hz = list(np.linspace(f0, fe, fnum))
+		
+		return {'x': freqs_Hz, 'y': trace, 'x_units': 'Hz', 'y_units': 'Reflection (complex), unitless'}
+		
+		# # Query data
+		# return self.query(f"CALC{channel}:DATA? SDATA")
 		
 	# def set_continuous_trigger(self, enable:bool):
 	# 	self.write(f"INIT:CONT {bool_to_ONFOFF(enable)}")

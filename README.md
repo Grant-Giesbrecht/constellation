@@ -1,17 +1,52 @@
 <h1 align="center">
-<img src="https://github.com/Grant-Giesbrecht/heimdallr/blob/main/docs/images/heimdallr_banner.png?raw=True" width="800">
+<img src="https://github.com/Grant-Giesbrecht/heimdallr/blob/main/docs/images/heimdallr_logo.png?raw=True" width="500">
 </h1><br>
 
-Heimdallr offers a better way of implementing instrument control and scripting. It does this through a series of core features:
+Heimdallr is a package for simplifying instrument control. It is designed to build
+off of libraries like [pyvisa](https://github.com/pyvisa/pyvisa) and [pyvisa-py](https://github.com/pyvisa/pyvisa-py)
+and provide a complete ecosystem for instrument automation. As a brief example of
+what this can look like in its simplest form, here's an example script which 
+connects to an instrument, resets it, then adjusts and reads some basic settings:
 
-- In addition to providing a **base set of instrument drivers**, it enforces a convention such that drivers for different instrument models of the same 'type' (eg. two different models of 2-channel oscilloscope) are **guaranteed to use the same API**. This greatly simplifies script writing, and prevents your scripts from becoming bound to one specific instrument model. 
-- **Networking:** Heimdallr includes an optional networking system which allows multiple computers to connect to a single AES-encrypted network. This allows you to monitor the state of your instruments remotely, start new measurements without being co-located with your instruments, or control instruments that are not physically close to each other. There is a wide range of applications for networked instrument control!
-- **(WIP) GUIs:** Although still a work in progress, GUI widgets added for instrument categories allow you to make visual apps to control or monitor your instruments. Due to the inheritance and category strucutrue, these widgets are instrument model agnostic, and will work for any instrument of the appropriate category.
-- **Easy to add new drivers:** Due to the category system used, writing new drivers is very straight forward. Only simple SCPI commands need to be added to the new driver, and the parent class will automatically enable networking and integration with GUI widgets.
-- (Mention ecosystem of networks, common drivers, GUIs, and scripting helpers like interpret_range.)
-- **Rich Logging:** Because Heimdallr's core use case concerns scientific experiments, robust and complete logging is key. Heimdallr automates logging via the [pylogfile](https://pypi.org/project/pylogfile/) library, recording every command sent to instruments, and saving logs in a dense binary open-source format, which can easily be analyzed and searched using the included command line tool, `lumberjack`.
+``` Python
+from heimdallr.all import *
 
-## Installation
+# Create log object
+log = LogPile()
+
+# Create NRX Driver
+nrx = RohdeSchwarzNRX("TCPIP0::192.168.0.10::INSTR", log)
+
+# Preset device
+nrx.preset()
+
+# Get meas frequency
+nrx.set_meas_frequency(1e9)
+fmeas = nrx.get_meas_frequency()
+```
+
+One of the key components of Heimdallr is a set of instrument drivers, one of which,
+the `RohdeSchwarzNRX` class, was seen above. However, Heimdallr is more than just
+a collection of driver classes. Some of its key features include:
+
+- **Instrument API standardization:** Drivers inherit from category classes, guaranteeing
+that all instruments of the same category (ie. all oscilloscopes) will share a common
+API.
+- **Networking:** In addition to directly connecting to and interfacing with your
+instruments, you can optionally use Heimdallr's networking classes to remotely access
+your instruments. This works by connecting multiple clients to a single server program
+over an AES-encrypted network. Typically one client would interface with the instrument 
+drivers, while the other clients can be used to monitor or adjust experiments remotely.
+- **Autmoatic Rich Logging:** Because Heimdallr's core use-case concerns scientific experiments,
+robust and thorough logging is crucial. Heimdallr automates this via the [pylogfile](https://pypi.org/project/pylogfile/)
+library and records every command sent to the instruments. Logs can be saved in the binary and open-source HDF format, which can be viewed and analyzed usign the `lumberjack` command line tool.
+- **Ease of Creating New Drivers:** The instrument category classes automate much of the 
+work involved in creating a driver, meaning you only need to focus on finding the right
+SCPI commands to create any new drivers you need.
+- **(Work in progress) GUIs:** GUI widgets for specific instrument categories make it easy to control 
+or monitor your experiments.
+
+# Installation
 
 Heimdallr can be installed via pip using 
 
@@ -19,7 +54,7 @@ Heimdallr can be installed via pip using
 pip install heimdallr-py
 ```
 
-## Instrument Control
+# TODO
 
 ### Technical detail: Category system and Drivers
 
@@ -43,6 +78,8 @@ TODO = basic example
 ### Networking Example
 
 TODO = Networking example
+
+### List of included drivers
 
 [Read The Docs](https://heimdallr-py.readthedocs.io/en/latest/)
 
