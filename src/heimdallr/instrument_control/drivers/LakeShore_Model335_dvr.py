@@ -17,12 +17,12 @@ class LakeShoreModel335(PIDTemperatureControllerCtg):
 		super().__init__(address, log, expected_idn="LSCI,MODEL335,335")
 	
 	def set_setpoint(self, temp_K:float, channel:int=1):
-		self.inst.write(f"SETP {channel},{temp_K}")
+		self.write(f"SETP {channel},{temp_K}")
 	def get_setpoint(self, channel:int=1):
-		return float(self.inst.query(f"SETP? {channel}"))
+		return float(self.query(f"SETP? {channel}"))
 	
 	def get_temp(self, channel:int=1):
-		return float(self.inst.query(f"KRDG? {channel}"))
+		return float(self.query(f"KRDG? {channel}"))
 	
 	def set_pid(self, P:float, I:float, D:float, channel:int=1):
 		P = max(0.1, min(P, 1000))
