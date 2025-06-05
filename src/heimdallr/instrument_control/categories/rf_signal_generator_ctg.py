@@ -1,11 +1,6 @@
 from heimdallr.base import *
 
-class RFSignalGeneratorCtg0(Driver):
-	
-	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
-
-class RFSignalGeneratorCtg1(Driver):
+class RFSignalGeneratorCtg(Driver):
 	
 	POWER = "power[dBm]"
 	FREQ = "freq[Hz]"
@@ -14,9 +9,9 @@ class RFSignalGeneratorCtg1(Driver):
 	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
 		
-		self.state[RFSignalGeneratorCtg1.POWER] = None
-		self.state[RFSignalGeneratorCtg1.FREQ] = None
-		self.state[RFSignalGeneratorCtg1.ENABLE] = None
+		self.state[RFSignalGeneratorCtg.POWER] = None
+		self.state[RFSignalGeneratorCtg.FREQ] = None
+		self.state[RFSignalGeneratorCtg.ENABLE] = None
 	
 	@abstractmethod
 	def set_power(self, p_dBm:float):
@@ -39,7 +34,7 @@ class RFSignalGeneratorCtg1(Driver):
 	def get_enable_rf(self):
 		pass
 	
-	def refresh_all(self):
+	def refresh_state(self):
 		self.get_power()
 		self.get_freq()
 		self.get_enable_rf()

@@ -50,6 +50,8 @@ def truncate_str(s:str, limit:int=14):
 	''' Used in automatic logs to make sure a value converted to a string isn't super
 	long. '''
 	
+	s = str(s)
+	
 	if len(s) <= limit:
 		return s
 	else:
@@ -204,10 +206,15 @@ class Driver(ABC):
 		
 		if (query_func is None) or self.dummy or self.blind_state_update:
 			prev_val = self.state[param]
+			
+			# Record ing log
 			self.log.add_log(self.state_change_log_level, f"(Driver: >:q{self.id.short_str()}<) State modified; >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+			
 			if channel is None:
 				self.state[param] = value
 			else:
+				
+				print(channel)
 				
 				while channel > len(self.state[param]):
 					if type(value) == list:
@@ -225,6 +232,21 @@ class Driver(ABC):
 					self.log.error(f"Failed to modify internal state. {e}")
 		else:
 			query_func()
+	
+	def show_state(self):
+		
+		def split_param(s):
+			before_brackets = s[:s.index("[")]
+			inside_brackets = s[s.index("[")+1:s.index("]")]
+			return before_brackets, inside_brackets
+		
+		for k, v in self.state.items():
+			
+			# Get name and unit strings
+			name, unit = split_param(k)
+			print(f"{name}:")
+			print(f"    value: {truncate_str(v)}")
+			print(f"    unit: {unit}")
 	
 	def preset(self):
 		
@@ -374,6 +396,8 @@ class Driver(ABC):
 			self.error(f"Failed to query instrument {self.address}. ({e})")
 			self.online = False
 			return None
+		
+		return rv
 	
 	@abstractmethod
 	def refresh_state(self):
