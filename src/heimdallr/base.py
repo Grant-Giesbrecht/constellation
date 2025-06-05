@@ -207,6 +207,9 @@ class Driver(ABC):
 			if channel is None:
 				self.state[param] = value
 			else:
+				
+				#TODO: Automatically add indecies to list to accomodate adding channels
+				
 				try:
 					self.state[param][channel-1] = value
 				except Exception as e:

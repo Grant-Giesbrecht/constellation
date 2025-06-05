@@ -19,23 +19,26 @@ class SiglentSSA3000X(SpectrumAnalyzerCtg):
 		self.trace_lookup = {}
 	
 	def set_freq_start(self, f_Hz:float):
+		self.modify_state(self.get_freq_start, SpectrumAnalyzerCtg.FREQ_START, f_Hz)
 		self.write(f"SENS:FREQ:STAR {f_Hz} Hz")
 	def get_freq_start(self):
-		return float(self.query(f"SENS:FREQ:STAR?"))
+		return self.modify_state(None, SpectrumAnalyzerCtg.FREQ_START, float(self.query(f"SENS:FREQ:STAR?")))
 	
 	def set_freq_end(self, f_Hz:float):
+		self.modify_state(self.get_freq_end, SpectrumAnalyzerCtg.FREQ_END, f_Hz)
 		self.write(f"SENS:FREQ:STOP {f_Hz}")
-	def get_freq_end(self,):
-		return float(self.query(f"SENS:FREQ:STOP?"))
+	def get_freq_end(self):
+		return self.modify_state(None, SpectrumAnalyzerCtg.FREQ_END, float(self.query(f"SENS:FREQ:STOP?")))
 	
 	def set_ref_level(self, ref_dBm:float):
 		ref_dBm = max(-100, min(ref_dBm, 30))
 		if ref_dBm != ref_dBm:
 			self.log.error(f"Did not apply command. Instrument limits values from -100 to 30 dBm and this range was violated.")
 			return
+		self.modify_state(self.get_ref_level, SpectrumAnalyzerCtg.REF_LEVEL, ref_dBm)
 		self.write(f"DISP:WIND:TRAC:Y:RLEV {ref_dBm} DBM")
 	def get_ref_level(self):
-		return float(self.query("DISP:WIND:TRAC:Y:RLEV?"))
+		return self.modify_state(None, SpectrumAnalyzerCtg.REF_LEVEL, float(self.query("DISP:WIND:TRAC:Y:RLEV?")))
 	
 	def set_y_div(self, step_dB:float):
 		
@@ -43,19 +46,23 @@ class SiglentSSA3000X(SpectrumAnalyzerCtg):
 		if step_dB != step_dB:
 			self.log.error(f"Did not apply command. Instrument limits values from 1 to 20 dB and this range was violated.")
 			return
+		
+		self.modify_state(self.get_y_div, SpectrumAnalyzerCtg.Y_DIV, step_dB)
 		self.write(f":DISP:WIND:TRAC:Y:SCAL:PDIV {step_dB} DB")
 	def get_y_div(self):
-		return float(self.query(f":DISP:WIND:TRAC:Y:SCAL:PDIV?"))
+		return self.modify_state(None, SpectrumAnalyzerCtg.Y_DIV, float(self.query(f":DISP:WIND:TRAC:Y:SCAL:PDIV?")))
 	
-	def set_res_bandwidth(self, rbw_Hz:float, channel:int=1):
+	def set_res_bandwidth(self, rbw_Hz:float):
+		self.modify_state(self.get_res_bandwidth, SpectrumAnalyzerCtg.RES_BW, rbw_Hz)
 		self.write(f"SENS:BWID:RES {rbw_Hz}")
-	def get_res_bandwidth(self, channel:int=1):
-		return float(self.query(f"SENS:BWID:RES?"))
+	def get_res_bandwidth(self):
+		return self.modify_state(None, SpectrumAnalyzerCtg.RES_BW, float(self.query(f"SENS:BWID:RES?")))
 	
 	def set_continuous_trigger(self, enable:bool):
+		self.modify_state(self.get_continuous_trigger, SpectrumAnalyzerCtg.CONTINUOUS_TRIG_EN, enable)
 		self.write(f"INIT:CONT {bool_to_ONFOFF(enable)}")
 	def get_continuous_trigger(self):
-		return str_to_bool(self.query(f"INIT:CONT?"))
+		return self.modify_state(None, SpectrumAnalyzerCtg.CONTINUOUS_TRIG_EN, str_to_bool(self.query(f"INIT:CONT?")))
 	
 	def send_manual_trigger(self):
 		self.write(f"INIT:IMM")
@@ -112,6 +119,8 @@ class SiglentSSA3000X(SpectrumAnalyzerCtg):
 		f_list = list(np.linspace(self.get_freq_start(), self.get_freq_end(), len(float_data)))
 		
 		out_data = {'x':f_list, 'y':float_data, 'x_units':'Hz', 'y_units':'dBm'}
+		
+		self.modify_state(None, SpectrumAnalyzerCtg.TRACE_DATA, out_data, channel=trace)
 		
 		# Convert Y-unit to dBm
 		return out_data
