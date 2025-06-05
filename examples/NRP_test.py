@@ -1,7 +1,7 @@
 from heimdallr.all import *
 import sys
 
-log = LogPile()
+log = plf.LogPile()
 
 address = "USB0::0x0AAD::0x0139::101706::INSTR"
 

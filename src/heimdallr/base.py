@@ -1,5 +1,5 @@
 import pyvisa as pv
-from pylogfile.base import *
+import pylogfile.base as plf
 import numpy as np
 import time
 import inspect
@@ -107,7 +107,7 @@ class Identifier:
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
-	def __init__(self, address:str, log:LogPile, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str=""):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str=""):
 		
 		self.address = address
 		self.log = log
@@ -126,6 +126,7 @@ class Driver(ABC):
 		self.dummy = False
 		self.blind_state_update = False
 		self.state = {}
+		self.state_change_log_level = plf.DEBUG
 		
 		# Setup ID
 		self.id.remote_addr = client_id + "|" + self.address
@@ -208,7 +209,15 @@ class Driver(ABC):
 				self.state[param] = value
 			else:
 				
-				#TODO: Automatically add indecies to list to accomodate adding channels
+				while channel > len(self.state[param]):
+					if type(value) == list:
+						self.state[param].append([])
+					elif type(value) == dict:
+						self.state[param].append({})
+					elif type(value) == str:
+						self.state[param].append("")
+					else:
+						self.state[param].append([])
 				
 				try:
 					self.state[param][channel-1] = value

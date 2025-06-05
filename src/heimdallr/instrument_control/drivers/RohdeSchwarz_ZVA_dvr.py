@@ -12,7 +12,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg1):
 	SWEEP_SINGLE = "sweep-single"
 	SWEEP_OFF = "sweep-off"
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="Rohde&Schwarz,ZVA")
 		
 		self.trace_lookup = {}

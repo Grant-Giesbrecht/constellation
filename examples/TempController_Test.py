@@ -1,5 +1,5 @@
 from heimdallr.all import *
 
-log = LogPile()
+log = plf.LogPile()
 
 tc = LakeShoreModel335("GPIB::12::INSTR", log)

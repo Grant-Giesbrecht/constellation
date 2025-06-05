@@ -3,7 +3,7 @@ from heimdallr.networking.net_client import *
 
 class OscilloscopeCtg0(Driver):
 	
-	def __init__(self, address:str, log:LogPile, expected_idn="", **kwargs):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
 
 class OscilloscopeCtg1(OscilloscopeCtg0):
@@ -15,7 +15,7 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 	CHAN_EN = "chan_en[bool]"
 	WAVEFORM = "waveform[V]"
 	
-	def __init__(self, address:str, log:LogPile, expected_idn="", **kwargs):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
 		
 		self.state[OscilloscopeCtg1.DIV_TIME] = None
@@ -79,7 +79,7 @@ class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
 	for this category of instrument using this class and callings its functions, rather
 	than creating a RemoteInstrument object and always calling remote_call.'''
 	
-	def __init__(self, ca:ClientAgent, log:LogPile, remote_id:str=None, remote_address:str=None):
+	def __init__(self, ca:ClientAgent, log:plf.LogPile, remote_id:str=None, remote_address:str=None):
 		super().__init__(ca, log, remote_id=remote_id, remote_address=remote_address)
 	
 	@remotefunction
@@ -131,7 +131,7 @@ class OscilloscopeCtg2(OscilloscopeCtg1):
 	STAT_CURR = 4
 	STAT_STD = 5
 	
-	def __init__(self, address:str, log:LogPile, expected_idn="", **kwargs):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
 	
 	@abstractmethod

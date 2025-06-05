@@ -18,7 +18,7 @@ if args.local:
 else:
 	ip_address = "192.168.1.116"
 
-log = LogPile()
+log = plf.LogPile()
 ca = ClientAgent(log)
 
 ca.set_addr(ip_address, 5555)

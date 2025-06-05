@@ -14,7 +14,7 @@ TK_CSA_DRIVER_MAX_READ_LEN = 1073741824
 # TODO: Create CSA category
 class TektronixCSA8000(Driver):
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="TEKTRONIX,CSA8")
 	
 	def get_waveform(self,channel:int=1): 

@@ -8,7 +8,7 @@ from heimdallr.instrument_control.categories.rf_signal_generator_ctg import *
 
 class AgilentE4400(RFSignalGeneratorCtg1):
 
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn='Hewlett-Packard, ESG-4000B')
 	
 	def set_power(self, p_dBm:float):

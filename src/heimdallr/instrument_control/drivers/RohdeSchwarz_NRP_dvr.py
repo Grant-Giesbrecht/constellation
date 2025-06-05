@@ -9,7 +9,7 @@ from heimdallr.instrument_control.categories.rf_power_sensor_ctg import *
 
 class RohdeSchwarzNRP(RFPowerSensor):
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="Rohde&Schwarz,NRP") # Example string:  ''
 		
 	def set_meas_frequency(self, f_Hz:float):

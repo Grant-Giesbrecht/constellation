@@ -6,7 +6,7 @@ from heimdallr.instrument_control.categories.rf_signal_generator_ctg import *
 
 class Keysight8360L(RFSignalGeneratorCtg1):
 
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		# Example: "HEWLETT-PACKARD,83650L,3844A00476,19 JAN 00\n"
 		super().__init__(address, log, expected_idn="HEWLETT-PACKARD,836")
 		

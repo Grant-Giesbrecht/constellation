@@ -16,7 +16,7 @@ class SpectrumAnalyzerCtg(Driver):
 	REF_LEVEL = "ref-level[dBm]"
 	Y_DIV = "y-div[dB]"
 	
-	def __init__(self, address:str, log:LogPile, expected_idn:str=""):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn:str=""):
 		super().__init__(address, log, expected_idn=expected_idn)
 		
 		self.state[SpectrumAnalyzerCtg.FREQ_START] = None

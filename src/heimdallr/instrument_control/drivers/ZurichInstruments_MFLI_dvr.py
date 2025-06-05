@@ -15,7 +15,7 @@ def bool_to_int(x:bool):
 
 class ZurichInstrumentsMFLI(LockInAmplifierCtg):
 	
-	def __init__(self, dev_sn:str, address:str, log:LogPile):
+	def __init__(self, dev_sn:str, address:str, log:plf.LogPile):
 		super().__init__(address, log, is_scpi=False, expected_idn="MFLI")
 		
 		self.zhinst_params = None

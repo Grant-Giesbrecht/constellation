@@ -21,7 +21,7 @@ TC_LISTEN_CHECK_OPTION = "TC_LISTEN_CHECK_TIME"
 class ServerMaster:
 	''' This class contains data shared between multiple clients. '''
 	
-	def __init__(self, master_log:LogPile):
+	def __init__(self, master_log:plf.LogPile):
 		
 		#TODO: Add way of printing status of each of these (ie. lengths of the lists)
 		
@@ -71,7 +71,7 @@ class ServerMaster:
 		
 		return True
 
-master_log = LogPile()
+master_log = plf.LogPile()
 serv_master = ServerMaster(master_log)
 
 # Define parameters that go in sa.app_data (defined so harder to mistype)

@@ -7,7 +7,7 @@ from heimdallr.instrument_control.categories.all_ctgs import *
 
 class RigolDS1000Z(OscilloscopeCtg2):
 
-	def __init__(self, address:str, log:LogPile, **kwargs):
+	def __init__(self, address:str, log:plf.LogPile, **kwargs):
 		super().__init__(address, log, expected_idn='RIGOL TECHNOLOGIES,DS10', **kwargs)
 		
 		self.meas_table = {OscilloscopeCtg2.MEAS_VMAX:'VMAX', OscilloscopeCtg2.MEAS_VMIN:'VMIN', OscilloscopeCtg2.MEAS_VAVG:'VAVG', OscilloscopeCtg2.MEAS_VPP:'VPP', OscilloscopeCtg2.MEAS_FREQ:'FREQ'}

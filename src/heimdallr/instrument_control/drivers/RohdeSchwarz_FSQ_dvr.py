@@ -11,7 +11,7 @@ from heimdallr.instrument_control.categories.spectrum_analyzer_ctg import *
 
 class RohdeSchwarzFSQ(SpectrumAnalyzerCtg):
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="Rohde&Schwarz,FSQ-") # Example 'Rohde&Schwarz,FSQ-26,200334/026,4.75\n'
 		
 		self.trace_lookup = {}

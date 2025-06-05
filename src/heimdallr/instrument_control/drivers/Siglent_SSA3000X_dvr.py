@@ -13,7 +13,7 @@ from heimdallr.instrument_control.categories.spectrum_analyzer_ctg import *
 
 class SiglentSSA3000X(SpectrumAnalyzerCtg):
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="Siglent Technologies,SSA30")
 		
 		self.trace_lookup = {}

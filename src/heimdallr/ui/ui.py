@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QMainWindow, QGridLayout, QPushButton, QSlider, QGro
 
 class HeimdallrWindow(QMainWindow):
 	
-	def __init__(self, log:LogPile):
+	def __init__(self, log:plf.LogPile):
 		
 		self.log = log
 		
@@ -14,7 +14,7 @@ class HeimdallrWindow(QMainWindow):
 
 class CtgWidget(QWidget):
 	
-	def __init__(self, inst:Driver, log:LogPile):
+	def __init__(self, inst:Driver, log:plf.LogPile):
 		
 		# Local variables
 		self.log = log

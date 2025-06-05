@@ -9,7 +9,7 @@ from heimdallr.instrument_control.categories.digital_multimeter_ctg import *
 
 class Keysight34400(DigitalMultimeterCtg1):
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="Keysight Technologies,344") 
 		
 		# Unit to make sure is matched by returned string

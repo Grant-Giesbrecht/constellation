@@ -1,6 +1,6 @@
 from heimdallr.all import *
 
-log = LogPile()
+log = plf.LogPile()
 
 vna = KeysightPNAE8364B("TCPIP0::10.10.71.10::INSTR", log)
 

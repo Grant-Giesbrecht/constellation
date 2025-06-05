@@ -12,7 +12,7 @@ connects to an instrument, resets it, then adjusts and reads some basic settings
 from heimdallr.all import *
 
 # Create log object
-log = LogPile()
+log = plf.LogPile()
 
 # Create NRX Driver
 nrx = RohdeSchwarzNRX("TCPIP0::192.168.0.10::INSTR", log)

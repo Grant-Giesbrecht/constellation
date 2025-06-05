@@ -112,7 +112,7 @@ class DriverManager:
 	
 	#TODO: Implement multi-threading
 	
-	def __init__(self, log:LogPile, ca:ClientAgent=None):
+	def __init__(self, log:plf.LogPile, ca:ClientAgent=None):
 		
 		self.drivers = {} # Dictionary mapping key=remote-addr to value=Driver-objects
 		self.log = log

@@ -16,7 +16,7 @@ class Keysight_33000X(Driver):
 	FILTER_OFF = "OFF"
 	FILTER_STEP = "STEP"
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="Agilent Technologies,33")
 		
 		self.trace_lookup = {}

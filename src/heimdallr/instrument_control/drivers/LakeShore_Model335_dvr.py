@@ -13,7 +13,7 @@ class LakeShoreModel335(PIDTemperatureControllerCtg):
 	RANGE_MID = 2
 	RANGE_HIGH = 3
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="LSCI,MODEL335,335")
 	
 	def set_setpoint(self, temp_K:float, channel:int=1):

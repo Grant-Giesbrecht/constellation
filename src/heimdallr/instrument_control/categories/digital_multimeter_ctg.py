@@ -2,7 +2,7 @@ from heimdallr.base import *
 
 class DigitalMultimeterCtg0(Driver):
 	
-	def __init__(self, address:str, log:LogPile, expected_idn=""):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn=""):
 		super().__init__(address, log, expected_idn=expected_idn)
 
 class DigitalMultimeterCtg1(DigitalMultimeterCtg0):
@@ -16,6 +16,6 @@ class DigitalMultimeterCtg1(DigitalMultimeterCtg0):
 	# TODO: Flesh out
 	RANGE_AUTO = "auto-range"
 	
-	def __init__(self, address:str, log:LogPile, expected_idn=""):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn=""):
 		super().__init__(address, log, expected_idn=expected_idn)
 	

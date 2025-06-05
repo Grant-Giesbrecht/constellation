@@ -24,7 +24,7 @@ else:
 if __name__ == '__main__':
 	
 	# Create and format log object
-	log = LogPile()
+	log = plf.LogPile()
 	if args.loglevel is not None:
 		log.set_terminal_level(args.loglevel)
 	log.str_format.show_detail = args.detail

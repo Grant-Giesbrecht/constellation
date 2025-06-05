@@ -2,7 +2,7 @@ from heimdallr.base import *
 
 class VectorNetworkAnalyzerCtg0(Driver):
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log)
 
 class VectorNetworkAnalyzerCtg1(VectorNetworkAnalyzerCtg0):
@@ -12,7 +12,7 @@ class VectorNetworkAnalyzerCtg1(VectorNetworkAnalyzerCtg0):
 	MEAS_S12 = "meas-s12"
 	MEAS_S22 = "meas-s22"
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log)
 	
 	def set_freq_start(self, f_Hz:float, channel:int=1):
@@ -43,7 +43,7 @@ class VectorNetworkAnalyzerCtg1(VectorNetworkAnalyzerCtg0):
 
 class VectorNetworkAnalyzerCtg2(VectorNetworkAnalyzerCtg1):
 	
-	def __init__(self, address:str, log:LogPile):
+	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log)
 	
 	
