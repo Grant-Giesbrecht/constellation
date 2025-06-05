@@ -8,13 +8,26 @@ class OscilloscopeCtg0(Driver):
 
 class OscilloscopeCtg1(OscilloscopeCtg0):
 	
+	DIV_TIME = "div-time[s]"
+	OFFSET_TIME = "offset-time[s]"
+	DIV_VOLT = "div-volt[V]"
+	OFFSET_VOLT = "offset-volt[V]"
+	CHAN_EN = "chan_en[bool]"
+	WAVEFORM = "waveform[V]"
+	
 	def __init__(self, address:str, log:LogPile, expected_idn="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
+		
+		self.state[OscilloscopeCtg1.DIV_TIME] = None
+		self.state[OscilloscopeCtg1.OFFSET_TIME] = []
+		self.state[OscilloscopeCtg1.DIV_VOLT] = None
+		self.state[OscilloscopeCtg1.OFFSET_VOLT] = []
+		self.state[OscilloscopeCtg1.CHAN_EN] = []
+		self.state[OscilloscopeCtg1.WAVEFORM] = []
 	
 	@abstractmethod
 	def set_div_time(self, time_s:float):
 		pass
-	
 	@abstractmethod
 	def get_div_time(self):
 		pass
@@ -22,22 +35,43 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 	@abstractmethod
 	def set_offset_time(self, channel:int, time_s:float):
 		pass
+	@abstractmethod
+	def get_offset_time(self, channel:int, time_s:float):
+		pass
 	
 	@abstractmethod
 	def set_div_volt(self, channel:int, volt_V:float):
+		pass
+	@abstractmethod
+	def get_div_volt(self, channel:int, volt_V:float):
 		pass
 	
 	@abstractmethod
 	def set_offset_volt(self, channel:int, volt_V:float):
 		pass
+	@abstractmethod
+	def get_offset_volt(self, channel:int, volt_V:float):
+		pass
 	
 	@abstractmethod
 	def set_chan_enable(self, channel:int, enable:bool):
+		self.modify_state(self.get_div_time, "CHAN_ENABLE")
+		pass
+	@abstractmethod
+	def get_chan_enable(self, channel:int, enable:bool):
+		self.modify_state(self.get_div_time, "CHAN_ENABLE")
 		pass
 	
 	@abstractmethod
 	def get_waveform(self, channel:int):
 		pass
+	
+	def refresh_state(self):
+		self.get_div_time()
+		self.get_offset_time()
+		self.get_div_volt()
+		self.get_offset_volt()
+		self.get_chan_enable()
 
 class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
 	''' This class mirrors the function in OscilloscopeCtg1, but each function
@@ -76,6 +110,10 @@ class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
 	def get_waveform(self, channel:int):
 		pass
 	
+	@remotefunction
+	def refresh_state(self):
+		pass
+	
 class OscilloscopeCtg2(OscilloscopeCtg1):
 	
 	# Measurement options
@@ -96,10 +134,16 @@ class OscilloscopeCtg2(OscilloscopeCtg1):
 	def __init__(self, address:str, log:LogPile, expected_idn="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
 	
-	@remotefunction
+	@abstractmethod
 	def add_measurement(self):
 		pass
 	
-	@remotefunction
+	@abstractmethod
 	def get_measurement(self):
 		pass
+	
+	def refresh_state(self):
+		super().refresh_state()
+		
+		self.get_measurement()
+	

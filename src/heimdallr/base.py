@@ -46,6 +46,16 @@ def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
 def wildcard(test:str, pattern:str):
 	return len(fnmatch.filter([test], pattern)) > 0
 
+def truncate_str(s:str, limit:int=14):
+	''' Used in automatic logs to make sure a value converted to a string isn't super
+	long. '''
+	
+	if len(s) <= limit:
+		return s
+	else:
+		keep = (limit-3) // 2
+		return s[:keep] + '...' + s[-keep - (1 if (limit-3)%2 else 0):]
+
 class HostID:
 	''' Contains the IP address and host-name for the host. Primarily used
 	so drivers can quickly identify the host's IP address.'''
@@ -112,6 +122,11 @@ class Driver(ABC):
 		self.rm = pv.ResourceManager()
 		self.inst = None
 		
+		# State tracking parameters
+		self.dummy = False
+		self.blind_state_update = False
+		self.state = {}
+		
 		# Setup ID
 		self.id.remote_addr = client_id + "|" + self.address
 		if remote_id is not None:
@@ -165,6 +180,39 @@ class Driver(ABC):
 		except Exception as e:
 			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
 			self.online = False
+	
+	def modify_state(self, query_func:callable, param:str, value, channel:int=None):
+		"""
+		Updates the internal state tracker.
+		
+		Parameters:
+			query_func (callable): Function used to query the state of this parameter from
+				the instrument. This parameter should be set to None if modify_state is 
+				being called from a query function. 
+			param (str): Parameter to update
+			value: Value for parameter being sent to the instrument. This will be used to
+				update the internal state if query_func is None, or if the instrument is in
+				dummy mode or blind_state_update mode. 
+			channel (int): Optional value for parameters that apply to individual channels of
+				an instrument. Should be set to None (default) for parameters which do not
+				have multiple channels. Channels are indexed from 1, not 0.
+			
+		Returns:
+			value
+		"""
+		
+		if (query_func is None) or self.dummy or self.blind_state_update:
+			prev_val = self.state[param]
+			self.log.add_log(self.state_change_log_level, f"(Driver: >:q{self.id.short_str()}<) State modified; >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+			if channel is None:
+				self.state[param] = value
+			else:
+				try:
+					self.state[param][channel-1] = value
+				except Exception as e:
+					self.log.error(f"Failed to modify internal state. {e}")
+		else:
+			query_func()
 	
 	def preset(self):
 		
@@ -314,6 +362,13 @@ class Driver(ABC):
 			self.error(f"Failed to query instrument {self.address}. ({e})")
 			self.online = False
 			return None
+	
+	@abstractmethod
+	def refresh_state(self):
+		"""
+		Calls all 'get' functions to fully update the state tracker.
+		"""
+		pass
 
 def bool_to_str01(val:bool):
 	''' Converts a boolean value to 0/1 as a string '''

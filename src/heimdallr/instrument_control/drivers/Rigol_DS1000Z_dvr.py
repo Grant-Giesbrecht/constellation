@@ -15,30 +15,36 @@ class RigolDS1000Z(OscilloscopeCtg2):
 		self.stat_table = {OscilloscopeCtg2.STAT_AVG:'AVER', OscilloscopeCtg2.STAT_MAX:'MAX', OscilloscopeCtg2.STAT_MIN:'MIN', OscilloscopeCtg2.STAT_CURR:'CURR', OscilloscopeCtg2.STAT_STD:'DEV'}
 		
 	def set_div_time(self, time_s:float):
+		self.modify_state(self.get_div_time, OscilloscopeCtg1.DIV_TIME, time_s)
 		self.write(f":TIM:MAIN:SCAL {time_s}")
 	def get_div_time(self):
-		return self.query(f":TIM:MAIN:SCAL?")
+		return self.modify_state(None, OscilloscopeCtg1.DIV_TIME, self.query(f":TIM:MAIN:SCAL?"))
+		
 	
-	def set_offset_time(self, channel:int, time_s:float):
+	def set_offset_time(self, time_s:float):
+		self.modify_state(self.get_offset_time, OscilloscopeCtg1.OFFSET_TIME, time_s)
 		self.write(f":TIM:MAIN:OFFS {time_s}")
-	def get_offset_time(self, channel:int, time_s:float):
-		return self.query(f":TIM:MAIN:OFFS?")
+	def get_offset_time(self):
+		return self.modify_state(None, OscilloscopeCtg1.OFFSET_TIME, self.query(f":TIM:MAIN:OFFS?"))
 	
 	def set_div_volt(self, channel:int, volt_V:float):
+		self.modify_state(self.get_div_volt, OscilloscopeCtg1.DIV_VOLT, volt_V, channel=channel)
 		self.write(f":CHAN{channel}:SCAL {volt_V}")
-	def get_div_volt(self, channel:int, volt_V:float):
-		return self.query(f":CHAN{channel}:SCAL?")
+	def get_div_volt(self, channel:int):
+		return self.modify_state(None, OscilloscopeCtg1.DIV_VOLT, self.query(f":CHAN{channel}:SCAL?"), channel=channel)
 	
 	def set_offset_volt(self, channel:int, volt_V:float):
+		self.modify_state(self.get_offset_volt, OscilloscopeCtg1.OFFSET_VOLT, volt_V, channel=channel)
 		self.write(f":CHAN{channel}:OFFS {volt_V}")
-	def get_offset_volt(self, channel:int, volt_V:float):
-		return self.query(f":CHAN{channel}:OFFS?")
+	def get_offset_volt(self, channel:int):
+		return self.modify_state(None, OscilloscopeCtg1.OFFSET_VOLT, self.query(f":CHAN{channel}:OFFS?"), channel=channel)
 	
 	def set_chan_enable(self, channel:int, enable:bool):
+		self.modify_state(self.get_chan_enable, OscilloscopeCtg1.CHAN_EN, enable, channel=channel)
 		self.write(f":CHAN{channel}:DISP {bool_to_str01(enable)}")
 	def get_chan_enable(self, channel:int):
 		val_str = self.query(f":CHAN{channel}:DISP?")
-		return str01_to_bool(val_str)
+		return self.modify_state(None, OscilloscopeCtg1.CHAN_EN, str01_to_bool(val_str), channel=channel)
 	
 	def get_waveform(self, channel:int):
 		
@@ -61,6 +67,8 @@ class RigolDS1000Z(OscilloscopeCtg2):
 		
 		# Get time values
 		t = list(xorigin + np.linspace(0, xincr * (len(volts) - 1), len(volts)))
+		
+		self.modify_state(None, OscilloscopeCtg1.WAVEFORM, {"time_s":t, "volt_V":volts}, channel=channel)
 		
 		return {"time_s":t, "volt_V":volts}
 	
