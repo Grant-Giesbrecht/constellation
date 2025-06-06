@@ -83,9 +83,9 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 		self.set_div_time(new_state[OscilloscopeCtg1.DIV_TIME])
 		self.set_offset_time(new_state[OscilloscopeCtg1.OFFSET_TIME])
 		for ch in range(1, self.max_channels+1):
-			self.set_div_volt(ch, new_state[OscilloscopeCtg1.DIV_VOLT])
-			self.set_offset_volt(ch, new_state[OscilloscopeCtg1.OFFSET_VOLT])
-			self.set_chan_enable(ch, new_state[OscilloscopeCtg1.CHAN_EN])
+			self.set_div_volt(ch, new_state[OscilloscopeCtg1.DIV_VOLT][ch-1])
+			self.set_offset_volt(ch, new_state[OscilloscopeCtg1.OFFSET_VOLT][ch-1])
+			self.set_chan_enable(ch, new_state[OscilloscopeCtg1.CHAN_EN][ch-1])
 		
 
 class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
@@ -159,4 +159,5 @@ class OscilloscopeCtg2(OscilloscopeCtg1):
 	
 	def refresh_state(self):
 		super().refresh_state()
+	
 	

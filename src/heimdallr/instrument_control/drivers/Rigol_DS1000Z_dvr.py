@@ -29,19 +29,19 @@ class RigolDS1000Z(OscilloscopeCtg2):
 	
 	def set_div_volt(self, channel:int, volt_V:float):
 		self.write(f":CHAN{channel}:SCAL {volt_V}")
-		self.modify_state(self.get_div_volt, OscilloscopeCtg1.DIV_VOLT, volt_V, channel=channel)
+		self.modify_state(lambda: self.get_div_volt(channel), OscilloscopeCtg1.DIV_VOLT, volt_V, channel=channel)
 	def get_div_volt(self, channel:int):
 		return self.modify_state(None, OscilloscopeCtg1.DIV_VOLT, float(self.query(f":CHAN{channel}:SCAL?")), channel=channel)
 	
 	def set_offset_volt(self, channel:int, volt_V:float):
 		self.write(f":CHAN{channel}:OFFS {volt_V}")
-		self.modify_state(self.get_offset_volt, OscilloscopeCtg1.OFFSET_VOLT, volt_V, channel=channel)
+		self.modify_state(lambda: self.get_offset_volt(channel), OscilloscopeCtg1.OFFSET_VOLT, volt_V, channel=channel)
 	def get_offset_volt(self, channel:int):
 		return self.modify_state(None, OscilloscopeCtg1.OFFSET_VOLT, float(self.query(f":CHAN{channel}:OFFS?")), channel=channel)
 	
 	def set_chan_enable(self, channel:int, enable:bool):
 		self.write(f":CHAN{channel}:DISP {bool_to_str01(enable)}")
-		self.modify_state(self.get_chan_enable, OscilloscopeCtg1.CHAN_EN, enable, channel=channel)
+		self.modify_state(lambda: self.get_chan_enable(channel), OscilloscopeCtg1.CHAN_EN, enable, channel=channel)
 	def get_chan_enable(self, channel:int):
 		val_str = self.query(f":CHAN{channel}:DISP?")
 		return self.modify_state(None, OscilloscopeCtg1.CHAN_EN, str01_to_bool(val_str), channel=channel)
