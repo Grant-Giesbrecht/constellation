@@ -201,7 +201,7 @@ class Driver(ABC):
 				have multiple channels. Channels are indexed from 1, not 0.
 			
 		Returns:
-			value
+			value, or result of query_func if provided.
 		"""
 		
 		if (query_func is None) or self.dummy or self.blind_state_update:
@@ -213,8 +213,6 @@ class Driver(ABC):
 			if channel is None:
 				self.state[param] = value
 			else:
-				
-				print(channel)
 				
 				while channel > len(self.state[param]):
 					if type(value) == list:
@@ -230,8 +228,11 @@ class Driver(ABC):
 					self.state[param][channel-1] = value
 				except Exception as e:
 					self.log.error(f"Failed to modify internal state. {e}")
+			val = value
 		else:
-			query_func()
+			val = query_func()
+		
+		return val
 	
 	def show_state(self):
 		
@@ -245,7 +246,7 @@ class Driver(ABC):
 			# Get name and unit strings
 			name, unit = split_param(k)
 			print(f"{name}:")
-			print(f"    value: {truncate_str(v)}")
+			print(f"    value: {truncate_str(v, limit=40)}")
 			print(f"    unit: {unit}")
 	
 	def preset(self):
@@ -405,7 +406,14 @@ class Driver(ABC):
 		Calls all 'get' functions to fully update the state tracker.
 		"""
 		pass
-
+	
+	@abstractmethod
+	def apply_state(self, new_state:dict):
+		"""
+		Applys a state (same format at self.state) to the instrument.
+		"""
+		pass
+	
 def bool_to_str01(val:bool):
 	''' Converts a boolean value to 0/1 as a string '''
 	
