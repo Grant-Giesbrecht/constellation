@@ -11,9 +11,17 @@ class DigitalMultimeterCtg(Driver):
 	# TODO: Flesh out
 	RANGE_AUTO = "auto-range"
 	
+	LOWPWR_MODE = "low-pow-mode[bool]"
+	SEL_MEAS = "selected-meas[str]"
+	LAST_MEAS_DATA = "last-meas-value[num]"
+	
 	def __init__(self, address:str, log:plf.LogPile, expected_idn=""):
 		super().__init__(address, log, expected_idn=expected_idn)
-	
+		
+		self.state[DigitalMultimeterCtg.LOWPWR_MODE] = None
+		self.state[DigitalMultimeterCtg.SEL_MEAS] = None
+		self.state[DigitalMultimeterCtg.LAST_MEAS_DATA] = None
+		
 	@abstractmethod
 	def set_low_power_mode(self, enable:bool, four_wire:bool=False):
 		''' If enable is true, sets the resistance measurement to be in low-power mode.'''

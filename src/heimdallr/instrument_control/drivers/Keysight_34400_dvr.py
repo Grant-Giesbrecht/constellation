@@ -23,6 +23,7 @@ class Keysight34400(DigitalMultimeterCtg):
 			self.write(f"SENS:FRES:POW:LIM:STATE {bool_to_ONFOFF(enable)}")
 		else:
 			self.write(f"SENS:RES:POW:LIM:STATE {bool_to_ONFOFF(enable)}")
+		self.modify_state(lambda: self.get_low_power_mode(four_wire), DigitalMultimeterCtg.LOWPWR_MODE, enable)
 	
 	def get_low_power_mode(self, four_wire:bool=False):
 		''' If enable is true, sets the resistance measurement to be in low-power mode.'''
@@ -33,7 +34,7 @@ class Keysight34400(DigitalMultimeterCtg):
 		else:
 			rval = self.query(f"SENS:RES:POW:LIM:STATE?")
 		
-		return str_to_bool(rval)
+		return self.modify_state(None, DigitalMultimeterCtg.LOWPWR_MODE, str_to_bool(rval))
 		
 	def set_measurement(self, measurement:str, meas_range:str=DigitalMultimeterCtg.RANGE_AUTO):
 		''' Sets the measurement, using a DitigalMultimeterCtg0 constant. 
@@ -67,6 +68,8 @@ class Keysight34400(DigitalMultimeterCtg):
 				rstr = "AUTO"
 		
 		self.write(f"CONFigure:{mstr} {rstr}")
+		
+		self.modify_state(None, DigitalMultimeterCtg.SEL_MEAS, measurement)
 		
 		return True
 	
@@ -110,5 +113,7 @@ class Keysight34400(DigitalMultimeterCtg):
 			
 			self.log.error(f"Received wrong type of units. Aborting.", detail=f"Received '{unit_str}', expected '{self.check_units}' ({e}).")
 			return None
+		
+		self.modify_state(None, DigitalMultimeterCtg.LAST_MEAS_DATA, val)
 		
 		return val
