@@ -38,3 +38,8 @@ class RFSignalGeneratorCtg(Driver):
 		self.get_power()
 		self.get_freq()
 		self.get_enable_rf()
+	
+	def apply_state(self, new_state:dict):
+		self.set_power(new_state[RFSignalGeneratorCtg.POWER])
+		self.set_freq(new_state[RFSignalGeneratorCtg.FREQ])
+		self.set_enable_rf(new_state[RFSignalGeneratorCtg.ENABLE])
