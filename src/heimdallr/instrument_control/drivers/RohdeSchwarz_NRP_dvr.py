@@ -14,8 +14,9 @@ class RohdeSchwarzNRP(RFPowerSensor):
 		
 	def set_meas_frequency(self, f_Hz:float):
 		self.write(f"SENSE:FREQUENCY {f_Hz}")
+		self.modify_state(self.get_meas_frequency, RFPowerSensor.FREQ, f_Hz)
 	def get_meas_frequency(self) -> float:
-		return float(self.query(f"SENSE:FREQUENCY?"))
+		return self.modify_state(None, RFPowerSensor.FREQ, float(self.query(f"SENSE:FREQUENCY?")))
 	
 	# def send_autoscale(self):
 	# 	print("Should this be send or enable? Is it one time?")
@@ -37,8 +38,9 @@ class RohdeSchwarzNRP(RFPowerSensor):
 	
 	def get_measurement(self):
 		
+		#TODO: Verify it returns in dBm
 		data = float(self.query(f"FETCH?"))
-		return data
+		return self.modify_state(None, RFPowerSensor.LAST_DATA, data)
 	
 	# def set_averaging_count(self, counts:int, meas_no:int=1):
 		
