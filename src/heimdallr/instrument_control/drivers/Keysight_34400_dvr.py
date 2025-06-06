@@ -7,7 +7,7 @@ import array
 from heimdallr.base import *
 from heimdallr.instrument_control.categories.digital_multimeter_ctg import *
 
-class Keysight34400(DigitalMultimeterCtg1):
+class Keysight34400(DigitalMultimeterCtg):
 	
 	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="Keysight Technologies,344") 
@@ -35,23 +35,23 @@ class Keysight34400(DigitalMultimeterCtg1):
 		
 		return str_to_bool(rval)
 		
-	def set_measurement(self, measurement:str, meas_range:str=DigitalMultimeterCtg1.RANGE_AUTO):
+	def set_measurement(self, measurement:str, meas_range:str=DigitalMultimeterCtg.RANGE_AUTO):
 		''' Sets the measurement, using a DitigalMultimeterCtg0 constant. 
 		Returns True if successful, else false.
 		'''
 		
 		# Get measurement string
 		match measurement:
-			case DigitalMultimeterCtg1.MEAS_RESISTANCE_2WIRE:
+			case DigitalMultimeterCtg.MEAS_RESISTANCE_2WIRE:
 				mstr = "RES" 
 				self.check_units = "OHM"
-			case DigitalMultimeterCtg1.MEAS_RESISTANCE_4WIRE:
+			case DigitalMultimeterCtg.MEAS_RESISTANCE_4WIRE:
 				mstr = "FRES"
 				self.check_units = "OHM"
-			case DigitalMultimeterCtg1.MEAS_VOLT_AC:
+			case DigitalMultimeterCtg.MEAS_VOLT_AC:
 				mstr = "VOLT:AC" 
 				self.check_units = "V"
-			case DigitalMultimeterCtg1.MEAS_VOLT_DC:
+			case DigitalMultimeterCtg.MEAS_VOLT_DC:
 				mstr = "VOLT:DC"
 				self.check_units = "V"
 			case _:
@@ -60,7 +60,7 @@ class Keysight34400(DigitalMultimeterCtg1):
 		
 		# Get range string
 		match meas_range:
-			case DigitalMultimeterCtg1.RANGE_AUTO:
+			case DigitalMultimeterCtg.RANGE_AUTO:
 				rstr = "AUTO"
 			case _:
 				self.log.error(f"Failed to interpret meas_range argument '{meas_range}'. Defaulting to auto.")
@@ -112,10 +112,3 @@ class Keysight34400(DigitalMultimeterCtg1):
 			return None
 		
 		return val
-
-	def trigger_and_read(self):
-		''' Tells the instrument to read and returns teh measurement result. '''
-		
-		self.send_manual_trigger(send_cls=True)
-		self.wait_ready()
-		return self.get_last_value()
