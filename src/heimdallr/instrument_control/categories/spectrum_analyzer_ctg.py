@@ -94,6 +94,22 @@ class SpectrumAnalyzerCtg(Driver):
 	def get_y_div(self):
 		pass
 	
+	def refresh_state(self):
+		self.get_freq_start()
+		self.get_freq_end()
+		# self.get_num_points() # Skipping because not sure how best to handle traces yet
+		self.get_res_bandwidth()
+		self.get_continuous_trigger()
+		self.get_ref_level()
+		self.get_y_div()
+	
+	def apply_state(self):
+		self.set_freq_start(SpectrumAnalyzerCtg.FREQ_START)
+		self.set_freq_end(SpectrumAnalyzerCtg.FREQ_END)
+		self.set_res_bandwidth(SpectrumAnalyzerCtg.RES_BW)
+		self.set_continuous_trigger(SpectrumAnalyzerCtg.CONTINUOUS_TRIG_EN)
+		self.set_ref_level(SpectrumAnalyzerCtg.REF_LEVEL)
+		self.set_y_div(SpectrumAnalyzerCtg.Y_DIV)
 	
 #TODO: Make one of these for all instruments
 #TODO: Flesh out
@@ -110,3 +126,4 @@ class SpectrumAnalyzerRemote(RemoteInstrument):
 	@remotefunction
 	def set_freq_end(self, f_Hz:float, channel:int=1):
 		pass
+	
