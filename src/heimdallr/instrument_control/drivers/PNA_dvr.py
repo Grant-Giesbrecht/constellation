@@ -8,7 +8,7 @@ Manual: https://www.testworld.com/wp-content/uploads/user-guide-help-agilent-e83
 from heimdallr.base import *
 from heimdallr.instrument_control.categories.vector_network_analyzer_ctg import *
 
-class KeysightPNAE8364B(VectorNetworkAnalyzerCtg1):
+class KeysightPNAE8364B(VectorNetworkAnalyzerCtg):
 	
 	SWEEP_CONTINUOUS = "sweep-continuous"
 	SWEEP_SINGLE = "sweep-single"
@@ -20,10 +20,10 @@ class KeysightPNAE8364B(VectorNetworkAnalyzerCtg1):
 		self.trace_lookup = {}
 		
 		self.measurement_codes = {}
-		self.measurement_codes[VectorNetworkAnalyzerCtg1.MEAS_S11] = "S11"
-		self.measurement_codes[VectorNetworkAnalyzerCtg1.MEAS_S12] = "S12"
-		self.measurement_codes[VectorNetworkAnalyzerCtg1.MEAS_S21] = "S21"
-		self.measurement_codes[VectorNetworkAnalyzerCtg1.MEAS_S22] = "S22"
+		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S11] = "S11"
+		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S12] = "S12"
+		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S21] = "S21"
+		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S22] = "S22"
 	
 	def set_freq_start(self, f_Hz:float, channel:int=1):
 		self.write(f"SENS{channel}:FREQ:STAR {f_Hz}")
