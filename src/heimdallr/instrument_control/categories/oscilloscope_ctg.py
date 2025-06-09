@@ -106,7 +106,11 @@ class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
 		pass
 	
 	@remotefunction
-	def set_offset_time(self, channel:int, time_s:float):
+	def set_offset_time(self, time_s:float):
+		pass
+	
+	@remotefunction
+	def get_offset_time(self):
 		pass
 	
 	@remotefunction
@@ -114,11 +118,23 @@ class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
 		pass
 	
 	@remotefunction
+	def get_div_volt(self, channel:int):
+		pass
+	
+	@remotefunction
 	def set_offset_volt(self, channel:int, volt_V:float):
 		pass
 	
 	@remotefunction
+	def get_offset_volt(self, channel:int):
+		pass
+	
+	@remotefunction
 	def set_chan_enable(self, channel:int, enable:bool):
+		pass
+	
+	@remotefunction
+	def get_chan_enable(self, channel:int):
 		pass
 	
 	@remotefunction
@@ -127,6 +143,10 @@ class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
 	
 	@remotefunction
 	def refresh_state(self):
+		pass
+	
+	@remotefunction
+	def apply_state(self, new_state:dict):
 		pass
 	
 class OscilloscopeCtg2(OscilloscopeCtg1):

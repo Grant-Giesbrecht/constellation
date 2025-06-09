@@ -33,7 +33,7 @@ class DigitalMultimeterCtg(Driver):
 		pass
 	
 	@abstractmethod
-	def set_measurement(self, measurement:str, meas_range:str=DigitalMultimeterCtg.RANGE_AUTO):
+	def set_measurement(self, measurement:str, meas_range:str=RANGE_AUTO):
 		''' Sets the measurement, using a DitigalMultimeterCtg constant. 
 		Returns True if successful, else false.
 		'''

@@ -1,6 +1,5 @@
 from heimdallr.all import *
 
-log = plf.LogPile()
 
-osc = RigolDS1000Z("TCPIP0::192.168.2.11::INSTR", log)
-
+osc = RigolDS1000Z("TCPIP0::192.168.1.20::INSTR", log)
+osc.refresh_state()
