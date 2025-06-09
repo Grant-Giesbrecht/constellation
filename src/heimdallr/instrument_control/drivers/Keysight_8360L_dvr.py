@@ -19,13 +19,13 @@ class Keysight8360L(RFSignalGeneratorCtg):
 		return self.modify_state(None, RFSignalGeneratorCtg.POWER, float(val))
 	
 	def set_freq(self, f_Hz:float):
-		self.inst.write(f":SOUR:FREQ:CW {f_Hz}")
+		self.write(f":SOUR:FREQ:CW {f_Hz}")
 		self.modify_state(self.get_freq, RFSignalGeneratorCtg.FREQ, f_Hz)
 	def get_freq(self):
 		return self.modify_state(None, RFSignalGeneratorCtg.FREQ, float(self.query(f":SOUR:FREQ:CW?")))
 	
 	def set_enable_rf(self, enable:bool):
-		self.inst.write(f":OUTP:STAT {bool_to_str01(enable)}")
+		self.write(f":OUTP:STAT {bool_to_str01(enable)}")
 		self.modify_state(self.get_enable_rf, RFSignalGeneratorCtg.ENABLE, enable)
 	def get_enable_rf(self):
 		return self.modify_state(None, RFSignalGeneratorCtg.ENABLE, str_to_bool(self.query(f":OUTP:STAT?")))
