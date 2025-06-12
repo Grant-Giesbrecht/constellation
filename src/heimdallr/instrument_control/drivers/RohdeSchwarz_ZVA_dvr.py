@@ -5,6 +5,7 @@ Manual (Requires login and R&S approval): https://scdn.rohde-schwarz.com/ur/pws/
 
 from heimdallr.base import *
 from heimdallr.instrument_control.categories.vector_network_analyzer_ctg import *
+import array
 
 class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 	
@@ -17,6 +18,8 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		
 		self.trace_lookup = {}
 		
+		# This translates the string measurement codes defined the the VectorNetworkAnalyzerCtg class
+		# to strings that are understood by the specific instrument model (the ZVA).
 		self.measurement_codes = {}
 		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S11] = "S11"
 		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S12] = "S12"
@@ -86,8 +89,68 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		# Create a trace and assoc. with measurement
 		self.write(f"DISP:WIND:TRAC{trace}:FEED '{trace_name}'")
 	
+	# def get_trace
+	
 	def send_update_display(self):
 		self.write(f"SYSTEM:DISPLAY:UPDATE ONCE")
+	
+	def get_trace_data(self, channel:int, trace:int):
+		'''
+		
+		Channel Data:
+			* x: X data list, frequency (Hz) (float)
+			* y: Y data list,  (float)
+			* x_units: Units of x-axis
+			* y_units: UNits of y-axis
+		'''
+		
+		# # Check that trace exists
+		# if trace not in self.trace_lookup.keys():
+		# 	self.log.error(f"Trace number {trace} does not exist!")
+		# 	return
+		
+		# trace_name = self.trace_lookup[trace]
+		trace_name = trace
+		# Select the specified measurement/trace
+		self.write(f"CALC{channel}:PAR:SEL {trace_name}")
+		
+		# Set data format - 64-bit real numbers
+		self.write(f"FORM:DATA REAL,64")
+		
+		# Request the trace data
+		self.write(f"CALC{channel}:DATA? SDATA")
+		
+		# Read the packet header first (size prefix)
+		header = self.inst.read_bytes(2)
+		digits_in_size_num = int(header[1:2])
+		
+		# Read the size of the data packet
+		size_bytes = self.inst.read_bytes(digits_in_size_num)
+		packet_size = int(size_bytes.decode())
+		
+		print(f"packet size = {packet_size}")
+		
+		# Read the actual packet data
+		data_raw = self.inst.read_bytes(packet_size)
+		
+		# Convert the raw binary data to an array of floats
+		float_data = list(array.array('d', data_raw))  # 'd' ensures double precision floats
+		
+		# Get frequency range
+		f0 = self.get_freq_start()
+		fe = self.get_freq_end()
+		fnum = self.get_num_points()
+		freqs_Hz = list(np.linspace(f0, fe, fnum))
+		
+		real_vals = float_data[0::2]  # Extract real components
+		imag_vals = float_data[1::2]  # Extract imaginary components
+		complex_trace = np.array(real_vals) + 1j * np.array(imag_vals)
+		
+		#TODO: Determine what type of trace is being measured and correct units
+		y_data = complex_trace
+		y_unit = 'Reflection, complex, unitless'
+		
+		return {'x': freqs_Hz, 'y': y_data, 'x_units': 'Hz', 'y_units': y_unit}
 	
 	def get_channel_data(self, channel:int):
 		'''

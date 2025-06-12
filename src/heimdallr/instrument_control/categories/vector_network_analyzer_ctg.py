@@ -1,6 +1,5 @@
 from heimdallr.base import *
 
-
 class VectorNetworkAnalyzerCtg(Driver):
 	
 	MEAS_S11 = "meas-s11"
@@ -15,8 +14,18 @@ class VectorNetworkAnalyzerCtg(Driver):
 	RES_BW = "res-bw[Hz]"
 	ENABLE = "rf-enable[bool]"
 	
-	def __init__(self, address:str, log:plf.LogPile):
-		super().__init__(address, log)
+	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", **kwargs):
+		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
+		
+		self.max_channels = max_channels
+		self.max_traces = max_traces # This is per-channel
+		
+		self.state[VectorNetworkAnalyzerCtg.FREQ_START] = []
+		self.state[VectorNetworkAnalyzerCtg.FREQ_END] = []
+		self.state[VectorNetworkAnalyzerCtg.POWER] = []
+		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = []
+		self.state[VectorNetworkAnalyzerCtg.RES_BW] = []
+		self.state[VectorNetworkAnalyzerCtg.ENABLE] = []
 	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float, channel:int=1):
@@ -62,9 +71,9 @@ class VectorNetworkAnalyzerCtg(Driver):
 		''' Returns trace number '''
 		pass
 	
-	@abstractmethod
-	def get_trace(self, trace:int):
-		pass
+	# @abstractmethod
+	# def get_trace(self, trace:int):
+	# 	pass
 	
 	@abstractmethod
 	def set_rf_enable(self, enable:bool):
