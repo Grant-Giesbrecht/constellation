@@ -1,5 +1,21 @@
 from heimdallr.base import *
 
+def plot_vna_mag(data:dict, label:str=""):
+	''' Helper function to plot the data output from a VNA get_trace_data() call.
+	
+	Args:
+		data (dict): VNA trace data to plot
+		label (str): Optional label for data
+	
+	Returns:
+		None
+	'''
+	plt.plot(np.array(data['x'])/1e9, lin_to_dB(np.abs(data['y'])), label=label)
+	
+	plt.grid(True)
+	plt.xlabel("Frequency [GHz]")
+	plt.ylabel("S-Parameters [dB]")
+
 class VectorNetworkAnalyzerCtg(Driver):
 	
 	MEAS_S11 = "meas-s11"
