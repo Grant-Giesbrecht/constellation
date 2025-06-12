@@ -9,14 +9,8 @@ import array
 
 class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 	
-	SWEEP_CONTINUOUS = "sweep-continuous"
-	SWEEP_SINGLE = "sweep-single"
-	SWEEP_OFF = "sweep-off"
-	
 	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, expected_idn="Rohde&Schwarz,ZVA")
-		
-		self.trace_lookup = {}
 		
 		# This translates the string measurement codes defined the the VectorNetworkAnalyzerCtg class
 		# to strings that are understood by the specific instrument model (the ZVA).
@@ -65,6 +59,37 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 	
 	def clear_traces(self):
 		self.write(f"CALC:PAR:DEL:ALL")
+	
+	def get_traces(self):
+		trace_state_str = self.query("CALC:PAR:CAT?")
+		
+		# Reformat string into list of trace names, then measurements
+		trace_state_list = (trace_state_str.strip()[1:-1]).split(',')
+		
+		# Verify even number
+		if len(trace_state_list) % 2 != 0:
+			self.error(f"Received invalid trace state string. Had odd length.")
+			return False
+		
+		# Break into names and measurements
+		trace_names = trace_state_list[0::2]
+		trace_meas = trace_state_list[1::2]
+		
+		# Check that all names start with Trc
+		for tn in trace_names:
+			
+			try:
+				check_str = tn[:3]
+			except:
+				self.error(f"Received invalid trace state string. Too-short trace name.")
+				return False
+			
+			if check_str != "Trc":
+				self.error(f"Received invalid trace state string. Too-short trace name.")
+				return False
+		
+		# Get each measurement type
+		<TODO>
 	
 	def add_trace(self, channel:int, trace:int, measurement:str):
 		

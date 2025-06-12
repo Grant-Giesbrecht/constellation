@@ -128,6 +128,7 @@ class Driver(ABC):
 		self.dummy = False
 		self.blind_state_update = False
 		self.state = {}
+		self.rich_state = {}
 		self.state_change_log_level = plf.DEBUG
 		
 		# Setup ID

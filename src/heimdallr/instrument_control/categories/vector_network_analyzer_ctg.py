@@ -1,4 +1,5 @@
 from heimdallr.base import *
+from heimdallr.helpers import lin_to_dB
 
 def plot_vna_mag(data:dict, label:str=""):
 	''' Helper function to plot the data output from a VNA get_trace_data() call.
@@ -16,19 +17,38 @@ def plot_vna_mag(data:dict, label:str=""):
 	plt.xlabel("Frequency [GHz]")
 	plt.ylabel("S-Parameters [dB]")
 
+class TraceMetadata:
+	""" Class used to represent a trace that is active on the VNA.
+	"""
+	
+	def __init__(self):
+		self.num = 1
+		self.id_str = "Tr1"
+		self.measurement = VectorNetworkAnalyzerCtg.MEAS_S11
+		
+		self.data = {}
+	
 class VectorNetworkAnalyzerCtg(Driver):
 	
+	# Measurement options
 	MEAS_S11 = "meas-s11"
 	MEAS_S21 = "meas-s21"
 	MEAS_S12 = "meas-s12"
 	MEAS_S22 = "meas-s22"
 	
+	# Sweep types
+	SWEEP_CONTINUOUS = "sweep-continuous"
+	SWEEP_SINGLE = "sweep-single"
+	SWEEP_OFF = "sweep-off"
+	
+	# State parameters
 	FREQ_START = "freq-start[Hz]"
 	FREQ_END = "freq-end[Hz]"
 	POWER = "power[dBm]"
 	NUM_POINTS = "num-points[]"
 	RES_BW = "res-bw[Hz]"
 	ENABLE = "rf-enable[bool]"
+	TRACES = "traces"
 	
 	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
@@ -42,6 +62,8 @@ class VectorNetworkAnalyzerCtg(Driver):
 		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = []
 		self.state[VectorNetworkAnalyzerCtg.RES_BW] = []
 		self.state[VectorNetworkAnalyzerCtg.ENABLE] = []
+		
+		self.rich_state[VectorNetworkAnalyzerCtg.TRACES] = []
 	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float, channel:int=1):
