@@ -109,7 +109,7 @@ class Identifier:
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
-	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str=""):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str="", dummy:bool=False):
 		
 		self.address = address
 		self.log = log
@@ -142,6 +142,10 @@ class Driver(ABC):
 		ctg_o = inheritance_list[1]
 		self.id.ctg = f"{ctg_o}"
 		self.id.dvr = f"{dvr_o}"
+		
+		# Dummy variables
+		self.dummy = dummy
+		self.dummy_state_machine = {}
 		
 		#TODO: Automatically reconnect
 		# Connect instrument
@@ -609,3 +613,19 @@ def interpret_range(rd:dict, print_err=False):
 			return None
 	
 	return vals
+
+def dummyfunction(func):
+	'''Decorator to allow functions to trigger their parent Category's
+	dummy_responder() function, with the name of the triggering function
+	and the passed arguments.'''
+	
+	def wrapper(self, *args, **kwargs):
+		
+		# If in dummy mode, activate the dummy_responder instead of attempting to interact with hardware
+		if self.dummy:
+			return self.dummy_responder(func.__name__, *args, **kwargs)
+			
+		# Call the source function (this should just be 'pass')
+		return func(self, *args, **kwargs)
+
+	return wrapper

@@ -13,7 +13,7 @@ class RigolDS1000Z(OscilloscopeCtg2):
 		self.meas_table = {OscilloscopeCtg2.MEAS_VMAX:'VMAX', OscilloscopeCtg2.MEAS_VMIN:'VMIN', OscilloscopeCtg2.MEAS_VAVG:'VAVG', OscilloscopeCtg2.MEAS_VPP:'VPP', OscilloscopeCtg2.MEAS_FREQ:'FREQ'}
 		
 		self.stat_table = {OscilloscopeCtg2.STAT_AVG:'AVER', OscilloscopeCtg2.STAT_MAX:'MAX', OscilloscopeCtg2.STAT_MIN:'MIN', OscilloscopeCtg2.STAT_CURR:'CURR', OscilloscopeCtg2.STAT_STD:'DEV'}
-		
+	
 	def set_div_time(self, time_s:float):
 		self.write(f":TIM:MAIN:SCAL {time_s}")
 		self.modify_state(self.get_div_time, OscilloscopeCtg1.DIV_TIME, time_s)

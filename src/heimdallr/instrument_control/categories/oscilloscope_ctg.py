@@ -29,6 +29,29 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 		self.state[OscilloscopeCtg1.WAVEFORM] = []
 		
 		self.max_channels = max_channels
+		self.dummy_state_machine['div_time'] = 10e-3
+	
+	def dummy_responder(self, func_name:str, *args, **kwargs):
+		''' Function expected to behave as the "real" equivalents. ie. write commands don't
+		need to return anything, reads commands or similar should. What is returned here
+		should mimic what would be returned by the "real" function if it were connected to
+		hardware.
+		'''
+		
+		# Put everything in a try-catch in case arguments are missing or similar
+		try:
+			
+			# Respond to dummy function
+			match func_name:
+				case "set_div_time":
+					self.dummy_state_machine['div_time'] = args[0]
+					return None
+				case "get_div_time":
+					return self.dummy_state_machine['div_time']
+				case "set_offset_time":
+		except Exception as e:
+			self.error(f"Failed to respond to dummy instruction. ({e})")
+			return None
 	
 	@abstractmethod
 	def set_div_time(self, time_s:float):
@@ -179,5 +202,4 @@ class OscilloscopeCtg2(OscilloscopeCtg1):
 	
 	def refresh_state(self):
 		super().refresh_state()
-	
 	
