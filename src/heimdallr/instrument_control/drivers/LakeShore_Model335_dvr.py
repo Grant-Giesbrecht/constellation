@@ -63,3 +63,11 @@ class LakeShoreModel335(PIDTemperatureControllerCtg):
 	def set_enable(self, enable:bool, channel:int=1):
 		pass
 		#PRobably OUTMODE command, but should play around with this
+	
+	def apply_state(self, new_state):
+		#TODO
+		pass
+	
+	def refresh_state(self):
+		#TODO
+		pass

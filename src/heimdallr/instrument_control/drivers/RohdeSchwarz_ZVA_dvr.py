@@ -89,7 +89,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 				return False
 		
 		# Get each measurement type
-		<TODO>
+		# <TODO>
 	
 	def add_trace(self, channel:int, trace:int, measurement:str):
 		
@@ -153,7 +153,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		size_bytes = self.inst.read_bytes(digits_in_size_num)
 		packet_size = int(size_bytes.decode())
 		
-		print(f"packet size = {packet_size}")
+		# print(f"packet size = {packet_size}")
 		
 		# Read the actual packet data
 		data_raw = self.inst.read_bytes(packet_size)
