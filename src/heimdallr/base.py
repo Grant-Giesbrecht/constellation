@@ -128,6 +128,8 @@ class ChannelList:
 	as soon as possible internally.
 	'''
 	
+	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
+	
 	def __init__(self, max_channels:int, log:plf.LogPile=None):
 		
 		self.max_channels = max_channels
@@ -143,7 +145,7 @@ class ChannelList:
 		closest valid channel.
 		
 		Args:
-			channel (int): Channel value to validate.
+			channel (int): Channel value to validate. Zero-indexed.
 		
 		Returns:
 			int: Validated channel number.
@@ -157,13 +159,46 @@ class ChannelList:
 		else:
 			return channel
 	
-	def set_ch_val(self, channel:int, value):
+	def set_ch_val(self, channel:int, value) -> None:
+		''' Sets the value assigned to the specified channel. 
+		
+		Args:
+			channel (int): Channel number, zero-indexed.
+			value (any): Value to assign to channel.
+		
+		Returns:
+			None
+		'''
 		chan = self.get_valid_ch(channel)
 		self.channel_data[chan] = value
 	
 	def get_ch_val(self, channel:int):
+		''' Get the value assigned to the channel.
+		
+		Args:
+			channel (int): Channel to get, zero-indexed.
+		
+		Returns:
+			Value assigned to channel. Any type. Returns None if value
+			has not been assigned to channel yet.
+		'''
 		chan = self.get_valid_ch(channel)
+		if not self.ch_is_populated(chan):
+			self.log.error(f"Cannot return channel value; channel has not been populated.")
+			return None
 		return self.channel_data[chan]
+	
+	def ch_is_populated(self, channel:int):
+		''' Checks if the specified channel has been assigned a value.
+		
+		Args:
+			channel (int): Channel to get, zero-indexed.
+		
+		Returns:
+			bool: True if channel has been assigned a value.
+		'''
+		
+		return (channel in self.channel_data.keys())
 
 class DataEntry:
 	''' Used in driver.data to describe a measurement result and its
