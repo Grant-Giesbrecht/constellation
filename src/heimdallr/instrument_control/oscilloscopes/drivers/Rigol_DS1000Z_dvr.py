@@ -3,16 +3,16 @@
 https://beyondmeasure.rigoltech.com/acton/attachment/1579/f-0386/1/-/-/-/-/DS1000Z_Programming%20Guide_EN.pdf
 """
 
-from heimdallr.instrument_control.categories.all_ctgs import *
+from heimdallr.instrument_control.oscilloscopes.oscilloscope_ctg import *
 
-class RigolDS1000Z(OscilloscopeCtg2):
+class RigolDS1000Z(StdOscilloscopeCtg):
 
 	def __init__(self, address:str, log:plf.LogPile, **kwargs):
 		super().__init__(address, log, expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=4, **kwargs)
 		
-		self.meas_table = {OscilloscopeCtg2.MEAS_VMAX:'VMAX', OscilloscopeCtg2.MEAS_VMIN:'VMIN', OscilloscopeCtg2.MEAS_VAVG:'VAVG', OscilloscopeCtg2.MEAS_VPP:'VPP', OscilloscopeCtg2.MEAS_FREQ:'FREQ'}
+		self.meas_table = {StdOscilloscopeCtg.MEAS_VMAX:'VMAX', StdOscilloscopeCtg.MEAS_VMIN:'VMIN', StdOscilloscopeCtg.MEAS_VAVG:'VAVG', StdOscilloscopeCtg.MEAS_VPP:'VPP', StdOscilloscopeCtg.MEAS_FREQ:'FREQ'}
 		
-		self.stat_table = {OscilloscopeCtg2.STAT_AVG:'AVER', OscilloscopeCtg2.STAT_MAX:'MAX', OscilloscopeCtg2.STAT_MIN:'MIN', OscilloscopeCtg2.STAT_CURR:'CURR', OscilloscopeCtg2.STAT_STD:'DEV'}
+		self.stat_table = {StdOscilloscopeCtg.STAT_AVG:'AVER', StdOscilloscopeCtg.STAT_MAX:'MAX', StdOscilloscopeCtg.STAT_MIN:'MIN', StdOscilloscopeCtg.STAT_CURR:'CURR', StdOscilloscopeCtg.STAT_STD:'DEV'}
 	
 	# def set_div_time(self, time_s:float):
 	# 	self.write(f":TIM:MAIN:SCAL {time_s}")
