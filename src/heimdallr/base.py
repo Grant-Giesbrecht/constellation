@@ -106,6 +106,41 @@ class Identifier:
 		
 		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\nremote-addr: {self.remote_addr}"
 
+def superreturn(func):
+	''' Calls a function's super after the overriding function finishes
+	execution, passing identical arguments and returning the super's
+	return value.'''
+	
+	def wrapper(self, *args, **kwargs):
+		# Call the source function
+		func(self, *args, **kwargs)
+		# Call super after, pass original arugments
+		return self.super(*args, **kwargs)
+	return wrapper
+
+class ChannelList:
+	''' Used in driver.state and driver.data structures to organize values
+	for parameters which apply to more than one channel. '''
+	
+	def __init__(self, max_channels:int):
+		
+		self.max_channels = max_channels
+		self.channel_data = {}
+	
+	def set_ch_val(self, channel:int, value):
+		self.channel_data[channel] = value
+	
+	def get_ch_val(self, channel:int):
+		return self.channel_data[channel]
+
+class DataEntry:
+	''' Used in driver.data to describe a measurement result and its
+	accompanying time.'''
+	
+	def __init__(self):
+		self.update_time = None
+		self.value = []
+
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
@@ -128,8 +163,10 @@ class Driver(ABC):
 		self.dummy = False
 		self.blind_state_update = False
 		self.state = {}
-		self.rich_state = {}
+		self.data = {} # Each value is a DataEntry instance
 		self.state_change_log_level = plf.DEBUG
+		self.data_state_change_log_level = plf.DEBUG
+		self._super_hint = None # Last measured value 
 		
 		# Setup ID
 		self.id.remote_addr = client_id + "|" + self.address
@@ -150,6 +187,30 @@ class Driver(ABC):
 		#TODO: Automatically reconnect
 		# Connect instrument
 		self.connect()
+	
+	def dummy_responder(self, func_name:str, *args, **kwargs):
+		''' Function expected to behave as the "real" equivalents. ie. write commands don't
+		need to return anything, reads commands or similar should. What is returned here
+		should mimic what would be returned by the "real" function if it were connected to
+		hardware.
+		'''
+		
+		# Put everything in a try-catch in case arguments are missing or similar
+		try:
+			
+			# Respond to dummy function
+			if "set_" == func_name[:4]:
+				self.debug(f"Default dummy responder sending >None< to set_ function (>{func_name}<).")
+				return None
+			elif "get_" == func_name[:4]:
+				self.debug(f"Default dummy responder sending >-1< to get_ function (>{func_name}<).")
+				return -1
+			else:
+				self.debug(f"Default dummy responder sending >None< to unrecognized function (>{func_name}<).")
+				return None
+		except Exception as e:
+			self.error(f"Failed to respond to dummy instruction. ({e})")
+			return None
 	
 	def lowdebug(self, message:str, detail:str=""):
 		self.log.lowdebug(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
@@ -218,21 +279,49 @@ class Driver(ABC):
 			if channel is None:
 				self.state[param] = value
 			else:
-				
-				while channel > len(self.state[param]):
-					if type(value) == list:
-						self.state[param].append([])
-					elif type(value) == dict:
-						self.state[param].append({})
-					elif type(value) == str:
-						self.state[param].append("")
-					else:
-						self.state[param].append([])
-				
 				try:
-					self.state[param][channel-1] = value
+					self.state[param].set_ch_val(1, value)
 				except Exception as e:
 					self.log.error(f"Failed to modify internal state. {e}")
+			val = value
+		else:
+			val = query_func()
+		
+		return val
+	
+	def modify_data_state(self, query_func:callable, param:str, value, channel:int=None):
+		"""
+		Updates the internal data-state tracker.
+		
+		Parameters:
+			query_func (callable): Function used to query the state of this parameter from
+				the instrument. This parameter should be set to None if modify_state is 
+				being called from a query function. 
+			param (str): Parameter to update
+			value: Value for parameter being sent to the instrument. This will be used to
+				update the internal state if query_func is None, or if the instrument is in
+				dummy mode or blind_state_update mode. 
+			channel (int): Optional value for parameters that apply to individual channels of
+				an instrument. Should be set to None (default) for parameters which do not
+				have multiple channels. Channels are indexed from 1, not 0.
+			
+		Returns:
+			value, or result of query_func if provided.
+		"""
+		
+		if (query_func is None) or self.dummy or self.blind_state_update:
+			prev_val = self.data[param]
+			
+			# Record ing log
+			self.log.add_log(self.state_change_log_level, f"(Driver: >:q{self.id.short_str()}<) State modified; >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+			
+			if channel is None:
+				self.data[param] = value
+			else:
+				try:
+					self.data[param].set_ch_val(1, value)
+				except Exception as e:
+					self.error(f"Failed to modify internal state. {e}")
 			val = value
 		else:
 			val = query_func()
@@ -354,13 +443,18 @@ class Driver(ABC):
 		if not self.online:
 			self.warning(f"Cannot write when offline. ()")
 			return
-			
+		
+		if self.dummy:
+			self.lowdebug(f"Writing to dummy: >{cmd}<.")
+			return
+		
 		try:
 			self.inst.write(cmd)
 			self.lowdebug(f"Wrote to instrument: >{cmd}<")
 		except Exception as e:
 			self.error(f"Failed to write to instrument {self.address}. ({e})")
 			self.online = False
+	
 	def id_str(self):
 		pass
 	
@@ -614,7 +708,7 @@ def interpret_range(rd:dict, print_err=False):
 	
 	return vals
 
-def dummyfunction(func):
+def enabledummy(func):
 	'''Decorator to allow functions to trigger their parent Category's
 	dummy_responder() function, with the name of the triggering function
 	and the passed arguments.'''
