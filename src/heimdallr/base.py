@@ -120,18 +120,50 @@ def superreturn(func):
 
 class ChannelList:
 	''' Used in driver.state and driver.data structures to organize values
-	for parameters which apply to more than one channel. '''
+	for parameters which apply to more than one channel.
 	
-	def __init__(self, max_channels:int):
+	NOTE: Channel numbering is internally zero-indexed. Most modern lab instruments
+	with multiple channels use 1-based indexing. This discrepency, when handled by
+	Heimdallr, will make the 1-based indexing purely cosmetic and converted to 0-based
+	as soon as possible internally.
+	'''
+	
+	def __init__(self, max_channels:int, log:plf.LogPile=None):
 		
 		self.max_channels = max_channels
 		self.channel_data = {}
+		
+		if log is None:
+			self.log = plf.LogPile()
+		else:
+			self.log = log
+	
+	def get_valid_ch(self, channel:int) -> int:
+		''' Checks if a given channel number is valid. If not, returns
+		closest valid channel.
+		
+		Args:
+			channel (int): Channel value to validate.
+		
+		Returns:
+			int: Validated channel number.
+		
+		'''
+		if channel >= self.max_channels:
+			self.log.error(f"Max channel count exceeded. Defaulting to last possible channel") #TODO: Needs prefix
+			return self.max_channels-1
+		elif channel < 0:
+			return 0
+		else:
+			return channel
 	
 	def set_ch_val(self, channel:int, value):
-		self.channel_data[channel] = value
+		chan = self.get_valid_ch(channel)
+		self.channel_data[chan] = value
 	
 	def get_ch_val(self, channel:int):
-		return self.channel_data[channel]
+		chan = self.get_valid_ch(channel)
+		return self.channel_data[chan]
 
 class DataEntry:
 	''' Used in driver.data to describe a measurement result and its

@@ -19,7 +19,7 @@ class BasicOscilloscopeCtg(Driver):
 		self.state[BasicOscilloscopeCtg.OFFSET_VOLT] = []
 		self.state[BasicOscilloscopeCtg.CHAN_EN] = []
 		
-		self.data[BasicOscilloscopeCtg.WAVEFORM] = []
+		self.data[BasicOscilloscopeCtg.WAVEFORM] = ChannelList()
 		
 		self.max_channels = max_channels
 	
@@ -143,8 +143,6 @@ class BasicOscilloscopeCtg(Driver):
 			self.get_div_volt(ch)
 			self.get_offset_volt(ch)
 			self.get_chan_enable(ch)
-	
-	
 	
 	def apply_state(self, new_state:dict):
 		self.set_div_time(new_state[BasicOscilloscopeCtg.DIV_TIME])
