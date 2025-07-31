@@ -26,10 +26,10 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 		self.state[OscilloscopeCtg1.DIV_VOLT] = []
 		self.state[OscilloscopeCtg1.OFFSET_VOLT] = []
 		self.state[OscilloscopeCtg1.CHAN_EN] = []
-		self.state[OscilloscopeCtg1.WAVEFORM] = []
+		
+		self.data[OscilloscopeCtg1.WAVEFORM] = []
 		
 		self.max_channels = max_channels
-		self.dummy_state_machine['div_time'] = 10e-3
 	
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
@@ -41,58 +41,108 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 		# Put everything in a try-catch in case arguments are missing or similar
 		try:
 			
-			# Respond to dummy function
+			# Check for known functions
+			found = True
+			adjective = ""
 			match func_name:
 				case "set_div_time":
-					self.dummy_state_machine['div_time'] = args[0]
-					return None
+					rval = None
 				case "get_div_time":
-					return self.dummy_state_machine['div_time']
+					rval = self.state[OscilloscopeCtg1.DIV_TIME]
 				case "set_offset_time":
+					rval = None
+				case "get_offset_time":
+					rval = self.state[OscilloscopeCtg1.OFFSET_TIME]
+				case "set_div_volt":
+					rval = None
+				case "get_div_volt":
+					rval = self.state[OscilloscopeCtg1.DIV_VOLT]
+				case "set_offset_volt":
+					rval = None
+				case "get_offset_volt":
+					rval = self.state[OscilloscopeCtg1.OFFSET_VOLT]
+				case "set_chan_enable":
+					rval = None
+				case "get_chan_enable":
+					rval = self.state[OscilloscopeCtg1.CHAN_EN].get_ch_val([args[0]])
+				case _:
+					found = False
+				# case "set_offset_time":
+			
+			# If function was found, label as recognized, else check match for general getter or setter
+			if found:
+				adjective = "recognized"
+			else:
+				if "set_" == func_name[:4]:
+					rval = -1
+					adjective = "set_"
+				elif "get_" == func_name[:4]:
+					rval = None
+					adjective = "get_"
+				else:
+					rval = None
+					adjective = "unrecognized"
+				
+			self.debug(f"Default dummy responder sending >{rval}< to {adjective} function (>{func_name}<).")
+			return rval
 		except Exception as e:
 			self.error(f"Failed to respond to dummy instruction. ({e})")
 			return None
 	
 	@abstractmethod
+	@enabledummy
 	def set_div_time(self, time_s:float):
-		pass
+		self.modify_state(self.get_div_time, OscilloscopeCtg1.DIV_TIME, time_s)
+	
 	@abstractmethod
+	@enabledummy
 	def get_div_time(self):
-		pass
+		return self.modify_state(None, OscilloscopeCtg1.DIV_TIME, self._super_hint)
 	
 	@abstractmethod
+	@enabledummy
 	def set_offset_time(self, time_s:float):
-		pass
+		self.modify_state(self.get_offset_time, OscilloscopeCtg1.OFFSET_TIME, time_s)
+		
 	@abstractmethod
+	@enabledummy
 	def get_offset_time(self):
-		pass
+		return self.modify_state(None, OscilloscopeCtg1.OFFSET_TIME, self._super_hint)
 	
 	@abstractmethod
+	@enabledummy
 	def set_div_volt(self, channel:int, volt_V:float):
-		pass
+		self.modify_state(lambda: self.get_div_volt(channel), OscilloscopeCtg1.DIV_VOLT, volt_V, channel=channel)
+		
 	@abstractmethod
+	@enabledummy
 	def get_div_volt(self, channel:int):
-		pass
+		return self.modify_state(None, OscilloscopeCtg1.DIV_VOLT, self._super_hint, channel=channel)
 	
 	@abstractmethod
+	@enabledummy
 	def set_offset_volt(self, channel:int, volt_V:float):
-		pass
+		self.modify_state(lambda: self.get_offset_volt(channel), OscilloscopeCtg1.OFFSET_VOLT, volt_V, channel=channel)
+		
 	@abstractmethod
+	@enabledummy
 	def get_offset_volt(self, channel:int):
-		pass
+		return self.modify_state(None, OscilloscopeCtg1.OFFSET_VOLT, self._super_hint, channel=channel)
 	
 	@abstractmethod
+	@enabledummy
 	def set_chan_enable(self, channel:int, enable:bool):
-		self.modify_state(self.get_div_time, "CHAN_ENABLE")
-		pass
+		self.modify_state(lambda: self.get_chan_enable(channel), OscilloscopeCtg1.CHAN_EN, enable, channel=channel)
+		
 	@abstractmethod
+	@enabledummy
 	def get_chan_enable(self, channel:int):
-		self.modify_state(self.get_div_time, "CHAN_ENABLE")
-		pass
+		return self.modify_state(None, OscilloscopeCtg1.CHAN_EN, self._super_hint, channel=channel)
 	
 	@abstractmethod
+	@enabledummy
 	def get_waveform(self, channel:int):
-		pass
+		return self.modify_data_state(None, OscilloscopeCtg1.WAVEFORM, self._super_hint, channel=channel)
 	
 	def refresh_state(self):
 		self.get_div_time()
@@ -101,6 +151,8 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 			self.get_div_volt(ch)
 			self.get_offset_volt(ch)
 			self.get_chan_enable(ch)
+	
+	
 	
 	def apply_state(self, new_state:dict):
 		self.set_div_time(new_state[OscilloscopeCtg1.DIV_TIME])
@@ -112,6 +164,7 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 		
 
 class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
+	
 	''' This class mirrors the function in OscilloscopeCtg1, but each function
 	is decorated with RemoteFunction. This lets a T/C client create RemoteInstruments
 	for this category of instrument using this class and callings its functions, rather

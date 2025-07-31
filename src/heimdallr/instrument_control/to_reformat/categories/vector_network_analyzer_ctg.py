@@ -48,7 +48,7 @@ class VectorNetworkAnalyzerCtg(Driver):
 	NUM_POINTS = "num-points[]"
 	RES_BW = "res-bw[Hz]"
 	ENABLE = "rf-enable[bool]"
-	TRACES = "traces"
+	ACT_TRACES = "active_traces"
 	
 	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
@@ -62,8 +62,7 @@ class VectorNetworkAnalyzerCtg(Driver):
 		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = []
 		self.state[VectorNetworkAnalyzerCtg.RES_BW] = []
 		self.state[VectorNetworkAnalyzerCtg.ENABLE] = []
-		
-		self.rich_state[VectorNetworkAnalyzerCtg.TRACES] = []
+		self.state[VectorNetworkAnalyzerCtg.ACT_TRACES] = []
 	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float, channel:int=1):

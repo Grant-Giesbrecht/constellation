@@ -14,38 +14,51 @@ class RigolDS1000Z(OscilloscopeCtg2):
 		
 		self.stat_table = {OscilloscopeCtg2.STAT_AVG:'AVER', OscilloscopeCtg2.STAT_MAX:'MAX', OscilloscopeCtg2.STAT_MIN:'MIN', OscilloscopeCtg2.STAT_CURR:'CURR', OscilloscopeCtg2.STAT_STD:'DEV'}
 	
+	# def set_div_time(self, time_s:float):
+	# 	self.write(f":TIM:MAIN:SCAL {time_s}")
+	# 	super().set_div_time(time_s)
+	
+	@superreturn
 	def set_div_time(self, time_s:float):
 		self.write(f":TIM:MAIN:SCAL {time_s}")
-		self.modify_state(self.get_div_time, OscilloscopeCtg1.DIV_TIME, time_s)
-	def get_div_time(self):
-		return self.modify_state(None, OscilloscopeCtg1.DIV_TIME, float(self.query(f":TIM:MAIN:SCAL?")))
 		
+	@superreturn
+	def get_div_time(self):
+		self._super_hint = float(self.query(f":TIM:MAIN:SCAL?"))
 	
+	@superreturn
 	def set_offset_time(self, time_s:float):
 		self.write(f":TIM:MAIN:OFFS {time_s}")
-		self.modify_state(self.get_offset_time, OscilloscopeCtg1.OFFSET_TIME, time_s)
-	def get_offset_time(self):
-		return self.modify_state(None, OscilloscopeCtg1.OFFSET_TIME, float(self.query(f":TIM:MAIN:OFFS?")))
 	
+	@superreturn
+	def get_offset_time(self):
+		self._super_hint = float(self.query(f":TIM:MAIN:OFFS?"))
+	
+	@superreturn
 	def set_div_volt(self, channel:int, volt_V:float):
 		self.write(f":CHAN{channel}:SCAL {volt_V}")
-		self.modify_state(lambda: self.get_div_volt(channel), OscilloscopeCtg1.DIV_VOLT, volt_V, channel=channel)
-	def get_div_volt(self, channel:int):
-		return self.modify_state(None, OscilloscopeCtg1.DIV_VOLT, float(self.query(f":CHAN{channel}:SCAL?")), channel=channel)
 	
+	@superreturn
+	def get_div_volt(self, channel:int):
+		self._super_hint = float(self.query(f":CHAN{channel}:SCAL?"))
+	
+	@superreturn
 	def set_offset_volt(self, channel:int, volt_V:float):
 		self.write(f":CHAN{channel}:OFFS {volt_V}")
-		self.modify_state(lambda: self.get_offset_volt(channel), OscilloscopeCtg1.OFFSET_VOLT, volt_V, channel=channel)
-	def get_offset_volt(self, channel:int):
-		return self.modify_state(None, OscilloscopeCtg1.OFFSET_VOLT, float(self.query(f":CHAN{channel}:OFFS?")), channel=channel)
 	
+	@superreturn
+	def get_offset_volt(self, channel:int):
+		self._super_hint = float(self.query(f":CHAN{channel}:OFFS?"))
+	
+	@superreturn
 	def set_chan_enable(self, channel:int, enable:bool):
 		self.write(f":CHAN{channel}:DISP {bool_to_str01(enable)}")
-		self.modify_state(lambda: self.get_chan_enable(channel), OscilloscopeCtg1.CHAN_EN, enable, channel=channel)
-	def get_chan_enable(self, channel:int):
-		val_str = self.query(f":CHAN{channel}:DISP?")
-		return self.modify_state(None, OscilloscopeCtg1.CHAN_EN, str01_to_bool(val_str), channel=channel)
 	
+	@superreturn
+	def get_chan_enable(self, channel:int):
+		self._super_hint = self.query(f":CHAN{channel}:DISP?")
+	
+	@superreturn
 	def get_waveform(self, channel:int):
 		
 		self.write(f"WAV:SOUR CHAN{channel}")  # Specify channel to read
@@ -68,24 +81,22 @@ class RigolDS1000Z(OscilloscopeCtg2):
 		# Get time values
 		t = list(xorigin + np.linspace(0, xincr * (len(volts) - 1), len(volts)))
 		
-		self.modify_state(None, OscilloscopeCtg1.WAVEFORM, {"time_s":t, "volt_V":volts}, channel=channel)
-		
-		return {"time_s":t, "volt_V":volts}
+		self._super_hint = {"time_s":t, "volt_V":volts}
 	
 	def add_measurement(self, meas_type:int, channel:int=1):
 		
 		# Find measurement string
 		if meas_type not in self.meas_table:
-			self.log.error(f"Cannot add measurement >{meas_type}<. Measurement not recognized.")
+			self.error(f"Cannot add measurement >{meas_type}<. Measurement not recognized.")
 			return
 		item_str = self.meas_table[meas_type]
 		
 		# Get channel string
-		channel = max(1, min(channel, 1000))
-		if channel != channel:
-			self.log.error("Channel must be between 1 and 4.")
+		channel_val = max(1, min(channel, 4))
+		if channel_val != channel:
+			self.error("Channel must be between 1 and 4.")
 			return
-		src_str = f"CHAN{channel}"
+		src_str = f"CHAN{channel_val}"
 		
 		# Send message
 		self.write(f":MEASURE:ITEM {item_str},{src_str}")
