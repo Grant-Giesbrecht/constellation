@@ -1,15 +1,7 @@
 from heimdallr.base import *
 from heimdallr.networking.net_client import *
-
-class OscilloscopeCtg0(Driver):
 	
-	def __init__(self, address:str, log:plf.LogPile, expected_idn="", **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
-	
-	def refresh_state(self):
-		pass
-	
-class OscilloscopeCtg1(OscilloscopeCtg0):
+class BasicOscilloscopeCtg(Driver):
 	
 	DIV_TIME = "div-time[s]"
 	OFFSET_TIME = "offset-time[s]"
@@ -21,13 +13,13 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 	def __init__(self, address:str, log:plf.LogPile, expected_idn="", max_channels:int=1, **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
 		
-		self.state[OscilloscopeCtg1.DIV_TIME] = None
-		self.state[OscilloscopeCtg1.OFFSET_TIME] = []
-		self.state[OscilloscopeCtg1.DIV_VOLT] = []
-		self.state[OscilloscopeCtg1.OFFSET_VOLT] = []
-		self.state[OscilloscopeCtg1.CHAN_EN] = []
+		self.state[BasicOscilloscopeCtg.DIV_TIME] = None
+		self.state[BasicOscilloscopeCtg.OFFSET_TIME] = []
+		self.state[BasicOscilloscopeCtg.DIV_VOLT] = []
+		self.state[BasicOscilloscopeCtg.OFFSET_VOLT] = []
+		self.state[BasicOscilloscopeCtg.CHAN_EN] = []
 		
-		self.data[OscilloscopeCtg1.WAVEFORM] = []
+		self.data[BasicOscilloscopeCtg.WAVEFORM] = []
 		
 		self.max_channels = max_channels
 	
@@ -48,23 +40,23 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 				case "set_div_time":
 					rval = None
 				case "get_div_time":
-					rval = self.state[OscilloscopeCtg1.DIV_TIME]
+					rval = self.state[BasicOscilloscopeCtg.DIV_TIME]
 				case "set_offset_time":
 					rval = None
 				case "get_offset_time":
-					rval = self.state[OscilloscopeCtg1.OFFSET_TIME]
+					rval = self.state[BasicOscilloscopeCtg.OFFSET_TIME]
 				case "set_div_volt":
 					rval = None
 				case "get_div_volt":
-					rval = self.state[OscilloscopeCtg1.DIV_VOLT]
+					rval = self.state[BasicOscilloscopeCtg.DIV_VOLT]
 				case "set_offset_volt":
 					rval = None
 				case "get_offset_volt":
-					rval = self.state[OscilloscopeCtg1.OFFSET_VOLT]
+					rval = self.state[BasicOscilloscopeCtg.OFFSET_VOLT]
 				case "set_chan_enable":
 					rval = None
 				case "get_chan_enable":
-					rval = self.state[OscilloscopeCtg1.CHAN_EN].get_ch_val([args[0]])
+					rval = self.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val([args[0]])
 				case _:
 					found = False
 				# case "set_offset_time":
@@ -92,57 +84,57 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 	@abstractmethod
 	@enabledummy
 	def set_div_time(self, time_s:float):
-		self.modify_state(self.get_div_time, OscilloscopeCtg1.DIV_TIME, time_s)
+		self.modify_state(self.get_div_time, BasicOscilloscopeCtg.DIV_TIME, time_s)
 	
 	@abstractmethod
 	@enabledummy
 	def get_div_time(self):
-		return self.modify_state(None, OscilloscopeCtg1.DIV_TIME, self._super_hint)
+		return self.modify_state(None, BasicOscilloscopeCtg.DIV_TIME, self._super_hint)
 	
 	@abstractmethod
 	@enabledummy
 	def set_offset_time(self, time_s:float):
-		self.modify_state(self.get_offset_time, OscilloscopeCtg1.OFFSET_TIME, time_s)
+		self.modify_state(self.get_offset_time, BasicOscilloscopeCtg.OFFSET_TIME, time_s)
 		
 	@abstractmethod
 	@enabledummy
 	def get_offset_time(self):
-		return self.modify_state(None, OscilloscopeCtg1.OFFSET_TIME, self._super_hint)
+		return self.modify_state(None, BasicOscilloscopeCtg.OFFSET_TIME, self._super_hint)
 	
 	@abstractmethod
 	@enabledummy
 	def set_div_volt(self, channel:int, volt_V:float):
-		self.modify_state(lambda: self.get_div_volt(channel), OscilloscopeCtg1.DIV_VOLT, volt_V, channel=channel)
+		self.modify_state(lambda: self.get_div_volt(channel), BasicOscilloscopeCtg.DIV_VOLT, volt_V, channel=channel)
 		
 	@abstractmethod
 	@enabledummy
 	def get_div_volt(self, channel:int):
-		return self.modify_state(None, OscilloscopeCtg1.DIV_VOLT, self._super_hint, channel=channel)
+		return self.modify_state(None, BasicOscilloscopeCtg.DIV_VOLT, self._super_hint, channel=channel)
 	
 	@abstractmethod
 	@enabledummy
 	def set_offset_volt(self, channel:int, volt_V:float):
-		self.modify_state(lambda: self.get_offset_volt(channel), OscilloscopeCtg1.OFFSET_VOLT, volt_V, channel=channel)
+		self.modify_state(lambda: self.get_offset_volt(channel), BasicOscilloscopeCtg.OFFSET_VOLT, volt_V, channel=channel)
 		
 	@abstractmethod
 	@enabledummy
 	def get_offset_volt(self, channel:int):
-		return self.modify_state(None, OscilloscopeCtg1.OFFSET_VOLT, self._super_hint, channel=channel)
+		return self.modify_state(None, BasicOscilloscopeCtg.OFFSET_VOLT, self._super_hint, channel=channel)
 	
 	@abstractmethod
 	@enabledummy
 	def set_chan_enable(self, channel:int, enable:bool):
-		self.modify_state(lambda: self.get_chan_enable(channel), OscilloscopeCtg1.CHAN_EN, enable, channel=channel)
+		self.modify_state(lambda: self.get_chan_enable(channel), BasicOscilloscopeCtg.CHAN_EN, enable, channel=channel)
 		
 	@abstractmethod
 	@enabledummy
 	def get_chan_enable(self, channel:int):
-		return self.modify_state(None, OscilloscopeCtg1.CHAN_EN, self._super_hint, channel=channel)
+		return self.modify_state(None, BasicOscilloscopeCtg.CHAN_EN, self._super_hint, channel=channel)
 	
 	@abstractmethod
 	@enabledummy
 	def get_waveform(self, channel:int):
-		return self.modify_data_state(None, OscilloscopeCtg1.WAVEFORM, self._super_hint, channel=channel)
+		return self.modify_data_state(None, BasicOscilloscopeCtg.WAVEFORM, self._super_hint, channel=channel)
 	
 	def refresh_state(self):
 		self.get_div_time()
@@ -155,17 +147,17 @@ class OscilloscopeCtg1(OscilloscopeCtg0):
 	
 	
 	def apply_state(self, new_state:dict):
-		self.set_div_time(new_state[OscilloscopeCtg1.DIV_TIME])
-		self.set_offset_time(new_state[OscilloscopeCtg1.OFFSET_TIME])
+		self.set_div_time(new_state[BasicOscilloscopeCtg.DIV_TIME])
+		self.set_offset_time(new_state[BasicOscilloscopeCtg.OFFSET_TIME])
 		for ch in range(1, self.max_channels+1):
-			self.set_div_volt(ch, new_state[OscilloscopeCtg1.DIV_VOLT][ch-1])
-			self.set_offset_volt(ch, new_state[OscilloscopeCtg1.OFFSET_VOLT][ch-1])
-			self.set_chan_enable(ch, new_state[OscilloscopeCtg1.CHAN_EN][ch-1])
+			self.set_div_volt(ch, new_state[BasicOscilloscopeCtg.DIV_VOLT][ch-1])
+			self.set_offset_volt(ch, new_state[BasicOscilloscopeCtg.OFFSET_VOLT][ch-1])
+			self.set_chan_enable(ch, new_state[BasicOscilloscopeCtg.CHAN_EN][ch-1])
 		
 
-class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
+class RemoteBasicOscilloscopeCtg(RemoteInstrument, BasicOscilloscopeCtg):
 	
-	''' This class mirrors the function in OscilloscopeCtg1, but each function
+	''' This class mirrors the function in BasicOscilloscopeCtg, but each function
 	is decorated with RemoteFunction. This lets a T/C client create RemoteInstruments
 	for this category of instrument using this class and callings its functions, rather
 	than creating a RemoteInstrument object and always calling remote_call.'''
@@ -225,7 +217,7 @@ class RemoteOscilloscopeCtg1(RemoteInstrument, OscilloscopeCtg1):
 	def apply_state(self, new_state:dict):
 		pass
 	
-class OscilloscopeCtg2(OscilloscopeCtg1):
+class StdOscilloscopeCtg(BasicOscilloscopeCtg):
 	
 	# Measurement options
 	MEAS_VMAX = 0

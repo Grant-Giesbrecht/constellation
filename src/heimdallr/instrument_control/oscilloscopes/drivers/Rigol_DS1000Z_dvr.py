@@ -136,7 +136,7 @@ class RigolDS1000Z(OscilloscopeCtg2):
 	def set_measurement_stat_display(self, enable:bool):
 		'''
 		Turns display statistical values on/off for the Rigol DS1000Z series scopes. Not
-		part of the OscilloscopeCtg1, but local to this driver.
+		part of the BasicOscilloscopeCtg, but local to this driver.
 		
 		Args:
 			enable (bool): Turns displayed stats on/off
