@@ -207,6 +207,13 @@ class DataEntry:
 	def __init__(self):
 		self.update_time = None
 		self.value = []
+		
+		#TODO: Idea was to have a hash of the data so I can tell if something
+		# has been changed and needs to be updated, mostly in the context of having 
+		# multiple instrument clients in a network environment (and comparing hashes with the relay to
+		# know when to update over the network). However, this is complicated and I'm not sure it's really
+		# worth while. 
+		self.data_hash = None
 
 class Driver(ABC):
 	
@@ -249,7 +256,6 @@ class Driver(ABC):
 		
 		# Dummy variables
 		self.dummy = dummy
-		self.dummy_state_machine = {}
 		
 		#TODO: Automatically reconnect
 		# Connect instrument
@@ -577,6 +583,13 @@ class Driver(ABC):
 	def apply_state(self, new_state:dict):
 		"""
 		Applys a state (same format at self.state) to the instrument.
+		"""
+		pass
+	
+	@abstractmethod
+	def refresh_data(self):
+		"""
+		Calls all 'get' functions to fully update the data tracker.
 		"""
 		pass
 	
