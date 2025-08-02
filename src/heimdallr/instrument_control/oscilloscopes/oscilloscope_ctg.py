@@ -8,20 +8,72 @@ class BasicOscilloscopeCtg(Driver):
 	DIV_VOLT = "div-volt[V]"
 	OFFSET_VOLT = "offset-volt[V]"
 	CHAN_EN = "chan_en[bool]"
+	NDIV_VERT = "num-div-vert[1]"
+	NDIV_HORIZ = "num-div-horiz[1]"
 	WAVEFORM = "waveform[V]"
 	
-	def __init__(self, address:str, log:plf.LogPile, expected_idn="", max_channels:int=1, **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
-		
-		self.state[BasicOscilloscopeCtg.DIV_TIME] = None
-		self.state[BasicOscilloscopeCtg.OFFSET_TIME] = []
-		self.state[BasicOscilloscopeCtg.DIV_VOLT] = []
-		self.state[BasicOscilloscopeCtg.OFFSET_VOLT] = []
-		self.state[BasicOscilloscopeCtg.CHAN_EN] = []
-		
-		self.data[BasicOscilloscopeCtg.WAVEFORM] = ChannelList()
+	def __init__(self, address:str, log:plf.LogPile, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
+		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, **kwargs)
 		
 		self.max_channels = max_channels
+		self.num_div_horiz = num_div_horiz
+		self.num_div_vert = num_div_vert
+		
+		self.state[BasicOscilloscopeCtg.DIV_TIME] = None
+		self.state[BasicOscilloscopeCtg.OFFSET_TIME] = None
+		self.state[BasicOscilloscopeCtg.NDIV_HORIZ] = num_div_horiz
+		self.state[BasicOscilloscopeCtg.NDIV_VERT] = num_div_vert
+		self.state[BasicOscilloscopeCtg.DIV_VOLT] = ChannelList(self.max_channels, log=self.log)
+		self.state[BasicOscilloscopeCtg.OFFSET_VOLT] = ChannelList(self.max_channels, log=self.log)
+		self.state[BasicOscilloscopeCtg.CHAN_EN] = ChannelList(self.max_channels, log=self.log)
+		
+		self.data[BasicOscilloscopeCtg.WAVEFORM] = ChannelList(self.max_channels, log=self.log)
+		
+		if self.dummy:
+			self.init_dummy_state()
+		
+	def init_dummy_state(self) -> None:
+		self.set_div_time(10e-3)
+		self.set_offset_time(0)
+		for ch in range(self.max_channels):
+			self.set_div_volt(ch, 1)
+			self.set_offset_volt(ch, 0)
+			self.set_chan_enable(ch, True)
+			
+			self.remake_dummy_waves()
+	
+	def remake_dummy_waves(self) ->  None:
+		''' Re-generates spoofed waveforms for each channel that is as realistic as
+		possible for the given instrument state. Saves the waveform to the internal
+		data tracker dict. Should be called each time a time or voltage parameter has
+		been changed and the waveform data is queried.
+		
+		Returns:
+			None
+		'''
+		
+		# Loop over all channels
+		for channel in range(self.max_channels):
+		
+			ampl = 1 # V
+			freq = 40*(channel+1) # Hz
+			npoints = 101
+			
+			# Create time series
+			t_span = self.state[BasicOscilloscopeCtg.NDIV_HORIZ].get_ch_val(channel) * self.state[BasicOscilloscopeCtg.DIV_TIME].get_ch_val(channel)
+			t_series = np.linspace(-1*t_span//2+self.state[BasicOscilloscopeCtg.OFFSET_TIME].get_ch_val(channel), (t_span-t_span//2)+self.state[BasicOscilloscopeCtg.OFFSET_TIME].get_ch_val(channel), npoints)
+			
+			# Create waveform
+			wave = ampl * np.sin(t_series*2*np.pi*freq)
+			
+			# Trim waveform to represent clipping on real scope
+			v_span = self.state[BasicOscilloscopeCtg.NDIV_VERT].get_ch_val(channel) * self.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(channel)
+			v_min = -1*v_span//2+self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_ch_val(channel)
+			v_max = v_min + v_span
+			wave_clipped = [np.max([np.min([element, v_max]), v_min]) for element in wave]
+			
+			# Return result
+			self.data[BasicOscilloscopeCtg.WAVEFORM].set_ch_val(channel, {"time_s":t_series, "volt_V":wave_clipped})
 	
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
@@ -56,10 +108,13 @@ class BasicOscilloscopeCtg(Driver):
 				case "set_chan_enable":
 					rval = None
 				case "get_chan_enable":
-					rval = self.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val([args[0]])
+					rval = self.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val(args[0])
+				case "get_waveform":
+					self.remake_dummy_waves()
+					rval = self.data[BasicOscilloscopeCtg.WAVEFORM].get_ch_val(args[0])
 				case _:
 					found = False
-				# case "set_offset_time":
+				
 			
 			# If function was found, label as recognized, else check match for general getter or setter
 			if found:
@@ -139,7 +194,7 @@ class BasicOscilloscopeCtg(Driver):
 	def refresh_state(self):
 		self.get_div_time()
 		self.get_offset_time()
-		for ch in range(1, self.max_channels+1):
+		for ch in range(self.max_channels):
 			self.get_div_volt(ch)
 			self.get_offset_volt(ch)
 			self.get_chan_enable(ch)
@@ -147,11 +202,16 @@ class BasicOscilloscopeCtg(Driver):
 	def apply_state(self, new_state:dict):
 		self.set_div_time(new_state[BasicOscilloscopeCtg.DIV_TIME])
 		self.set_offset_time(new_state[BasicOscilloscopeCtg.OFFSET_TIME])
-		for ch in range(1, self.max_channels+1):
+		for ch in range(self.max_channels):
 			self.set_div_volt(ch, new_state[BasicOscilloscopeCtg.DIV_VOLT][ch-1])
 			self.set_offset_volt(ch, new_state[BasicOscilloscopeCtg.OFFSET_VOLT][ch-1])
 			self.set_chan_enable(ch, new_state[BasicOscilloscopeCtg.CHAN_EN][ch-1])
+	
+	def refresh_data(self):
 		
+		for ch in range(1, self.max_channels):
+			self.get_waveform(ch)
+			
 
 # class RemoteBasicOscilloscopeCtg(RemoteInstrument, BasicOscilloscopeCtg):
 	
