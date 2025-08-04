@@ -359,6 +359,12 @@ class Driver(ABC):
 		# Dummy variables
 		self.dummy = dummy
 		
+		# These parameters are used for certain instruments, but need to be
+		# defined in the Driver class so state saving/loading can see them.
+		self.max_channels = None
+		self.max_traces = None
+		
+		
 		#TODO: Automatically reconnect
 		# Connect instrument
 		self.connect()
@@ -533,18 +539,17 @@ class Driver(ABC):
 				mdprint(f"    value: >:a{truncate_str(v, limit=40)}<")
 				mdprint(f"    unit: >{unit}<")
 	
-	def save_state(self, filename:str, include_data:bool=False):
-		''' Saves the current instrument state to disk. Note that it does NOT
+	def state_to_dict(self, include_data:bool=False):
+		''' Saves the current instrument state to a dictionary. Note that it does NOT
 		refresh the state from the actual hardware. That must be done seperately
 		using `refresh_state()`.
 		
 		Args:
-			filename (str): File to save.
 			include_data (bool): Optional argument to include instrument data state
 				as well. Default = False.
 		
 		Returns:
-			bool: True if successfully saved file.
+			dict: Dictionary representing state
 		'''
 		
 		# Create metadata dict
@@ -556,6 +561,8 @@ class Driver(ABC):
 		meta_dict["verified_hardware"] = self.verified_hardware
 		meta_dict["online"] = self.online
 		meta_dict["blind_state_update"] = self.blind_state_update
+		meta_dict["max_channels"] = self.max_channels
+		meta_dict["max_traces"] = self.max_traces
 		
 		# Create state dictionary
 		state_dict = {}
@@ -563,7 +570,6 @@ class Driver(ABC):
 			
 			if isinstance(v, ChannelList):
 				state_dict[k] = v.to_dict()
-				print(state_dict[k])
 			else:
 				state_dict[k] = v
 		
@@ -582,10 +588,93 @@ class Driver(ABC):
 		else:
 			out_dict = {"metadata":meta_dict, "state":state_dict}
 		
-		print(out_dict)
+		return out_dict
+	
+	def save_state(self, filename:str, include_data:bool=False):
+		''' Saves the current instrument state to disk. Note that it does NOT
+		refresh the state from the actual hardware. That must be done seperately
+		using `refresh_state()`.
 		
-		# Save data to disk
-		return dict_to_hdf(out_dict, filename, show_detail=True)
+		Args:
+			filename (str): File to save.
+			include_data (bool): Optional argument to include instrument data state
+				as well. Default = False.
+		
+		Returns:
+			bool: True if successfully saved file.
+		'''
+		
+		#TODO: Also make JSON option
+		
+		# Generate dictionary
+		out_dict = self.state_to_dict(include_data=include_data)
+		
+		# Save data
+		return dict_to_hdf(out_dict, filename)
+	
+	def load_state_dict(self, state_dict:dict):
+		''' Loads a state from a dictionary. Note that this only updates the 
+		internal state, it does NOT apply the state to the hardware. To do this,
+		the `apply_state()` function must be used.
+		
+		Args:
+			state_dict (dict): State dictionary to apply to the internal state. 
+		
+		Returns:
+			bool: True if state is succesfully loaded.
+		'''
+		
+		# Get max channels and traces
+		try:
+			self.max_channels = int(state_dict['metadata']['max_channels'])
+		except:
+			self.max_channels = None
+		
+		try:
+			self.max_traces = int(state_dict['metadata']['max_traces'])
+		except:
+			self.max_traces = None
+		
+		# Interpret state parameters
+		try:
+			
+			# Get state dictionary
+			sd = state_dict['state']
+			
+			# Loop over dictionary
+			for k, v in sd.items():
+				
+				# Check if value is a dictionary
+				if isinstance(v, dict):
+					self.state[k].from_dict(v) # Dictionaries are from ChannelList objects
+				else:
+					self.state[k] = v # All others are directly saved
+			
+		except Exception as e:
+			self.error(f"Failed to apply state dictionary ({e}).")
+			return False
+		
+		return True
+	
+	def load_state(self, filename:str):
+		''' Loads a state from file. Note that this only updates the 
+		internal state, it does NOT apply the state to the hardware. To do this,
+		the `apply_state()` function must be used.
+		
+		Args:
+			filename (str): State file to read. Should be HDF format.
+		
+		Returns:
+			bool: True if state is succesfully loaded.
+		'''
+		
+		#TODO: Also accept JSON
+		
+		# Read file
+		in_dict = hdf_to_dict(filename)
+		
+		# Apply to state
+		return self.load_state_dict(in_dict)
 	
 	def preset(self):
 		
