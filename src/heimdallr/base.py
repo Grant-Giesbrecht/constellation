@@ -115,7 +115,7 @@ def superreturn(func):
 		# Call the source function
 		func(self, *args, **kwargs)
 		# Call super after, pass original arugments
-		return self.super(*args, **kwargs)
+		return super(*args, **kwargs)
 	return wrapper
 
 class ChannelList:
@@ -304,6 +304,10 @@ class Driver(ABC):
 		self.log.critical(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
 	def connect(self, check_id:bool=True):
+		
+		if self.dummy:
+			self.online = True
+			return
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
