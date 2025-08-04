@@ -99,8 +99,11 @@ class Identifier:
 		self.remote_addr = "" # String IP address of driver host, pipe, then instrument VISA address.
 	
 	def short_str(self):
-		
-		return f"(driver-class: {self.dvr}, remote-id: {self.remote_id})"
+		dvr_short = self.dvr[self.dvr.rfind('.')+1:]
+		if len(self.remote_id) > 0:
+			return f"driver-class: {dvr_short}, remote-id: {self.remote_id}"
+		else:
+			return f"driver-class: {dvr_short}"
 	
 	def __str__(self):
 		
@@ -115,7 +118,8 @@ def superreturn(func):
 		# Call the source function
 		func(self, *args, **kwargs)
 		# Call super after, pass original arugments
-		return super(*args, **kwargs)
+		super_method = getattr(super(type(self), self), func.__name__)
+		return super_method(*args, **kwargs)
 	return wrapper
 
 class ChannelList:
@@ -286,22 +290,22 @@ class Driver(ABC):
 			return None
 	
 	def lowdebug(self, message:str, detail:str=""):
-		self.log.lowdebug(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+		self.log.lowdebug(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
 	def debug(self, message:str, detail:str=""):
-		self.log.debug(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+		self.log.debug(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
 	def info(self, message:str, detail:str=""):
-		self.log.info(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+		self.log.info(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
 	def warning(self, message:str, detail:str=""):
-		self.log.warning(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+		self.log.warning(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
 	def error(self, message:str, detail:str=""):
-		self.log.error(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+		self.log.error(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 		
 	def critical(self, message:str, detail:str=""):
-		self.log.critical(f"(Driver: >:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
+		self.log.critical(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
 	def connect(self, check_id:bool=True):
 		
@@ -346,6 +350,8 @@ class Driver(ABC):
 		Returns:
 			value, or result of query_func if provided.
 		"""
+		
+		print(self.dummy)
 		
 		if (query_func is None) or self.dummy or self.blind_state_update:
 			prev_val = self.state[param]
@@ -522,7 +528,7 @@ class Driver(ABC):
 			return
 		
 		if self.dummy:
-			self.lowdebug(f"Writing to dummy: >{cmd}<.")
+			self.lowdebug(f"Writing to dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
 			return
 		
 		try:
