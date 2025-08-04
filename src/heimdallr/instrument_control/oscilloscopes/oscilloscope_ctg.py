@@ -39,8 +39,10 @@ class BasicOscilloscopeCtg(Driver):
 			self.set_div_volt(ch, 1)
 			self.set_offset_volt(ch, 0)
 			self.set_chan_enable(ch, True)
-			
-			self.remake_dummy_waves()
+		
+		self.show_state()
+		
+		self.remake_dummy_waves()
 	
 	def remake_dummy_waves(self) ->  None:
 		''' Re-generates spoofed waveforms for each channel that is as realistic as
@@ -60,14 +62,14 @@ class BasicOscilloscopeCtg(Driver):
 			npoints = 101
 			
 			# Create time series
-			t_span = self.state[BasicOscilloscopeCtg.NDIV_HORIZ].get_ch_val(channel) * self.state[BasicOscilloscopeCtg.DIV_TIME].get_ch_val(channel)
-			t_series = np.linspace(-1*t_span//2+self.state[BasicOscilloscopeCtg.OFFSET_TIME].get_ch_val(channel), (t_span-t_span//2)+self.state[BasicOscilloscopeCtg.OFFSET_TIME].get_ch_val(channel), npoints)
+			t_span = self.state[BasicOscilloscopeCtg.NDIV_HORIZ] * self.state[BasicOscilloscopeCtg.DIV_TIME]
+			t_series = np.linspace(-1*t_span//2+self.state[BasicOscilloscopeCtg.OFFSET_TIME], (t_span-t_span//2)+self.state[BasicOscilloscopeCtg.OFFSET_TIME], npoints)
 			
 			# Create waveform
 			wave = ampl * np.sin(t_series*2*np.pi*freq)
 			
 			# Trim waveform to represent clipping on real scope
-			v_span = self.state[BasicOscilloscopeCtg.NDIV_VERT].get_ch_val(channel) * self.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(channel)
+			v_span = self.state[BasicOscilloscopeCtg.NDIV_VERT] * self.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(channel)
 			v_min = -1*v_span//2+self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_ch_val(channel)
 			v_max = v_min + v_span
 			wave_clipped = [np.max([np.min([element, v_max]), v_min]) for element in wave]
@@ -292,8 +294,8 @@ class StdOscilloscopeCtg(BasicOscilloscopeCtg):
 	STAT_CURR = 4
 	STAT_STD = 5
 	
-	def __init__(self, address:str, log:plf.LogPile, expected_idn="", **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
+	def __init__(self, address:str, log:plf.LogPile, expected_idn="", dummy:bool=False, **kwargs):
+		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, **kwargs)
 	
 	@abstractmethod
 	def add_measurement(self):
