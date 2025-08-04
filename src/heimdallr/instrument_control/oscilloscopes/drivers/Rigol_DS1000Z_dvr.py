@@ -5,7 +5,7 @@ https://beyondmeasure.rigoltech.com/acton/attachment/1579/f-0386/1/-/-/-/-/DS100
 
 from heimdallr.instrument_control.oscilloscopes.oscilloscope_ctg import *
 
-class RigolDS1000Z(StdOscilloscopeCtg):
+class RigolDS1000Z(BasicOscilloscopeCtg):
 
 	def __init__(self, address:str, log:plf.LogPile, dummy:bool=False, **kwargs):
 		super().__init__(address, log, expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=4, num_div_horiz=12, dummy=dummy, num_div_vert=8, **kwargs)

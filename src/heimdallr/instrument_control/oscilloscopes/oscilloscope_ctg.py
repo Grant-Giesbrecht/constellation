@@ -40,8 +40,6 @@ class BasicOscilloscopeCtg(Driver):
 			self.set_offset_volt(ch, 0)
 			self.set_chan_enable(ch, True)
 		
-		self.show_state()
-		
 		self.remake_dummy_waves()
 	
 	def remake_dummy_waves(self) ->  None:
@@ -63,14 +61,17 @@ class BasicOscilloscopeCtg(Driver):
 			
 			# Create time series
 			t_span = self.state[BasicOscilloscopeCtg.NDIV_HORIZ] * self.state[BasicOscilloscopeCtg.DIV_TIME]
-			t_series = np.linspace(-1*t_span//2+self.state[BasicOscilloscopeCtg.OFFSET_TIME], (t_span-t_span//2)+self.state[BasicOscilloscopeCtg.OFFSET_TIME], npoints)
+			t_start = -1*t_span/2+self.state[BasicOscilloscopeCtg.OFFSET_TIME]
+			t_series = np.linspace(t_start, t_start + t_span, npoints)
+			
+			print(f"span = {t_span}")
 			
 			# Create waveform
 			wave = ampl * np.sin(t_series*2*np.pi*freq)
 			
 			# Trim waveform to represent clipping on real scope
 			v_span = self.state[BasicOscilloscopeCtg.NDIV_VERT] * self.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(channel)
-			v_min = -1*v_span//2+self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_ch_val(channel)
+			v_min = -1*v_span/2+self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_ch_val(channel)
 			v_max = v_min + v_span
 			wave_clipped = [np.max([np.min([element, v_max]), v_min]) for element in wave]
 			
@@ -139,7 +140,6 @@ class BasicOscilloscopeCtg(Driver):
 			return None
 	
 	@abstractmethod
-	@enabledummy
 	def set_div_time(self, time_s:float):
 		self.modify_state(self.get_div_time, BasicOscilloscopeCtg.DIV_TIME, time_s)
 	
@@ -149,7 +149,6 @@ class BasicOscilloscopeCtg(Driver):
 		return self.modify_state(None, BasicOscilloscopeCtg.DIV_TIME, self._super_hint)
 	
 	@abstractmethod
-	@enabledummy
 	def set_offset_time(self, time_s:float):
 		self.modify_state(self.get_offset_time, BasicOscilloscopeCtg.OFFSET_TIME, time_s)
 		
@@ -159,7 +158,6 @@ class BasicOscilloscopeCtg(Driver):
 		return self.modify_state(None, BasicOscilloscopeCtg.OFFSET_TIME, self._super_hint)
 	
 	@abstractmethod
-	@enabledummy
 	def set_div_volt(self, channel:int, volt_V:float):
 		self.modify_state(lambda: self.get_div_volt(channel), BasicOscilloscopeCtg.DIV_VOLT, volt_V, channel=channel)
 		
@@ -169,7 +167,6 @@ class BasicOscilloscopeCtg(Driver):
 		return self.modify_state(None, BasicOscilloscopeCtg.DIV_VOLT, self._super_hint, channel=channel)
 	
 	@abstractmethod
-	@enabledummy
 	def set_offset_volt(self, channel:int, volt_V:float):
 		self.modify_state(lambda: self.get_offset_volt(channel), BasicOscilloscopeCtg.OFFSET_VOLT, volt_V, channel=channel)
 		
@@ -179,7 +176,6 @@ class BasicOscilloscopeCtg(Driver):
 		return self.modify_state(None, BasicOscilloscopeCtg.OFFSET_VOLT, self._super_hint, channel=channel)
 	
 	@abstractmethod
-	@enabledummy
 	def set_chan_enable(self, channel:int, enable:bool):
 		self.modify_state(lambda: self.get_chan_enable(channel), BasicOscilloscopeCtg.CHAN_EN, enable, channel=channel)
 		

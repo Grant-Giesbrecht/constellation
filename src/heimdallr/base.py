@@ -351,8 +351,6 @@ class Driver(ABC):
 			value, or result of query_func if provided.
 		"""
 		
-		print(self.dummy)
-		
 		if (query_func is None) or self.dummy or self.blind_state_update:
 			prev_val = self.state[param]
 			
@@ -363,7 +361,7 @@ class Driver(ABC):
 				self.state[param] = value
 			else:
 				try:
-					self.state[param].set_ch_val(1, value)
+					self.state[param].set_ch_val(channel, value)
 				except Exception as e:
 					self.log.error(f"Failed to modify internal state. {e}")
 			val = value
@@ -571,6 +569,10 @@ class Driver(ABC):
 		
 		if not self.online:
 			self.warning(f"Cannot write when offline. ()")
+		
+		if self.dummy:
+			self.lowdebug(f"Querying dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
+			return
 		
 		try:
 			rv = self.inst.query(cmd)
