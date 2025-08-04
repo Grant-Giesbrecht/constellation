@@ -8,6 +8,8 @@ from socket import getaddrinfo, gethostname
 import ipaddress
 import fnmatch
 import matplotlib.pyplot as plt
+from jarnsaxa import hdf_to_dict, dict_to_hdf
+import datetime
 
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
 	# By default, this method only returns non-local IPv4 addresses
@@ -97,6 +99,17 @@ class Identifier:
 		
 		self.remote_id = "" # Rich name authenticated by the server and used to lookup the remote address
 		self.remote_addr = "" # String IP address of driver host, pipe, then instrument VISA address.
+		
+		self.address = "" # Instrument address to connect to, if local connection.
+	
+	def to_dict(self):
+		''' Returns the instrument Identifier as a dictionary.
+		
+		Returns:
+			Dictionary representing the identifier.
+		'''
+		
+		return {"idn_model":self.idn_model, "ctg":self.ctg, "dvr":self.dvr, "remote_id":self.remote_id, "remote_addr":self.remote_addr, "address":self.address}
 	
 	def short_str(self):
 		dvr_short = self.dvr[self.dvr.rfind('.')+1:]
@@ -215,6 +228,78 @@ class ChannelList:
 		'''
 		
 		return (channel in self.channel_data.keys())
+	
+	def to_dict(self):
+		''' Converts the object to a dictionary so it can be saved
+		more easily to disk.
+		
+		Returns:
+			dict: Dictionary containing the value for each channel,
+			with channel numbers (zero-indexed) as keys. For compatability
+			with HDF, the keys as saved as "channel-<number>" rather than
+			just the channel number. All channels will be populated, up
+			through max_channels, with None	being saved for values not populated.
+		'''
+		
+		data = {}
+		for ch in range(self.max_channels):
+			
+			ch_str = f"channel-{ch}"
+			
+			if not self.ch_is_populated(ch):
+				data[ch_str] = None
+			else:
+				data[ch_str] = self.get_ch_val(ch)
+				
+				#TODO: Error check that this item is JSON serializable
+		
+		return data
+	
+	def from_dict(self, data:dict):
+		''' Populates the ChannelList from a dictionary.
+		
+		Args:
+			data (dict): Dictionary to populate from. Expects channels to be integers
+				starting from zero and running to max_channels-1. Values will be
+				saved to associated channel in object. All channels should be present
+				in dictionary and can have value of None if desired. Keys are strings in
+				the format "channel-<NUM>", ie. channel 2 would be "channel-2".
+		
+		Returns:
+			bool: True if dictionary was properly interpreted.
+		'''
+		
+		expected_num = 0
+		ch_list = []
+		
+		# Scan over all items
+		for k_str, v in data.items():
+			
+			# Attempt to get int key and set value
+			try:
+				# Get just the channel number
+				ch = int(k_str.split('-', 1)[1])
+				
+				# Save value
+				self.set_ch_val(ch, v)
+				
+				# Check for contiguous channels
+				if ch != expected_num:
+					self.log.warning(f"Dictionary was missing channel >{expected_num}<.")
+				else:
+					expected_num += 1
+				
+				ch_list.append(ch)
+			except Exception as e:
+				self.log.error(f"Failed to parse key, value pair. ({e})")
+				return False
+		
+		# Set max channels
+		dict_mc = np.max(ch_list)+1
+		if self.max_channels != dict_mc:
+			self.log.warning(f"Dictionary had different max channel count ({dict_mc}) than object ({self.max_channels}).")
+		
+		return True
 
 class DataEntry:
 	''' Used in driver.data to describe a measurement result and its
@@ -269,6 +354,7 @@ class Driver(ABC):
 		ctg_o = inheritance_list[1]
 		self.id.ctg = f"{ctg_o}"
 		self.id.dvr = f"{dvr_o}"
+		self.id.address = self.address
 		
 		# Dummy variables
 		self.dummy = dummy
@@ -446,6 +532,60 @@ class Driver(ABC):
 				mdprint(f">:q{name}<:")
 				mdprint(f"    value: >:a{truncate_str(v, limit=40)}<")
 				mdprint(f"    unit: >{unit}<")
+	
+	def save_state(self, filename:str, include_data:bool=False):
+		''' Saves the current instrument state to disk. Note that it does NOT
+		refresh the state from the actual hardware. That must be done seperately
+		using `refresh_state()`.
+		
+		Args:
+			filename (str): File to save.
+			include_data (bool): Optional argument to include instrument data state
+				as well. Default = False.
+		
+		Returns:
+			bool: True if successfully saved file.
+		'''
+		
+		# Create metadata dict
+		meta_dict = {}
+		meta_dict["timestamp"] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+		meta_dict["instrument_id"] = self.id.to_dict()
+		meta_dict["dummy"] = self.dummy
+		meta_dict["is_scpi"] = self.is_scpi
+		meta_dict["verified_hardware"] = self.verified_hardware
+		meta_dict["online"] = self.online
+		meta_dict["blind_state_update"] = self.blind_state_update
+		
+		# Create state dictionary
+		state_dict = {}
+		for k, v in self.state.items():
+			
+			if isinstance(v, ChannelList):
+				state_dict[k] = v.to_dict()
+				print(state_dict[k])
+			else:
+				state_dict[k] = v
+		
+		# CreaTe data dictionary if requested, package output dict
+		if include_data:
+			
+			data_dict = {}
+			for k, v in self.data.items():
+				
+				if isinstance(v, ChannelList):
+					data_dict[k] = v.to_dict()
+				else:
+					data_dict[k] = v
+			
+			out_dict = {"metadata":meta_dict, "state":state_dict, "data":data_dict}
+		else:
+			out_dict = {"metadata":meta_dict, "state":state_dict}
+		
+		print(out_dict)
+		
+		# Save data to disk
+		return dict_to_hdf(out_dict, filename, show_detail=True)
 	
 	def preset(self):
 		
