@@ -144,6 +144,18 @@ class ChannelList:
 		else:
 			self.log = log
 	
+	def summarize(self, indent:str=""):
+		
+		out = ""
+		
+		for ch in range(self.max_channels):
+			if ch != 0:
+				out = out + "\n"
+			out = out + f"{indent}>:qchannel {ch}<: >:a@:LOCK{truncate_str(self.get_ch_val(ch), 40)}@:UNLOCK<"
+		
+		out = plf.markdown(out)
+		return out
+	
 	def get_valid_ch(self, channel:int) -> int:
 		''' Checks if a given channel number is valid. If not, returns
 		closest valid channel.
@@ -355,7 +367,7 @@ class Driver(ABC):
 			prev_val = self.state[param]
 			
 			# Record ing log
-			self.log.add_log(self.state_change_log_level, f"(Driver: >:q{self.id.short_str()}<) State modified; >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
 			
 			if channel is None:
 				self.state[param] = value
@@ -409,7 +421,10 @@ class Driver(ABC):
 		
 		return val
 	
-	def show_state(self):
+	def print_state(self):
+		
+		def mdprint(s:str):
+			print(plf.markdown(s))
 		
 		def split_param(s):
 			before_brackets = s[:s.index("[")]
@@ -420,9 +435,17 @@ class Driver(ABC):
 			
 			# Get name and unit strings
 			name, unit = split_param(k)
-			print(f"{name}:")
-			print(f"    value: {truncate_str(v, limit=40)}")
-			print(f"    unit: {unit}")
+			
+			# Print value
+			if isinstance(v, ChannelList):
+				mdprint(f">:q{name}<:")
+				mdprint(f"    value:")
+				print(v.summarize(indent="        "))
+				mdprint(f"    unit: >{unit}<")
+			else:
+				mdprint(f">:q{name}<:")
+				mdprint(f"    value: >:a{truncate_str(v, limit=40)}<")
+				mdprint(f"    unit: >{unit}<")
 	
 	def preset(self):
 		
@@ -550,6 +573,10 @@ class Driver(ABC):
 		if not self.online:
 			self.warning(f"Cannot write when offline. ()")
 		
+		if self.dummy:
+			self.lowdebug(f"Reading from dummy")
+			return None
+		
 		try:
 			rv = self.inst.read()
 			self.lowdebug(f"Read from instrument: >:a{rv}<")
@@ -572,7 +599,7 @@ class Driver(ABC):
 		
 		if self.dummy:
 			self.lowdebug(f"Querying dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
-			return
+			return None
 		
 		try:
 			rv = self.inst.query(cmd)

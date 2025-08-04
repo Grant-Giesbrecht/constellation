@@ -11,7 +11,7 @@ osc.set_div_time(0.002)
 osc.set_offset_time(0.005)
 osc.set_div_volt(2, 0.15)
 
-osc.show_state()
+osc.print_state()
 
 wav1 = osc.get_waveform(1)
 wav2 = osc.get_waveform(2)
