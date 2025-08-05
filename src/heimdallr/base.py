@@ -407,12 +407,47 @@ class DirectSCPIRelay(CommandRelay):
 		
 		try:
 			self.inst.write(cmd)
-			self.lowdebug(f"DirectSCPIRelay wrote to instrument: >{cmd}<.")
+			self.lowdebug(f"DirectSCPIRelay wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
 		except Exception as e:
 			self.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
 			return False
 		
 		return True
+	
+	def read(self) -> tuple:
+		''' Reads data as a string from the instrument.
+		
+		Returns:
+			tuple: Element 0 = success status of read, element 1 = read string.
+		'''
+		
+		try:
+			rv = self.inst.read()
+			self.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
+		except Exception as e:
+			self.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			return False, ""
+		
+		return True, ""
+	
+	def query(self, cmd:str) -> tuple:
+		''' Queries data as a string from the instrument.
+		
+		Args:
+			cmd (str): Command to query from instrument.
+		
+		Returns:
+			tuple: Element 0 = success status of read, element 1 = read string.
+		'''
+		
+		try:
+			rv = self.inst.read()
+			self.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
+		except Exception as e:
+			self.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			return False, ""
+		
+		return True, ""
 
 class RemoteSCPIRelay(CommandRelay):
 	''' A relay that connects to an instrument via a network and relays
@@ -610,7 +645,8 @@ class Driver(ABC):
 			return False
 		
 	def write(self, cmd:str) -> None:
-		''' Sends a SCPI command via the drivers Relay.
+		''' Sends a SCPI command via the drivers Relay. Updates
+		self.online with write success/fail.
 		
 		Args:
 			cmd (str): Command to relay to instrument
@@ -643,54 +679,80 @@ class Driver(ABC):
 			self.error(f"Failed to write to instrument {self.address}. ({e})")
 			self.online = False
 	
-	def read(self):
-		''' Reads via PyVISA'''
+	def read(self) -> str:
+		''' Reads via the relay. Updates self.online with read success/
+		failure.
+		
+		Returns:
+			str: Value received from instrument relay.
+		'''
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
 			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
-			return
+			return ""
 		
+		# Abort if offline
 		if not self.online:
 			self.warning(f"Cannot write when offline. ()")
+			return ""
 		
+		# Spoof if dummy
 		if self.dummy:
 			self.lowdebug(f"Reading from dummy")
-			return None
+			return ""
 		
+		# Attempt to read
 		try:
-			rv = self.inst.read()
-			self.lowdebug(f"Read from instrument: >:a{rv}<")
-			return rv
+			self.online, rv = self.relay.read()
+			if self.online:
+				self.lowdebug(f"Read from instrument: >:a{rv}<")
+				return rv
+			else:
+				return ""
 		except Exception as e:
 			self.error(f"Failed to read from instrument {self.address}. ({e})")
 			self.online = False
-			return None
+			return ""
 	
-	def query(self, cmd:str):
-		''' Querys a command via PyVISA'''
+	def query(self, cmd:str) -> str:
+		''' Queries via the relay. Updates self.online with read success/
+		failure.
+		
+		Args:
+			cmd (str): Command to query from instrument.
+		
+		Returns:
+			str: Value received from instrument relay.
+		'''
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
-			self.error(f"Cannot use default query() function, instrument does recognize SCPI commands.")
-			return
+			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
+			return ""
 		
+		# Abort if offline
 		if not self.online:
 			self.warning(f"Cannot write when offline. ()")
+			return ""
 		
+		# Spoof if dummy
 		if self.dummy:
-			self.lowdebug(f"Querying dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
-			return None
+			self.lowdebug(f"Reading from dummy")
+			return ""
 		
+		# Attempt to read
 		try:
-			rv = self.inst.query(cmd)
-			self.lowdebug(f"Queried instrument, >{cmd}<, receiving >:a{rv}<.")
+			self.online, rv = self.relay.query(cmd)
+			if self.online:
+				self.lowdebug(f"Read from instrument: >:a{rv}<")
+				return rv
+			else:
+				return ""
 		except Exception as e:
-			self.error(f"Failed to query instrument {self.address}. ({e})")
+			self.error(f"Failed to read from instrument {self.address}. ({e})")
 			self.online = False
-			return None
-		
-		return rv
+			return ""
 	
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
