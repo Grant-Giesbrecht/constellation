@@ -10,6 +10,7 @@ import fnmatch
 import matplotlib.pyplot as plt
 from jarnsaxa import hdf_to_dict, dict_to_hdf
 import datetime
+from pyvicp import Client
 
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
 	# By default, this method only returns non-local IPv4 addresses
@@ -369,6 +370,89 @@ class CommandRelay:
 	@abstractmethod
 	def query(self):
 		pass
+
+class VICPDirectSCPIRelay(CommandRelay):
+	''' A relay that directly connects to instruments via VICP and relays
+	SCPI commands from a driver. This is only for LeCroy oscilloscopes because
+	they require VICP instead of PyVisa.
+	'''
+	
+	def __init__(self):
+		super().__init__()
+		
+		self.instr = None
+	
+	def connect(self) -> bool:
+		
+		try:
+			self.inst = Client(self.address)
+			self.online = True
+			self.log.debug(f"DirectSCPIRelay attempting to open instrument at address >{self.address}<.")
+		except:
+			self.log.debug(f"DirectSCPIRelay failed to open instrument at address >{self.address}<.")
+			return False 
+		return True
+	
+	def close(self) -> None:
+		''' Attempts to close the connection to the physical 
+		instrument.'''
+		
+		self.inst.close()	
+	
+	def write(self, cmd:str) -> bool:
+		''' Sends a SCPI command via PyVISA.
+		
+		Args:
+			cmd (str): Command to write to instrument.
+		
+		Returns:
+			bool: Success status of write.
+		'''
+		
+		try:
+			self.inst.send(cmd.encode())
+			self.log.lowdebug(f"DirectSCPIRelay wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
+		except Exception as e:
+			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			return False
+		
+		return True
+	
+	def read(self) -> tuple:
+		''' Reads data as a string from the instrument.
+		
+		Returns:
+			tuple: Element 0 = success status of read, element 1 = read string.
+		'''
+		
+		try:
+			rv = self.inst.receive().decode()
+			self.log.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
+		except Exception as e:
+			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			return False, ""
+		
+		return True, ""
+	
+	def query(self, cmd:str) -> tuple:
+		''' Queries data as a string from the instrument.
+		
+		Args:
+			cmd (str): Command to query from instrument.
+		
+		Returns:
+			tuple: Element 0 = success status of read, element 1 = read string.
+		'''
+		
+		try:
+			self.inst.send(cmd.encode())
+			rv = self.inst.receive().decode()
+			self.log.lowdebug(f"DirectSCPIRelay queried from instrument: >@:LOCK{rv}@:UNLOCK<.")
+		except Exception as e:
+			self.log.error(f"DirectSCPIRelay failed to query instrument {self.address}. ({e})")
+			return False, ""
+		
+		return True, ""
 	
 class DirectSCPIRelay(CommandRelay):
 	''' A relay that directly connects to instruments via PyVisa and relays
@@ -410,9 +494,9 @@ class DirectSCPIRelay(CommandRelay):
 		
 		try:
 			self.inst.write(cmd)
-			self.lowdebug(f"DirectSCPIRelay wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
+			self.log.lowdebug(f"DirectSCPIRelay wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
 		except Exception as e:
-			self.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
 			return False
 		
 		return True
@@ -426,9 +510,9 @@ class DirectSCPIRelay(CommandRelay):
 		
 		try:
 			rv = self.inst.read()
-			self.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
+			self.log.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
-			self.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
 			return False, ""
 		
 		return True, ""
@@ -444,10 +528,10 @@ class DirectSCPIRelay(CommandRelay):
 		'''
 		
 		try:
-			rv = self.inst.read()
-			self.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
+			rv = self.inst.query()
+			self.log.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
-			self.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
 			return False, ""
 		
 		return True, ""
@@ -540,9 +624,10 @@ class Driver(ABC):
 		
 		# Tell the relay to attempt to reconnect
 		if not self.relay.connect():
-			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
+			self.error(f"Failed to connect to address: {self.address}.", detail=f"{self.id}")
 			self.online = False
 			return False
+		self.online = True
 		
 		# Test if relay was successful in connecting
 		if check_id:
@@ -737,7 +822,7 @@ class Driver(ABC):
 		
 		# Abort if offline
 		if not self.online:
-			self.warning(f"Cannot write when offline. ()")
+			self.warning(f"Cannot query when offline. ()")
 			return ""
 		
 		# Spoof if dummy

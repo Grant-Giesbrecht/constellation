@@ -12,8 +12,8 @@ class BasicOscilloscopeCtg(Driver):
 	NDIV_HORIZ = "num-div-horiz[1]"
 	WAVEFORM = "waveform[V]"
 	
-	def __init__(self, address:str, log:plf.LogPile, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, **kwargs)
+	def __init__(self, address:str, log:plf.LogPile, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, relay:CommandRelay=None, **kwargs):
+		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
 		
 		self.max_channels = max_channels
 		self.num_div_horiz = num_div_horiz
