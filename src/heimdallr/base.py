@@ -316,10 +316,109 @@ class DataEntry:
 		# worth while. 
 		self.data_hash = None
 
+class CommandRelay:
+	''' Class used to relay commands from a "driver" (which defines the content of the
+	instructions in commands) to the physical instrument. Using a CommandRelay object
+	allows the Driver to relay commands directly to a instrument via Pyvisa, or to
+	use a remote connection, with the difference being entirely invisible to the 
+	driver.
+	'''
+	
+	def __init__(self):
+		
+		self.address = ""
+		self.log = None
+	
+		
+	def configure(self, address:str, log:plf.LogPile):
+		''' Configures the Relay with the appropriate address and log. Note
+		that this is done after __init__ so that the Relay can be automatically
+		configured by the driver in the driver's __init__ function, without the user
+		having to change the address for both the relay and the driver.
+		'''
+		
+		self.address = address
+		self.log = log
+	
+	@abstractmethod
+	def connect(self):
+		''' Instructs relay to attempt to open the connection with the instrument,
+		though note that this function will not be able to positively confirm a 
+		successful connection.
+		
+		Returns:
+			bool: False if connection was known to fail, else true.
+		'''
+		pass
+	
+	@abstractmethod
+	def close(self):
+		pass
+	
+	@abstractmethod
+	def write(self):
+		pass
+	
+	@abstractmethod
+	def read(self):
+		pass
+	
+	@abstractmethod
+	def query(self):
+		pass
+	
+class DirectSCPIRelay(CommandRelay):
+	''' A relay that directly connects to instruments via PyVisa and relays
+	SCPI commands from a driver.
+	'''
+	
+	def __init__(self):
+		super().__init__()
+		
+		self.rm = pv.ResourceManager()
+		self.inst = None
+	
+	def connect(self):
+		
+		try:
+			self.inst = self.rm.open_resource(self.address)
+			self.online = True
+			self.log.debug(f"DirectSCPIRelay attempting to open instrument at address >{self.address}<.")
+		except:
+			self.log.debug(f"DirectSCPIRelay failed to open instrument at address >{self.address}<.")
+			return False 
+		return True
+	
+	def close(self):
+		
+		self.inst.close()	
+	
+	def write(self, cmd:str):
+		''' Sends a SCPI command via PyVISA'''
+		
+		if self.dummy:
+			self.lowdebug(f"Writing to dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
+			return
+		
+		try:
+			self.inst.write(cmd)
+			self.lowdebug(f"Wrote to instrument: >{cmd}<")
+		except Exception as e:
+			self.error(f"Failed to write to instrument {self.address}. ({e})")
+			self.online = False
+
+class RemoteSCPIRelay(CommandRelay):
+	''' A relay that connects to an instrument via a network and relays
+	SCPI commands indirectly from a driver.
+	'''
+	
+	def __init__(self):
+		pass
+
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
-	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str="", dummy:bool=False):
+	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str="", dummy:bool=False, relay:CommandRelay=None):
 		
 		self.address = address
 		self.log = log
@@ -330,9 +429,16 @@ class Driver(ABC):
 		self.expected_idn = expected_idn
 		self.verified_hardware = False
 		
+		#TODO: Will be replaced by Relay
 		self.online = False
-		self.rm = pv.ResourceManager()
-		self.inst = None
+		self.relay = relay
+		if self.relay is None:
+			self.relay = CommandRelay(log=log)
+		
+		self.relay.configure(self.address, self.log)
+		
+		# self.rm = pv.ResourceManager()
+		# self.inst = None
 		
 		# State tracking parameters
 		self.dummy = False
@@ -411,29 +517,34 @@ class Driver(ABC):
 	def critical(self, message:str, detail:str=""):
 		self.log.critical(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
-	def connect(self, check_id:bool=True):
+	def connect(self, check_id:bool=True)-> None:
+		''' Attempts to establish a connection to the instrument. Updates
+		the self.online parameter with connection success.
 		
+		Args:
+			check_id (bool): Check that instrument identifies itself as
+				the expected model. Default is true. 
+			
+		Returns:
+			None
+		'''
+		
+		# Return immediately if dummy mode
 		if self.dummy:
 			self.online = True
 			return
 		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default connect() function, instrument does recognize SCPI commands.", detail=f"{self.id}")
-			return
-		
-		# Attempt to connect
-		try:
-			self.inst = self.rm.open_resource(self.address)
-			self.online = True
-			self.debug(f"Connected to address >{self.address}<.", detail=f"{self.id}")
-			
-			if check_id:
-				self.query_id()
-			
-		except Exception as e:
+		# Tell the relay to attempt to reconnect
+		if not self.relay.connect():
 			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
 			self.online = False
+			return
+		
+		# Test if relay was successful in connecting
+		if check_id:
+			self.query_id()
+		
+		self.debug(f"Connected to address >{self.address}<.", detail=f"{self.id}")
 	
 	def modify_state(self, query_func:callable, param:str, value, channel:int=None):
 		"""
@@ -687,8 +798,14 @@ class Driver(ABC):
 		
 		self.write("*RST")
 	
-	def query_id(self):
-		''' Checks the IDN of the instrument, and makes sure it matches up.'''
+	def query_id(self) -> None:
+		''' Checks the IDN of the instrument, and makes sure it matches up
+		with the expected identified for the given instrument model. Updates
+		self.online if connection/verification fails.
+		
+		Returns:
+			None
+		'''
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
