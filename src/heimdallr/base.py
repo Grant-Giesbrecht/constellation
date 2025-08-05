@@ -128,8 +128,11 @@ def superreturn(func):
 	return value.'''
 	
 	def wrapper(self, *args, **kwargs):
-		# Call the source function
-		func(self, *args, **kwargs)
+		
+		# Call the source function (but only if not in dummy mode)
+		if not self.dummy:
+			func(self, *args, **kwargs)
+		
 		# Call super after, pass original arugments
 		super_method = getattr(super(type(self), self), func.__name__)
 		return super_method(*args, **kwargs)
