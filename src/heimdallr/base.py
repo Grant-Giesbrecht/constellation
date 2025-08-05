@@ -378,7 +378,7 @@ class DirectSCPIRelay(CommandRelay):
 		self.rm = pv.ResourceManager()
 		self.inst = None
 	
-	def connect(self):
+	def connect(self) -> bool:
 		
 		try:
 			self.inst = self.rm.open_resource(self.address)
@@ -389,23 +389,30 @@ class DirectSCPIRelay(CommandRelay):
 			return False 
 		return True
 	
-	def close(self):
+	def close(self) -> None:
+		''' Attempts to close the connection to the physical 
+		instrument.'''
 		
 		self.inst.close()	
 	
-	def write(self, cmd:str):
-		''' Sends a SCPI command via PyVISA'''
+	def write(self, cmd:str) -> bool:
+		''' Sends a SCPI command via PyVISA.
 		
-		if self.dummy:
-			self.lowdebug(f"Writing to dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
-			return
+		Args:
+			cmd (str): Command to write to instrument.
+		
+		Returns:
+			bool: Success status of write.
+		'''
 		
 		try:
 			self.inst.write(cmd)
-			self.lowdebug(f"Wrote to instrument: >{cmd}<")
+			self.lowdebug(f"DirectSCPIRelay wrote to instrument: >{cmd}<.")
 		except Exception as e:
-			self.error(f"Failed to write to instrument {self.address}. ({e})")
-			self.online = False
+			self.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			return False
+		
+		return True
 
 class RemoteSCPIRelay(CommandRelay):
 	''' A relay that connects to an instrument via a network and relays
@@ -475,7 +482,7 @@ class Driver(ABC):
 		# Connect instrument
 		self.connect()
 	
-	def connect(self, check_id:bool=True)-> None:
+	def connect(self, check_id:bool=True) -> bool:
 		''' Attempts to establish a connection to the instrument. Updates
 		the self.online parameter with connection success.
 		
@@ -484,27 +491,33 @@ class Driver(ABC):
 				the expected model. Default is true. 
 			
 		Returns:
-			None
+			bool: Online status
 		'''
 		
 		# Return immediately if dummy mode
 		if self.dummy:
 			self.online = True
-			return
+			return True
 		
 		# Tell the relay to attempt to reconnect
 		if not self.relay.connect():
 			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
 			self.online = False
-			return
+			return False
 		
 		# Test if relay was successful in connecting
 		if check_id:
 			self.query_id()
 		
-		self.debug(f"Connected to address >{self.address}<.", detail=f"{self.id}")
+		if self.online:
+			self.debug(f"Connected to address >{self.address}<.", detail=f"{self.id}")
+		else:
+			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
+		
+		return self.online
 	
-	def preset(self):
+	def preset(self) -> None:
+		''' Presets an instrument. Only valid for SCPI instruments.'''
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
@@ -551,14 +564,11 @@ class Driver(ABC):
 			self.debug(f"Connection state: >OFFLINE<")
 			self.online = False
 		
-	def close(self):
+	def close(self) -> None:
+		''' Attempts to close the connection from the relay to the physical
+		instrument. '''
 		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default close() function, instrument does recognize SCPI commands.")
-			return
-		
-		self.inst.close()
+		self.relay.close()
 	
 	def wait_ready(self, check_period:float=0.1, timeout_s:float=None):
 		''' Waits until all previous SCPI commands have completed. *CLS 
@@ -599,31 +609,39 @@ class Driver(ABC):
 		else:
 			return False
 		
-	def write(self, cmd:str):
-		''' Sends a SCPI command via PyVISA'''
+	def write(self, cmd:str) -> None:
+		''' Sends a SCPI command via the drivers Relay.
+		
+		Args:
+			cmd (str): Command to relay to instrument
+		
+		Returns:
+			None
+		'''
 		
 		# Abort if not an SCPI instrument
 		if not self.is_scpi:
 			self.error(f"Cannot use default write() function, instrument does recognize SCPI commands.")
 			return
 		
+		# Abort if offline
 		if not self.online:
-			self.warning(f"Cannot write when offline. ()")
+			self.warning(f"Cannot write when offline.")
 			return
 		
+		# Spoof if dummy
 		if self.dummy:
 			self.lowdebug(f"Writing to dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
 			return
 		
+		# Attempt write
 		try:
-			self.inst.write(cmd)
-			self.lowdebug(f"Wrote to instrument: >{cmd}<")
+			self.online = self.relay.write(cmd)
+			if self.online:
+				self.lowdebug(f"Wrote to instrument: >{cmd}<.")
 		except Exception as e:
 			self.error(f"Failed to write to instrument {self.address}. ({e})")
 			self.online = False
-	
-	def id_str(self):
-		pass
 	
 	def read(self):
 		''' Reads via PyVISA'''
