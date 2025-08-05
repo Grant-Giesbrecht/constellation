@@ -1,4 +1,5 @@
-"""
+""" NOte: This driver demonstrates how to use a non-default Relay, but it does not 
+actually work. I think the LeCroy is using unconventional commands.
 """
 
 from heimdallr.instrument_control.oscilloscopes.oscilloscope_ctg import *
