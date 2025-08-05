@@ -475,6 +475,205 @@ class Driver(ABC):
 		# Connect instrument
 		self.connect()
 	
+	def connect(self, check_id:bool=True)-> None:
+		''' Attempts to establish a connection to the instrument. Updates
+		the self.online parameter with connection success.
+		
+		Args:
+			check_id (bool): Check that instrument identifies itself as
+				the expected model. Default is true. 
+			
+		Returns:
+			None
+		'''
+		
+		# Return immediately if dummy mode
+		if self.dummy:
+			self.online = True
+			return
+		
+		# Tell the relay to attempt to reconnect
+		if not self.relay.connect():
+			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
+			self.online = False
+			return
+		
+		# Test if relay was successful in connecting
+		if check_id:
+			self.query_id()
+		
+		self.debug(f"Connected to address >{self.address}<.", detail=f"{self.id}")
+	
+	def preset(self):
+		
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default preset() function, instrument does recognize SCPI commands.", detail=f"{self.id}")
+			return
+		
+		self.debug(f"Preset.", detail=f"{self.id}")
+		
+		self.write("*RST")
+	
+	def query_id(self) -> None:
+		''' Checks the IDN of the instrument, and makes sure it matches up
+		with the expected identified for the given instrument model. Updates
+		self.online if connection/verification fails.
+		
+		Returns:
+			None
+		'''
+		
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default query_id() function, instrument does recognize SCPI commands.", detail=f"{self.id}")
+			return
+		
+		# Query IDN model
+		self.id.idn_model = self.query("*IDN?").strip()
+		
+		if self.id.idn_model is not None:
+			self.online = True
+			self.debug(f"Connection state: >ONLINE<")
+			
+			if self.expected_idn is None or self.expected_idn == "":
+				self.debug("Cannot verify hardware. No verification string provided.")
+				return
+			
+			# Check if model is right
+			if self.expected_idn.upper() in self.id.idn_model.upper():
+				self.verified_hardware = True
+				self.debug(f"Hardware verification >PASSED<", detail=f"Received string: {self.id.idn_model}")
+			else:
+				self.verified_hardware = False
+				self.debug(f"Hardware verification >FAILED<", detail=f"Received string: {self.id.idn_model}")
+		else:
+			self.debug(f"Connection state: >OFFLINE<")
+			self.online = False
+		
+	def close(self):
+		
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default close() function, instrument does recognize SCPI commands.")
+			return
+		
+		self.inst.close()
+	
+	def wait_ready(self, check_period:float=0.1, timeout_s:float=None):
+		''' Waits until all previous SCPI commands have completed. *CLS 
+		must have been sent prior to the commands in question.
+		
+		Set timeout to None for no timeout.
+		
+		Returns true if operation completed, returns False if timeout occured.'''
+		
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default wait_ready() function, instrument does recognize SCPI commands.")
+			return
+		
+		self.write(f"*OPC")
+		
+		# Check ESR
+		esr_buffer = int(self.query(f"*ESR?"))
+		
+		t0 = time.time()
+		
+		# Loop while ESR bit one is not set
+		while esr_buffer == 0:
+			
+			# Check register state
+			esr_buffer = int(self.query(f"*ESR?"))
+			
+			# Wait prescribed time
+			time.sleep(check_period)
+			
+			# Timeout handling
+			if (timeout_s is not None) and (time.time() - t0 >= timeout_s):
+				break
+		
+		# Return
+		if esr_buffer > 0:
+			return True
+		else:
+			return False
+		
+	def write(self, cmd:str):
+		''' Sends a SCPI command via PyVISA'''
+		
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default write() function, instrument does recognize SCPI commands.")
+			return
+		
+		if not self.online:
+			self.warning(f"Cannot write when offline. ()")
+			return
+		
+		if self.dummy:
+			self.lowdebug(f"Writing to dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
+			return
+		
+		try:
+			self.inst.write(cmd)
+			self.lowdebug(f"Wrote to instrument: >{cmd}<")
+		except Exception as e:
+			self.error(f"Failed to write to instrument {self.address}. ({e})")
+			self.online = False
+	
+	def id_str(self):
+		pass
+	
+	def read(self):
+		''' Reads via PyVISA'''
+		
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
+			return
+		
+		if not self.online:
+			self.warning(f"Cannot write when offline. ()")
+		
+		if self.dummy:
+			self.lowdebug(f"Reading from dummy")
+			return None
+		
+		try:
+			rv = self.inst.read()
+			self.lowdebug(f"Read from instrument: >:a{rv}<")
+			return rv
+		except Exception as e:
+			self.error(f"Failed to read from instrument {self.address}. ({e})")
+			self.online = False
+			return None
+	
+	def query(self, cmd:str):
+		''' Querys a command via PyVISA'''
+		
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default query() function, instrument does recognize SCPI commands.")
+			return
+		
+		if not self.online:
+			self.warning(f"Cannot write when offline. ()")
+		
+		if self.dummy:
+			self.lowdebug(f"Querying dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
+			return None
+		
+		try:
+			rv = self.inst.query(cmd)
+			self.lowdebug(f"Queried instrument, >{cmd}<, receiving >:a{rv}<.")
+		except Exception as e:
+			self.error(f"Failed to query instrument {self.address}. ({e})")
+			self.online = False
+			return None
+		
+		return rv
+	
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
 		need to return anything, reads commands or similar should. What is returned here
@@ -516,35 +715,6 @@ class Driver(ABC):
 		
 	def critical(self, message:str, detail:str=""):
 		self.log.critical(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
-	
-	def connect(self, check_id:bool=True)-> None:
-		''' Attempts to establish a connection to the instrument. Updates
-		the self.online parameter with connection success.
-		
-		Args:
-			check_id (bool): Check that instrument identifies itself as
-				the expected model. Default is true. 
-			
-		Returns:
-			None
-		'''
-		
-		# Return immediately if dummy mode
-		if self.dummy:
-			self.online = True
-			return
-		
-		# Tell the relay to attempt to reconnect
-		if not self.relay.connect():
-			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
-			self.online = False
-			return
-		
-		# Test if relay was successful in connecting
-		if check_id:
-			self.query_id()
-		
-		self.debug(f"Connected to address >{self.address}<.", detail=f"{self.id}")
 	
 	def modify_state(self, query_func:callable, param:str, value, channel:int=None):
 		"""
@@ -786,176 +956,6 @@ class Driver(ABC):
 		
 		# Apply to state
 		return self.load_state_dict(in_dict)
-	
-	def preset(self):
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default preset() function, instrument does recognize SCPI commands.", detail=f"{self.id}")
-			return
-		
-		self.debug(f"Preset.", detail=f"{self.id}")
-		
-		self.write("*RST")
-	
-	def query_id(self) -> None:
-		''' Checks the IDN of the instrument, and makes sure it matches up
-		with the expected identified for the given instrument model. Updates
-		self.online if connection/verification fails.
-		
-		Returns:
-			None
-		'''
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default query_id() function, instrument does recognize SCPI commands.", detail=f"{self.id}")
-			return
-		
-		# Query IDN model
-		self.id.idn_model = self.query("*IDN?").strip()
-		
-		if self.id.idn_model is not None:
-			self.online = True
-			self.debug(f"Connection state: >ONLINE<")
-			
-			if self.expected_idn is None or self.expected_idn == "":
-				self.debug("Cannot verify hardware. No verification string provided.")
-				return
-			
-			# Check if model is right
-			if self.expected_idn.upper() in self.id.idn_model.upper():
-				self.verified_hardware = True
-				self.debug(f"Hardware verification >PASSED<", detail=f"Received string: {self.id.idn_model}")
-			else:
-				self.verified_hardware = False
-				self.debug(f"Hardware verification >FAILED<", detail=f"Received string: {self.id.idn_model}")
-		else:
-			self.debug(f"Connection state: >OFFLINE<")
-			self.online = False
-		
-	def close(self):
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default close() function, instrument does recognize SCPI commands.")
-			return
-		
-		self.inst.close()
-	
-	def wait_ready(self, check_period:float=0.1, timeout_s:float=None):
-		''' Waits until all previous SCPI commands have completed. *CLS 
-		must have been sent prior to the commands in question.
-		
-		Set timeout to None for no timeout.
-		
-		Returns true if operation completed, returns False if timeout occured.'''
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default wait_ready() function, instrument does recognize SCPI commands.")
-			return
-		
-		self.write(f"*OPC")
-		
-		# Check ESR
-		esr_buffer = int(self.query(f"*ESR?"))
-		
-		t0 = time.time()
-		
-		# Loop while ESR bit one is not set
-		while esr_buffer == 0:
-			
-			# Check register state
-			esr_buffer = int(self.query(f"*ESR?"))
-			
-			# Wait prescribed time
-			time.sleep(check_period)
-			
-			# Timeout handling
-			if (timeout_s is not None) and (time.time() - t0 >= timeout_s):
-				break
-		
-		# Return
-		if esr_buffer > 0:
-			return True
-		else:
-			return False
-		
-	def write(self, cmd:str):
-		''' Sends a SCPI command via PyVISA'''
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default write() function, instrument does recognize SCPI commands.")
-			return
-		
-		if not self.online:
-			self.warning(f"Cannot write when offline. ()")
-			return
-		
-		if self.dummy:
-			self.lowdebug(f"Writing to dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
-			return
-		
-		try:
-			self.inst.write(cmd)
-			self.lowdebug(f"Wrote to instrument: >{cmd}<")
-		except Exception as e:
-			self.error(f"Failed to write to instrument {self.address}. ({e})")
-			self.online = False
-	
-	def id_str(self):
-		pass
-	
-	def read(self):
-		''' Reads via PyVISA'''
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
-			return
-		
-		if not self.online:
-			self.warning(f"Cannot write when offline. ()")
-		
-		if self.dummy:
-			self.lowdebug(f"Reading from dummy")
-			return None
-		
-		try:
-			rv = self.inst.read()
-			self.lowdebug(f"Read from instrument: >:a{rv}<")
-			return rv
-		except Exception as e:
-			self.error(f"Failed to read from instrument {self.address}. ({e})")
-			self.online = False
-			return None
-	
-	def query(self, cmd:str):
-		''' Querys a command via PyVISA'''
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default query() function, instrument does recognize SCPI commands.")
-			return
-		
-		if not self.online:
-			self.warning(f"Cannot write when offline. ()")
-		
-		if self.dummy:
-			self.lowdebug(f"Querying dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
-			return None
-		
-		try:
-			rv = self.inst.query(cmd)
-			self.lowdebug(f"Queried instrument, >{cmd}<, receiving >:a{rv}<.")
-		except Exception as e:
-			self.error(f"Failed to query instrument {self.address}. ({e})")
-			self.online = False
-			return None
-		
-		return rv
 	
 	@abstractmethod
 	def refresh_state(self):
