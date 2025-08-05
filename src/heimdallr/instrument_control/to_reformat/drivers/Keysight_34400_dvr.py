@@ -20,9 +20,9 @@ class Keysight34400(DigitalMultimeterCtg):
 		
 		# TODO: better four wire res measurmenet handling
 		if four_wire:
-			self.write(f"SENS:FRES:POW:LIM:STATE {bool_to_ONFOFF(enable)}")
+			self.write(f"SENS:FRES:POW:LIM:STATE {bool_to_ONOFF(enable)}")
 		else:
-			self.write(f"SENS:RES:POW:LIM:STATE {bool_to_ONFOFF(enable)}")
+			self.write(f"SENS:RES:POW:LIM:STATE {bool_to_ONOFF(enable)}")
 		self.modify_state(lambda: self.get_low_power_mode(four_wire), DigitalMultimeterCtg.LOWPWR_MODE, enable)
 	
 	def get_low_power_mode(self, four_wire:bool=False):

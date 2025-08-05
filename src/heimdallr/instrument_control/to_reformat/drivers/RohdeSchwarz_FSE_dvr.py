@@ -64,7 +64,7 @@ class RohdeSchwarzFSE(SpectrumAnalyzerCtg):
 	
 	def set_continuous_trigger(self, enable:bool):
 		self.modify_state(self.get_continuous_trigger, SpectrumAnalyzerCtg.CONTINUOUS_TRIG_EN, enable)
-		self.write(f"INIT:CONT {bool_to_ONFOFF(enable)}")
+		self.write(f"INIT:CONT {bool_to_ONOFF(enable)}")
 	def get_continuous_trigger(self):
 		return self.modify_state(None, SpectrumAnalyzerCtg.CONTINUOUS_TRIG_EN, str_to_bool(self.query(f"INIT:CONT?")))
 	

@@ -127,7 +127,7 @@ class TektronixCSA8000(Driver):
 	# 	return float(self.query(f"SENS:BAND:RES?"))
 	
 	# def set_continuous_trigger(self, enable:bool):
-	# 	self.write(f"INIT:CONT {bool_to_ONFOFF(enable)}")
+	# 	self.write(f"INIT:CONT {bool_to_ONOFF(enable)}")
 	# def get_continuous_trigger(self):
 	# 	return str_to_bool(self.query(f"INIT:CONT?"))
 	
@@ -234,7 +234,7 @@ class TektronixCSA8000(Driver):
 	
 		
 	# # def set_averaging_enable(self, enable:bool, channel:int=1):
-	# # 	self.write(f"SENS{channel}:AVER {bool_to_ONFOFF(enable)}")
+	# # 	self.write(f"SENS{channel}:AVER {bool_to_ONOFF(enable)}")
 	# # def get_averaging_enable(self, channel:int=1):
 	# # 	return str_to_bool(self.write(f"SENS{channel}:AVER?"))
 	

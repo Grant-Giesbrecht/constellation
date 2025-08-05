@@ -51,7 +51,7 @@ class KeysightPNAE8364B(VectorNetworkAnalyzerCtg):
 		return float(self.query(f"SENS{channel}:BAND:RES?"))
 	
 	def set_rf_enable(self, enable:bool):
-		self.write(f"OUTP:STAT {bool_to_ONFOFF(enable)}")
+		self.write(f"OUTP:STAT {bool_to_ONOFF(enable)}")
 	def get_rf_enable(self):
 		return str_to_bool(self.query(f"OUTP:STAT?"))
 	
@@ -100,7 +100,7 @@ class KeysightPNAE8364B(VectorNetworkAnalyzerCtg):
 		return self.query(f"CALC{channel}:DATA? SDATA")
 		
 	def set_continuous_trigger(self, enable:bool):
-		self.write(f"INIT:CONT {bool_to_ONFOFF(enable)}")
+		self.write(f"INIT:CONT {bool_to_ONOFF(enable)}")
 	def get_continuous_trigger(self):
 		return str_to_bool(self.query(f"INIT:CONT?"))
 	
@@ -108,7 +108,7 @@ class KeysightPNAE8364B(VectorNetworkAnalyzerCtg):
 		self.write(f"INIT:IMM")
 		
 	def set_averaging_enable(self, enable:bool, channel:int=1):
-		self.write(f"SENS{channel}:AVER {bool_to_ONFOFF(enable)}")
+		self.write(f"SENS{channel}:AVER {bool_to_ONOFF(enable)}")
 	def get_averaging_enable(self, channel:int=1):
 		return str_to_bool(self.write(f"SENS{channel}:AVER?"))
 	

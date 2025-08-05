@@ -52,7 +52,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		return self.modify_state(None, VectorNetworkAnalyzerCtg.RES_BW, float(self.query(f"SENS{channel}:BAND:RES?")), channel=channel)
 	
 	def set_rf_enable(self, enable:bool):
-		self.write(f"OUTP:STAT {bool_to_ONFOFF(enable)}")
+		self.write(f"OUTP:STAT {bool_to_ONOFF(enable)}")
 		self.modify_state(self.get_rf_enable, VectorNetworkAnalyzerCtg.ENABLE, enable)
 	def get_rf_enable(self):
 		return self.modify_state(None, VectorNetworkAnalyzerCtg.ENABLE, str_to_bool(self.query(f"OUTP:STAT?")))
@@ -222,7 +222,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		# return self.query(f"CALC{channel}:DATA? SDATA")
 		
 	# def set_continuous_trigger(self, enable:bool):
-	# 	self.write(f"INIT:CONT {bool_to_ONFOFF(enable)}")
+	# 	self.write(f"INIT:CONT {bool_to_ONOFF(enable)}")
 	# def get_continuous_trigger(self):
 	# 	return str_to_bool(self.query(f"INIT:CONT?"))
 	
@@ -230,7 +230,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 	# 	self.write(f"INIT:IMM")
 		
 	# def set_averaging_enable(self, enable:bool, channel:int=1):
-	# 	self.write(f"SENS{channel}:AVER {bool_to_ONFOFF(enable)}")
+	# 	self.write(f"SENS{channel}:AVER {bool_to_ONOFF(enable)}")
 	# def get_averaging_enable(self, channel:int=1):
 	# 	return str_to_bool(self.write(f"SENS{channel}:AVER?"))
 	

@@ -145,4 +145,4 @@ class RigolDS1000Z(BasicOscilloscopeCtg):
 			None
 		'''
 		
-		self.write(f":MEASure:STATistic:DISPlay {bool_to_ONFOFF(enable)}")
+		self.write(f":MEASure:STATistic:DISPlay {bool_to_ONOFF(enable)}")
