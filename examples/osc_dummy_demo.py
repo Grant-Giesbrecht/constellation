@@ -13,6 +13,7 @@ osc.set_div_volt(2, 0.15)
 
 osc.print_state()
 
+print(f"Dummy = {osc.dummy}")
 wav1 = osc.get_waveform(1)
 wav2 = osc.get_waveform(2)
 plt.plot(wav1['time_s'], wav1['volt_V'])

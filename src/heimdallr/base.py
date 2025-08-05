@@ -475,8 +475,9 @@ class Driver(ABC):
 		self.online = False
 		self.relay = relay
 		if self.relay is None:
-			self.relay = CommandRelay(log=log)
+			self.relay = CommandRelay()
 		
+		# Configure relay with address and log
 		self.relay.configure(self.address, self.log)
 		
 		# self.rm = pv.ResourceManager()
