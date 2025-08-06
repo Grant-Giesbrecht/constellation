@@ -13,14 +13,10 @@ class LeCroy44Xi(BasicOscilloscopeCtg):
 		
 		self.stat_table = {StdOscilloscopeCtg.STAT_AVG:'AVER', StdOscilloscopeCtg.STAT_MAX:'MAX', StdOscilloscopeCtg.STAT_MIN:'MIN', StdOscilloscopeCtg.STAT_CURR:'CURR', StdOscilloscopeCtg.STAT_STD:'DEV'}
 	
-	# def set_div_time(self, time_s:float):
-	# 	self.write(f":TIM:MAIN:SCAL {time_s}")
-	# 	super().set_div_time(time_s)
-	
 	@superreturn
 	def set_div_time(self, time_s:float):
 		self.write(f":TIM:MAIN:SCAL {time_s}")
-		
+	
 	@superreturn
 	def get_div_time(self):
 		self._super_hint = float(self.query(f":TIM:MAIN:SCAL?"))

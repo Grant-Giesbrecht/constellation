@@ -1,3 +1,9 @@
+""" The purpose of this example is to show how dummy mode works. Notice
+how the waveform is trimmed for the channel with the finer voltage
+resultion because the dummy waveform is mimicing clipping in the real
+hardware.
+"""
+
 from heimdallr.all import *
 import matplotlib.pyplot as plt
 

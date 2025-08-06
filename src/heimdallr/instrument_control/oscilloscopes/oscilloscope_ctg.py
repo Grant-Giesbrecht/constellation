@@ -1,6 +1,6 @@
 from heimdallr.base import *
 from heimdallr.networking.net_client import *
-	
+
 class BasicOscilloscopeCtg(Driver):
 	
 	DIV_TIME = "div-time[s]"
