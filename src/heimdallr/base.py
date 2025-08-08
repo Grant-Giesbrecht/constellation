@@ -143,6 +143,9 @@ class ChannelList:
 	''' Used in driver.state and driver.data structures to organize values
 	for parameters which apply to more than one channel.
 	
+	It also supports 'traces' for instruments that have both multiple traces and 
+	multiple channels such as a vector network analyzer.
+	
 	NOTE: Channel numbering is internally zero-indexed. Most modern lab instruments
 	with multiple channels use 1-based indexing. This discrepency, when handled by
 	Heimdallr, will make the 1-based indexing purely cosmetic and converted to 0-based
@@ -151,7 +154,7 @@ class ChannelList:
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
 	
-	def __init__(self, max_channels:int, log:plf.LogPile=None):
+	def __init__(self, max_channels:int, log:plf.LogPile=None, max_traces:int=0):
 		
 		self.max_channels = max_channels
 		self.channel_data = {}
