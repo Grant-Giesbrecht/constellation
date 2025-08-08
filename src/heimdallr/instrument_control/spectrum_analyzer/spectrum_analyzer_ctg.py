@@ -11,13 +11,16 @@ class SpectrumAnalyzerCtg(Driver):
 	FREQ_END = "freq-end[Hz]"
 	NUM_POINTS = "num-points[]"
 	RES_BW = "res-bw[Hz]"
-	TRACE_DATA = "traces[dBm]"
 	CONTINUOUS_TRIG_EN = "continuous-trig[bool]"
 	REF_LEVEL = "ref-level[dBm]"
 	Y_DIV = "y-div[dB]"
 	
-	def __init__(self, address:str, log:plf.LogPile, expected_idn:str=""):
-		super().__init__(address, log, expected_idn=expected_idn)
+	TRACE_DATA = "traces"
+	
+	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", dummy:bool=False, relay:CommandRelay=None, max_channels:int=1, **kwargs):
+		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
+		
+		self.max_channels = max_channels
 		
 		self.state[SpectrumAnalyzerCtg.FREQ_START] = None
 		self.state[SpectrumAnalyzerCtg.FREQ_END] = None
@@ -28,41 +31,65 @@ class SpectrumAnalyzerCtg(Driver):
 		self.state[SpectrumAnalyzerCtg.REF_LEVEL] = None
 		self.state[SpectrumAnalyzerCtg.Y_DIV] = None
 		
+		self.data[SpectrumAnalyzerCtg.TRACE_DATA] = ChannelList(self.max_channels, log=self.log)
+		
+		if self.dummy:
+			self.init_dummy_state()
+	
+	def init_dummy_state(self) -> None:
+		pass
+	
+	def remake_dummy_waves(self) -> None:
+		pass
+	
+	def dummy_responder(self, func_name, *args, **kwargs):
+		pass
+	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float):
-		pass
+		self.modify_state(self.get_freq_start, SpectrumAnalyzerCtg.FREQ_START, f_Hz)
+	
 	@abstractmethod
+	@enabledummy
 	def get_freq_start(self):
-		pass
+		return self.modify_state(None, SpectrumAnalyzerCtg.FREQ_START, self._super_hint)
 	
 	@abstractmethod
 	def set_freq_end(self, f_Hz:float):
-		pass
+		self.modify_state(self.get_freq_end, SpectrumAnalyzerCtg.FREQ_END, f_Hz)
+	
 	@abstractmethod
+	@enabledummy
 	def get_freq_end(self):
-		pass
+		return self.modify_state(None, SpectrumAnalyzerCtg.FREQ_END, self._super_hint)
 	
 	@abstractmethod
 	def set_num_points(self, points:int, channel:int=1):
-		pass
+		self.modify_state(self.get_num_points, SpectrumAnalyzerCtg.NUM_POINTS, points, channel=channel)
+	
 	@abstractmethod
+	@enabledummy
 	def get_num_points(self, channel:int=1):
-		pass
+		return self.modify_state(None, SpectrumAnalyzerCtg.NUM_POINTS, self._super_hint)
 	
 	@abstractmethod
 	def set_res_bandwidth(self, rbw_Hz:float):
-		pass
+		self.modify_state(self.get_res_bandwidth, SpectrumAnalyzerCtg.RES_BW, rbw_Hz)
+	
 	@abstractmethod
+	@enabledummy
 	def get_res_bandwidth(self):
-		pass
+		return self.modify_state(None, SpectrumAnalyzerCtg.RES_BW, self._super_hint)
 	
 	@abstractmethod
 	def clear_traces(self):
+		#TODO: Reset trace state tracking model
 		pass
 	
 	@abstractmethod
 	def add_trace(self, channel:int, measurement:str):
 		''' Returns trace number '''
+		#TODO: Update trace state tracking model
 		pass
 	
 	@abstractmethod
@@ -72,6 +99,7 @@ class SpectrumAnalyzerCtg(Driver):
 	@abstractmethod
 	def set_continuous_trigger(self, enable:bool):
 		pass
+	
 	@abstractmethod
 	def get_continuous_trigger(self):
 		pass
@@ -90,6 +118,7 @@ class SpectrumAnalyzerCtg(Driver):
 	@abstractmethod
 	def set_y_div(self, step_dB:float):
 		pass
+	
 	@abstractmethod
 	def get_y_div(self):
 		pass
@@ -110,20 +139,3 @@ class SpectrumAnalyzerCtg(Driver):
 		self.set_continuous_trigger(SpectrumAnalyzerCtg.CONTINUOUS_TRIG_EN)
 		self.set_ref_level(SpectrumAnalyzerCtg.REF_LEVEL)
 		self.set_y_div(SpectrumAnalyzerCtg.Y_DIV)
-	
-#TODO: Make one of these for all instruments
-#TODO: Flesh out
-class SpectrumAnalyzerRemote(RemoteInstrument):
-	
-	def __init__(self):
-		super().__init__()
-	
-	# Without the decorator, it looks like this
-	def set_freq_start(self, f_Hz:float, channel:int=1):
-		self.remote_call('set_freq_start', f_Hz, channel)
-	
-	# With the decorator, it looks like this
-	@remotefunction
-	def set_freq_end(self, f_Hz:float, channel:int=1):
-		pass
-	
