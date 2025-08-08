@@ -4,7 +4,7 @@ Manual (Requires login and R&S approval): https://scdn.rohde-schwarz.com/ur/pws/
 '''
 
 from heimdallr.base import *
-from heimdallr.instrument_control.categories.vector_network_analyzer_ctg import *
+from heimdallr.instrument_control.vector_network_analyzer.vector_network_analyzer_ctg import *
 import array
 
 class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
@@ -25,42 +25,55 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		understood by the ZVA'''
 		return f"Trc{trace}"
 	
+	@superreturn
 	def set_freq_start(self, f_Hz:float, channel:int=1):
 		self.write(f"SENS{channel}:FREQ:STAR {f_Hz}")
-		self.modify_state(self.get_freq_start, VectorNetworkAnalyzerCtg.FREQ_START, f_Hz, channel=channel)
-	def get_freq_start(self, channel:int=1):
-		return self.modify_state(None, VectorNetworkAnalyzerCtg.FREQ_START, float(self.query(f"SENS{channel}:FREQ:STAR?")), channel=channel)
 	
+	@superreturn
+	def get_freq_start(self, channel:int=1):
+		self._super_hint = float(self.query(f"SENS{channel}:FREQ:STAR?"))
+			
+	
+	@superreturn
 	def set_freq_end(self, f_Hz:float, channel:int=1):
 		self.write(f"SENS{channel}:FREQ:STOP {f_Hz}")
-		self.modify_state(self.get_freq_end, VectorNetworkAnalyzerCtg.FREQ_END, f_Hz, channel=channel)
-	def get_freq_end(self, channel:int=1):
-		return self.modify_state(None, VectorNetworkAnalyzerCtg.FREQ_END, float(self.query(f"SENS{channel}:FREQ:STOP?")), channel=channel)
 	
+	@superreturn
+	def get_freq_end(self, channel:int=1):
+		self._super_hint = float(self.query(f"SENS{channel}:FREQ:STOP?"))
+	
+	@superreturn
 	def set_power(self, p_dBm:float, channel:int=1, port:int=1):
 		self.write(f"SOUR{channel}:POW{port}:LEV:IMM:AMPL {p_dBm}")
-		self.modify_state(self.get_power, VectorNetworkAnalyzerCtg.POWER, p_dBm, channel=channel) #TODO: HOw to handle ports?
+	
+	@superreturn
 	def get_power(self, channel:int=1, port:int=1):
-		return self.modify_state(None, VectorNetworkAnalyzerCtg.POWER, float(self.query(f"SOUR{channel}:POW{port}:LEV:IMM:AMPL?")), channel=channel)
+		self._super_hint = float(self.query(f"SOUR{channel}:POW{port}:LEV:IMM:AMPL?"))
 		# TODO: How to handle ports?
 	
+	@superreturn
 	def set_num_points(self, points:int, channel:int=1):
 		self.write(f"SENS{channel}:SWEEP:POIN {points}")
-		self.modify_state(self.get_num_points, VectorNetworkAnalyzerCtg.NUM_POINTS, points, channel=channel)
-	def get_num_points(self, channel:int=1):
-		return self.modify_state(None, VectorNetworkAnalyzerCtg.NUM_POINTS, int(self.query(f"SENS{channel}:SWEEP:POIN?")), channel=channel)
 	
+	@superreturn
+	def get_num_points(self, channel:int=1):
+		self._super_hint = int(self.query(f"SENS{channel}:SWEEP:POIN?") )
+	
+	@superreturn
 	def set_res_bandwidth(self, rbw_Hz:float, channel:int=1):
 		self.write(f"SENS{channel}:BAND:RES {rbw_Hz}")
-		self.modify_state(self.get_res_bandwidth, VectorNetworkAnalyzerCtg.RES_BW, rbw_Hz, channel=channel)
-	def get_res_bandwidth(self, channel:int=1):
-		return self.modify_state(None, VectorNetworkAnalyzerCtg.RES_BW, float(self.query(f"SENS{channel}:BAND:RES?")), channel=channel)
 	
+	@superreturn
+	def get_res_bandwidth(self, channel:int=1):
+		self._super_hint = float(self.query(f"SENS{channel}:BAND:RES?"))
+	
+	@superreturn
 	def set_rf_enable(self, enable:bool):
 		self.write(f"OUTP:STAT {bool_to_ONOFF(enable)}")
-		self.modify_state(self.get_rf_enable, VectorNetworkAnalyzerCtg.ENABLE, enable)
+	
+	@superreturn
 	def get_rf_enable(self):
-		return self.modify_state(None, VectorNetworkAnalyzerCtg.ENABLE, str_to_bool(self.query(f"OUTP:STAT?")))
+		self._super_hint = str_to_bool(self.query(f"OUTP:STAT?"))
 	
 	def clear_traces(self):
 		self.write(f"CALC:PAR:DEL:ALL")

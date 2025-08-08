@@ -132,7 +132,11 @@ def superreturn(func):
 		
 		# Call the source function (but only if not in dummy mode)
 		if not self.dummy:
-			func(self, *args, **kwargs)
+			try:
+				func(self, *args, **kwargs)
+			except Exception as e:
+				self.log.error(f"Failed to call driver function: >:a{func}< ({e}).")
+				return None
 		
 		# Call super after, pass original arugments
 		super_method = getattr(super(type(self), self), func.__name__)

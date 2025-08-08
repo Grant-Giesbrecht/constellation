@@ -58,7 +58,7 @@ class VectorNetworkAnalyzerCtg(Driver):
 		
 		self.state[VectorNetworkAnalyzerCtg.FREQ_START] = []
 		self.state[VectorNetworkAnalyzerCtg.FREQ_END] = []
-		self.state[VectorNetworkAnalyzerCtg.POWER] = []
+		self.state[VectorNetworkAnalyzerCtg.POWER] = ChannelList(self.max_channels, log=self.log)
 		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = []
 		self.state[VectorNetworkAnalyzerCtg.RES_BW] = []
 		self.state[VectorNetworkAnalyzerCtg.ENABLE] = []
