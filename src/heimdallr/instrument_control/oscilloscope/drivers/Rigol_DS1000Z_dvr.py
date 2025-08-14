@@ -3,7 +3,7 @@
 https://beyondmeasure.rigoltech.com/acton/attachment/1579/f-0386/1/-/-/-/-/DS1000Z_Programming%20Guide_EN.pdf
 """
 
-from heimdallr.instrument_control.oscilloscopes.oscilloscope_ctg import *
+from heimdallr.instrument_control.oscilloscope.oscilloscope_ctg import *
 
 class RigolDS1000Z(BasicOscilloscopeCtg):
 
