@@ -13,6 +13,7 @@ import sys
 import argparse
 import mplcursors
 
+from pylogfile.base import mdprint
 from heimdallr.helpers import lin_to_dB
 from jarnsaxa import hdf_to_dict
 
@@ -25,7 +26,8 @@ parser.add_argument('--xmax', help='Zero-crossing analysis plot, maximum X value
 args = parser.parse_args()
 
 # Load s-parameter data
-data = hdf_to_dict(args.filename)
+data_full = hdf_to_dict(args.filename)
+data = data_full['data']
 
 # Create figure
 fig1 = plt.figure(1, figsize=(8, 8))
@@ -65,11 +67,23 @@ elif (args.xmax is not None):
 	ax1a.set_xlim([xm[0], args.xmax])
 
 
+try:
+	dts = data_full['info']['timestamp']
+except:
+	dts = None
+icn = data_full['info']['cal_notes']
+ign = data_full['info']['gen_notes']
+mdprint(f">:aFile info<:")
+mdprint(f"\t >Calibration Notes<: @:LOCK{icn}@:UNLOCK")
+mdprint(f"\t >General Notes<: @:LOCK{ign}@:UNLOCK")
+if dts is not None:
+	mdprint(f"\t >Timestamp<: @:LOCK{dts}@:UNLOCK")
 
 
 
 mplcursors.cursor(multiple=True)
 
+ax1a.legend()
 fig1.tight_layout()
 
 plt.show()

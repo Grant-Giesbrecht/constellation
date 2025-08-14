@@ -25,7 +25,7 @@ td_s21 = zva.get_trace_data(1, "Trc3")
 zva.write("CALC:PAR:CAT?")
 trace_list = zva.inst.read().strip().split(',')
 
-dict_to_hdf({"data":{"S11": td_s11, "S22":td_s22, "S12":td_s12, "S21":td_s21}, "info":{"cal_notes":cal_notes, "gen_notes":other_notes}}, FILENAME)
+dict_to_hdf({"data":{"S11": td_s11, "S22":td_s22, "S12":td_s12, "S21":td_s21}, "info":{"cal_notes":cal_notes, "gen_notes":other_notes, "timestamp":datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')}}, FILENAME)
 
 
 all_data = hdf_to_dict(FILENAME)
