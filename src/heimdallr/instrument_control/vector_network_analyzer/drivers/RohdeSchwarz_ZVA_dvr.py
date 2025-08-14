@@ -19,11 +19,88 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S12] = "S12"
 		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S21] = "S21"
 		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S22] = "S22"
+		
+		self.format_table = {}
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_LOG_MAG] = "MLOG"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_PHASE] = "PHAS"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_SMITH] = "SMIT"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_POLAR] = "POL"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_SWR] = "SWR"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_LIN_MAG] = "MLIN"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_REAL] = "REAL"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_IMAG] = "IMAG"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_SMITH_INV] = "ISM"
+		self.format_table[VectorNetworkAnalyzerCtg.FORM_PHASE_UW] = "UPH"
 	
-	def _get_trace_name(self, trace:int):
+	def _to_format_code(self, format:str) -> str:
+		'''Takes a VNA category format constant and converts it
+		to a format string understood by the VNA.
+		
+		Args:
+			format (str): Accepts a format constant such as VectorNetworkAnalyzerCtg.FORM_LOG_MAG
+				and returns the equivalent format code understood by the hardware.
+		
+		Returns:
+			str: format code understood by the hardware. Returns None if an error occurs.
+		'''
+		
+		# Ensure key exists
+		if format not in self.format_table.keys():
+			self.error(f"Invalid format >{format}< provided.")
+			return None
+		
+		# Return value
+		return self.format_table[format]
+	
+	def _from_format_code(self, code:str) -> str:
+		'''Takes a VNA category format constant and converts it
+		to a format string understood by the VNA.
+		
+		Args:
+			code (str): Format code as understood/provided by the hardware. 
+		
+		Returns:
+			str: Format constant as understood by the class, such as VectorNetworkAnalyzerCtg.FORM_LOG_MAG.
+		'''
+		
+		# Find all keys that map to the given value
+		matching_keys = [key for key, value in self.format_table.items() if value == code]
+		
+		# Check for errors
+		if not matching_keys:
+			self.debug(f"Format code >{code}< not found in format_table, setting to >:qFORM_OTHER<.")
+			return VectorNetworkAnalyzerCtg.FORM_OTHER
+		elif len(matching_keys) > 1:
+			self.warning(f"Multiple matches found for format code >{code}<. Matching keys: >{matching_keys}<. Selecting first match.")
+		
+		# Return matching key
+		return matching_keys[0]
+		
+	def _to_trace_code(self, trace:int) -> str:
 		''' Converts a trace number to the string format 
 		understood by the ZVA'''
 		return f"Trc{trace}"
+	
+	def _from_trace_code(self, trace_name:str) -> int:
+		''' Converts a trace string of the format
+		understood by the ZVA to a trace number.'''
+		
+		try:
+			# Cut off the 'Trc' from 'Trc123'
+			return int(trace_name[3:])
+		except Exception as e:
+			self.error(f"Failed to convert >{trace_name}< to trace number; ({e})")
+			return None
+	
+	@superreturn
+	def _set_active_trace(self, trace:int, channel:int=1):
+		''' Sets the active trace on the display.'''
+		self.write(f"CALC{channel}:PAR:SEL {self._to_trace_code(trace)}")
+	
+	@ superreturn
+	def _get_active_trace(self, trace:int, channel:int=1):
+		''' Sets the active trace on the display.'''
+		self._super_hint = self._from_trace_code(self.query(f"CALC{channel}:PAR:SEL?"))
 	
 	@superreturn
 	def set_freq_start(self, f_Hz:float, channel:int=1):
@@ -153,7 +230,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		# 	return
 		
 		# trace_name = self.trace_lookup[trace]
-		trace_name = self._get_trace_name(trace)
+		trace_name = self._to_trace_code(trace)
 		
 		# Select the specified measurement/trace
 		self.write(f"CALC{channel}:PAR:SEL {trace_name}")

@@ -1,3 +1,7 @@
+"""
+Manual: https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/dl_common_library/dl_manuals/dl_user_manual/ZVA_ZVB_ZVT_OperatingManual_en_33.pdf
+"""
+
 from heimdallr.base import *
 from heimdallr.helpers import lin_to_dB
 
@@ -25,6 +29,7 @@ class TraceMetadata:
 		self.num = 1
 		self.id_str = "Tr1"
 		self.measurement = VectorNetworkAnalyzerCtg.MEAS_S11
+		self.format = VectorNetworkAnalyzerCtg.FORM_LOG_MAG
 		
 		self.data = {}
 	
@@ -35,6 +40,18 @@ class VectorNetworkAnalyzerCtg(Driver):
 	MEAS_S21 = "meas-s21"
 	MEAS_S12 = "meas-s12"
 	MEAS_S22 = "meas-s22"
+	
+	FORM_LOG_MAG = "form-log-mag"
+	FORM_PHASE = "form-phase"
+	FORM_SMITH = "form-smith"
+	FORM_POLAR = "form-polar"
+	FORM_SWR = "form-SWR"
+	FORM_LIN_MAG = "form-lin-mag"
+	FORM_REAL = "form-real"
+	FORM_IMAG = "form-imag"
+	FORM_SMITH_INV = "form-smith-inv" # Normalized admittance smith chart
+	FORM_PHASE_UW = "form-phase-uw" # Unwrapped phase from start of sweep
+	FORM_OTHER = "form-other"
 	
 	# Sweep types
 	SWEEP_CONTINUOUS = "sweep-continuous"
@@ -48,7 +65,7 @@ class VectorNetworkAnalyzerCtg(Driver):
 	NUM_POINTS = "num-points[]"
 	RES_BW = "res-bw[Hz]"
 	ENABLE = "rf-enable[bool]"
-	ACT_TRACES = "active_traces"
+	TRACES = "traces"
 	
 	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
@@ -56,13 +73,14 @@ class VectorNetworkAnalyzerCtg(Driver):
 		self.max_channels = max_channels
 		self.max_traces = max_traces # This is per-channel
 		
-		self.state[VectorNetworkAnalyzerCtg.FREQ_START] = []
-		self.state[VectorNetworkAnalyzerCtg.FREQ_END] = []
+		self.state[VectorNetworkAnalyzerCtg.FREQ_START] = ChannelList(self.max_channels, log=self.log)
+		self.state[VectorNetworkAnalyzerCtg.FREQ_END] = ChannelList(self.max_channels, log=self.log)
 		self.state[VectorNetworkAnalyzerCtg.POWER] = ChannelList(self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = []
-		self.state[VectorNetworkAnalyzerCtg.RES_BW] = []
+		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = ChannelList(self.max_channels, log=self.log)
+		self.state[VectorNetworkAnalyzerCtg.RES_BW] = ChannelList(self.max_channels, log=self.log)
 		self.state[VectorNetworkAnalyzerCtg.ENABLE] = []
-		self.state[VectorNetworkAnalyzerCtg.ACT_TRACES] = []
+		self.state[VectorNetworkAnalyzerCtg.TRACES] = []
+		self.state[VectorNetworkAnalyzerCtg.SEL_TRACE] = 
 	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float, channel:int=1):

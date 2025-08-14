@@ -20,7 +20,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S21] = "S21"
 		self.measurement_codes[VectorNetworkAnalyzerCtg.MEAS_S22] = "S22"
 	
-	def _get_trace_name(self, trace:int):
+	def _to_trace_code(self, trace:int):
 		''' Converts a trace number to the string format 
 		understood by the ZVA'''
 		return f"Trc{trace}"
@@ -140,7 +140,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		# 	return
 		
 		# trace_name = self.trace_lookup[trace]
-		trace_name = self._get_trace_name(trace)
+		trace_name = self._to_trace_code(trace)
 		
 		# Select the specified measurement/trace
 		self.write(f"CALC{channel}:PAR:SEL {trace_name}")
