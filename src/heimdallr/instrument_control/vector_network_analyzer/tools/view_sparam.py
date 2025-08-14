@@ -27,7 +27,14 @@ args = parser.parse_args()
 
 # Load s-parameter data
 data_full = hdf_to_dict(args.filename)
-data = data_full['data']
+
+# Read S-parameter data and check for older file format with no metadata
+skip_print_info = False
+if 'data' in data_full.keys():
+	data = data_full['data']
+else:
+	skip_print_info = True
+	data = data_full
 
 # Create figure
 fig1 = plt.figure(1, figsize=(8, 8))
@@ -67,17 +74,21 @@ elif (args.xmax is not None):
 	ax1a.set_xlim([xm[0], args.xmax])
 
 
-try:
-	dts = data_full['info']['timestamp']
-except:
-	dts = None
-icn = data_full['info']['cal_notes']
-ign = data_full['info']['gen_notes']
-mdprint(f">:aFile info<:")
-mdprint(f"\t >Calibration Notes<: @:LOCK{icn}@:UNLOCK")
-mdprint(f"\t >General Notes<: @:LOCK{ign}@:UNLOCK")
-if dts is not None:
-	mdprint(f"\t >Timestamp<: @:LOCK{dts}@:UNLOCK")
+# Print file info if available
+if not skip_print_info:
+	try:
+		dts = data_full['info']['timestamp']
+	except:
+		dts = None
+	
+	icn = data_full['info']['cal_notes']
+	ign = data_full['info']['gen_notes']
+	
+	mdprint(f">:aFile info<:")
+	mdprint(f"\t >Calibration Notes<: @:LOCK{icn}@:UNLOCK")
+	mdprint(f"\t >General Notes<: @:LOCK{ign}@:UNLOCK")
+	if dts is not None:
+		mdprint(f"\t >Timestamp<: @:LOCK{dts}@:UNLOCK")
 
 
 
