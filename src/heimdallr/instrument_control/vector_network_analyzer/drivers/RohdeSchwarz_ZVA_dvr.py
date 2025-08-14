@@ -92,6 +92,22 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 			self.error(f"Failed to convert >{trace_name}< to trace number; ({e})")
 			return None
 	
+	def _refresh_created_channels(self):
+		''' Queries which channels are currently created. Created channels can be
+		non-consecutive, so Ch1 and Ch3 could be active without Ch2.
+		'''
+		
+		cc = []
+		
+		# Scan over all channels
+		for i in range(self.max_channels):
+			
+			#TODO: Store this info somewhere
+			if str_to_bool(self.query(f"CONF:CHAN{i+1}:STAT?")):
+				cc.append(i+1)
+		
+		return cc
+	
 	@superreturn
 	def _set_active_trace(self, trace:int, channel:int=1):
 		''' Sets the active trace on the display.'''
@@ -109,7 +125,6 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 	@superreturn
 	def get_freq_start(self, channel:int=1):
 		self._super_hint = float(self.query(f"SENS{channel}:FREQ:STAR?"))
-			
 	
 	@superreturn
 	def set_freq_end(self, f_Hz:float, channel:int=1):
@@ -155,36 +170,44 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 	def clear_traces(self):
 		self.write(f"CALC:PAR:DEL:ALL")
 	
-	def get_traces(self):
-		trace_state_str = self.query("CALC:PAR:CAT?")
+	def _refresh_created_traces(self):
 		
-		# Reformat string into list of trace names, then measurements
-		trace_state_list = (trace_state_str.strip()[1:-1]).split(',')
+		c_list = self._refresh_created_channels()
+		for ch in c_list:
 		
-		# Verify even number
-		if len(trace_state_list) % 2 != 0:
-			self.error(f"Received invalid trace state string. Had odd length.")
-			return False
-		
-		# Break into names and measurements
-		trace_names = trace_state_list[0::2]
-		trace_meas = trace_state_list[1::2]
-		
-		# Check that all names start with Trc
-		for tn in trace_names:
+			trace_state_str = self.query(f"CALC{ch}:PAR:CAT?")
 			
-			try:
-				check_str = tn[:3]
-			except:
-				self.error(f"Received invalid trace state string. Too-short trace name.")
+			trace_state_str = trace_state_str[1:-2]
+			t_state_list = trace_state_str.strip().split(',')
+			d = {t_state_list[i]: t_state_list[i+1] for i in range(0, len(t_state_list)-1, 2)}
+			
+			# Reformat string into list of trace names, then measurements
+			trace_state_list = (trace_state_str.strip()[1:-1]).split(',')
+			
+			# Verify even number
+			if len(trace_state_list) % 2 != 0:
+				self.error(f"Received invalid trace state string. Had odd length.")
 				return False
 			
-			if check_str != "Trc":
-				self.error(f"Received invalid trace state string. Too-short trace name.")
-				return False
-		
-		# Get each measurement type
-		# <TODO>
+			# Break into names and measurements
+			trace_names = trace_state_list[0::2]
+			trace_meas = trace_state_list[1::2]
+			
+			# Check that all names start with Trc
+			for tn in trace_names:
+				
+				try:
+					check_str = tn[:3]
+				except:
+					self.error(f"Received invalid trace state string. Too-short trace name.")
+					return False
+				
+				if check_str != "Trc":
+					self.error(f"Received invalid trace state string. Too-short trace name.")
+					return False
+			
+			# Get each measurement type
+			# <TODO>
 	
 	def add_trace(self, channel:int, trace:int, measurement:str):
 		

@@ -26,7 +26,8 @@ class TraceMetadata:
 	"""
 	
 	def __init__(self):
-		self.num = 1
+		self.num = 1 # Trace number
+		self.channel = 1 # Channel that trace is defined on
 		self.id_str = "Tr1"
 		self.measurement = VectorNetworkAnalyzerCtg.MEAS_S11
 		self.format = VectorNetworkAnalyzerCtg.FORM_LOG_MAG
@@ -64,7 +65,7 @@ class VectorNetworkAnalyzerCtg(Driver):
 	POWER = "power[dBm]"
 	NUM_POINTS = "num-points[]"
 	RES_BW = "res-bw[Hz]"
-	ENABLE = "rf-enable[bool]"
+	RF_ENABLE = "rf-enable[bool]"
 	TRACES = "traces"
 	
 	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", **kwargs):
@@ -78,9 +79,9 @@ class VectorNetworkAnalyzerCtg(Driver):
 		self.state[VectorNetworkAnalyzerCtg.POWER] = ChannelList(self.max_channels, log=self.log)
 		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = ChannelList(self.max_channels, log=self.log)
 		self.state[VectorNetworkAnalyzerCtg.RES_BW] = ChannelList(self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.ENABLE] = []
+		self.state[VectorNetworkAnalyzerCtg.RF_ENABLE] = []
 		self.state[VectorNetworkAnalyzerCtg.TRACES] = []
-		self.state[VectorNetworkAnalyzerCtg.SEL_TRACE] = 
+
 	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float, channel:int=1):
