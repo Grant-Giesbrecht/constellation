@@ -100,7 +100,7 @@ class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):
 		cc = []
 		
 		# Scan over all channels
-		for i in range(self.max_channels):
+		for i in range(self.first_channel, self.first_channel+self.max_channels):
 			
 			#TODO: Store this info somewhere
 			if str_to_bool(self.query(f"CONF:CHAN{i+1}:STAT?")):

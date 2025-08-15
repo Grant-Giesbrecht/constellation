@@ -257,7 +257,7 @@ class ChannelList:
 		'''
 		
 		data = {'first_channel':self.first_channel, 'max_channels':self.max_channels}
-		for ch in range(self.max_channels):
+		for ch in range(self.first_channel, self.first_channel+self.max_channels):
 			
 			ch_str = f"ch-{ch}"
 			
@@ -294,6 +294,9 @@ class ChannelList:
 		# Scan over all items
 		for k_str, v in data.items():
 			
+			if k_str == 'first_channel' or k_str == 'max_channels':
+				continue
+			
 			# Attempt to get int key and set value
 			try:
 				# Get just the channel number
@@ -303,7 +306,7 @@ class ChannelList:
 				self.set_ch_val(ch, v)
 				
 			except Exception as e:
-				self.log.error(f"Failed to parse key, value pair. ({e})")
+				self.log.error(f"Failed to parse key(>:q@:LOCK{k_str}@:UNLOCK<), value(>:q@:LOCK{v}@:UNLOCK<) pair. ({e})")
 				return False
 		
 		return True

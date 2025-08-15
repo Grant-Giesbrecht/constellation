@@ -35,7 +35,7 @@ class BasicOscilloscopeCtg(Driver):
 	def init_dummy_state(self) -> None:
 		self.set_div_time(10e-3)
 		self.set_offset_time(0)
-		for ch in range(self.max_channels):
+		for ch in range(self.first_channel, self.first_channel+self.max_channels):
 			self.set_div_volt(ch, 1)
 			self.set_offset_volt(ch, 0)
 			self.set_chan_enable(ch, True)
@@ -53,7 +53,7 @@ class BasicOscilloscopeCtg(Driver):
 		'''
 		
 		# Loop over all channels
-		for channel in range(self.max_channels):
+		for channel in range(self.first_channel, self.first_channel+self.max_channels):
 		
 			ampl = 1 # V
 			freq = 40*(channel+1) # Hz
@@ -197,13 +197,13 @@ class BasicOscilloscopeCtg(Driver):
 			self.get_offset_volt(ch)
 			self.get_chan_enable(ch)
 	
-	def apply_state(self, new_state:dict):
-		self.set_div_time(new_state[BasicOscilloscopeCtg.DIV_TIME])
-		self.set_offset_time(new_state[BasicOscilloscopeCtg.OFFSET_TIME])
-		for ch in range(self.max_channels):
-			self.set_div_volt(ch, new_state[BasicOscilloscopeCtg.DIV_VOLT][ch-1])
-			self.set_offset_volt(ch, new_state[BasicOscilloscopeCtg.OFFSET_VOLT][ch-1])
-			self.set_chan_enable(ch, new_state[BasicOscilloscopeCtg.CHAN_EN][ch-1])
+	def apply_state(self):
+		self.set_div_time(self.state[BasicOscilloscopeCtg.DIV_TIME])
+		self.set_offset_time(self.state[BasicOscilloscopeCtg.OFFSET_TIME])
+		for ch in range(self.first_channel, self.first_channel+self.max_channels):
+			self.set_div_volt(ch, self.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(ch))
+			self.set_offset_volt(ch, self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_ch_val(ch))
+			self.set_chan_enable(ch, self.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val(ch))
 	
 	def refresh_data(self):
 		
