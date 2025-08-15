@@ -7,8 +7,8 @@ from heimdallr.instrument_control.oscilloscope.oscilloscope_ctg import *
 
 class RigolDS1000Z(BasicOscilloscopeCtg):
 
-	def __init__(self, address:str, log:plf.LogPile, dummy:bool=False, **kwargs):
-		super().__init__(address, log, expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=4, num_div_horiz=12, dummy=dummy, num_div_vert=8, **kwargs)
+	def __init__(self, address:str, log:plf.LogPile, **kwargs):
+		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=4, num_div_horiz=12, num_div_vert=8, **kwargs)
 		
 		self.meas_table = {StdOscilloscopeCtg.MEAS_VMAX:'VMAX', StdOscilloscopeCtg.MEAS_VMIN:'VMIN', StdOscilloscopeCtg.MEAS_VAVG:'VAVG', StdOscilloscopeCtg.MEAS_VPP:'VPP', StdOscilloscopeCtg.MEAS_FREQ:'FREQ'}
 		

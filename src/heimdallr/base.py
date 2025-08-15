@@ -158,8 +158,9 @@ class ChannelList:
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
 	
-	def __init__(self, max_channels:int, log:plf.LogPile=None, max_traces:int=0):
+	def __init__(self, first_channel:int, max_channels:int, log:plf.LogPile=None, max_traces:int=0, ):
 		
+		self.first_channel = first_channel
 		self.max_channels = max_channels
 		self.channel_data = {}
 		
@@ -172,8 +173,8 @@ class ChannelList:
 		
 		out = ""
 		
-		for ch in range(self.max_channels):
-			if ch != 0:
+		for ch in range(self.first_channel, self.first_channel+self.max_channels):
+			if ch != self.first_channel:
 				out = out + "\n"
 			out = out + f"{indent}>:qchannel {ch}<: >:a@:LOCK{truncate_str(self.get_ch_val(ch), 40)}@:UNLOCK<"
 		
@@ -191,11 +192,12 @@ class ChannelList:
 			int: Validated channel number.
 		
 		'''
-		if channel >= self.max_channels:
-			self.log.error(f"Max channel count exceeded. Defaulting to last possible channel") #TODO: Needs prefix
-			return self.max_channels-1
-		elif channel < 0:
-			return 0
+		if channel >= self.first_channel+self.max_channels:
+			self.log.error(f"Max channel exceeded. Defaulting to last possible channel") #TODO: Needs prefix
+			return self.first_channel+self.max_channels-1
+		elif channel < self.first_channel:
+			self.log.error(f"Min channel exceeded. Defaulting to first possible channel") #TODO: Needs prefix
+			return self.first_channel
 		else:
 			return channel
 	
@@ -247,15 +249,16 @@ class ChannelList:
 		Returns:
 			dict: Dictionary containing the value for each channel,
 			with channel numbers (zero-indexed) as keys. For compatability
-			with HDF, the keys as saved as "channel-<number>" rather than
-			just the channel number. All channels will be populated, up
-			through max_channels, with None	being saved for values not populated.
+			with HDF, the keys as saved as "ch-<number>" rather than
+			just the channel number. Non-populated channels will not be saved
+			to save space. Also includes two other keys, 'first_channel' and 
+			'max_channels' containing those state variables.
 		'''
 		
-		data = {}
+		data = {'first_channel':self.first_channel, 'max_channels':self.max_channels}
 		for ch in range(self.max_channels):
 			
-			ch_str = f"channel-{ch}"
+			ch_str = f"ch-{ch}"
 			
 			if not self.ch_is_populated(ch):
 				data[ch_str] = None
@@ -270,18 +273,22 @@ class ChannelList:
 		''' Populates the ChannelList from a dictionary.
 		
 		Args:
-			data (dict): Dictionary to populate from. Expects channels to be integers
-				starting from zero and running to max_channels-1. Values will be
-				saved to associated channel in object. All channels should be present
-				in dictionary and can have value of None if desired. Keys are strings in
-				the format "channel-<NUM>", ie. channel 2 would be "channel-2".
+			data (dict): Dictionary to populate from. Expects a key 'first_channel'
+				and a key 'max_channels' to define the valid channel range. All 
+				other keys follow the format 'ch-<n>' where n is the channel number,
+				and the following value is the data value, in any JSON serializable
+				format.
 		
 		Returns:
 			bool: True if dictionary was properly interpreted.
 		'''
 		
-		expected_num = 0
-		ch_list = []
+		try:
+			self.first_channel = data['first_channel']
+			self.max_channels = data['max_channels']
+		except Exception as e:
+			self.log.error(f"Failed to populate ChannelList from dict ({e}).")
+			return False
 		
 		# Scan over all items
 		for k_str, v in data.items():
@@ -294,21 +301,9 @@ class ChannelList:
 				# Save value
 				self.set_ch_val(ch, v)
 				
-				# Check for contiguous channels
-				if ch != expected_num:
-					self.log.warning(f"Dictionary was missing channel >{expected_num}<.")
-				else:
-					expected_num += 1
-				
-				ch_list.append(ch)
 			except Exception as e:
 				self.log.error(f"Failed to parse key, value pair. ({e})")
 				return False
-		
-		# Set max channels
-		dict_mc = np.max(ch_list)+1
-		if self.max_channels != dict_mc:
-			self.log.warning(f"Dictionary had different max channel count ({dict_mc}) than object ({self.max_channels}).")
 		
 		return True
 
@@ -330,7 +325,7 @@ class DataEntry:
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
-	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str="", dummy:bool=False, relay:CommandRelay=None):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str="", dummy:bool=False, first_channel_num:int=1, first_trace_num:int=1):
 		
 		self.address = address
 		self.log = log
@@ -344,14 +339,9 @@ class Driver(ABC):
 		#TODO: Will be replaced by Relay
 		self.online = False
 		self.relay = relay
-		if self.relay is None:
-			self.relay = CommandRelay()
 		
 		# Configure relay with address and log
 		self.relay.configure(self.address, self.log)
-		
-		# self.rm = pv.ResourceManager()
-		# self.inst = None
 		
 		# State tracking parameters
 		self.dummy = False
@@ -380,7 +370,9 @@ class Driver(ABC):
 		
 		# These parameters are used for certain instruments, but need to be
 		# defined in the Driver class so state saving/loading can see them.
+		self.first_channel_num = first_channel_num
 		self.max_channels = None
+		self.first_trace_num = first_trace_num
 		self.max_traces = None
 		
 		

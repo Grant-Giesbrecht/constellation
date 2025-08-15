@@ -1,6 +1,7 @@
 import pylogfile.base as plf
 from abc import abstractmethod
 from pyvicp import Client
+import pyvisa as pv
 
 class CommandRelay:
 	''' Class used to relay commands from a "driver" (which defines the content of the
@@ -143,7 +144,7 @@ class DirectSCPIRelay(CommandRelay):
 	def __init__(self):
 		super().__init__()
 		
-		self.rm = pv.ResourceManager()
+		self.rm = pv.ResourceManager('@py')
 		self.inst = None
 	
 	def connect(self) -> bool:
@@ -193,7 +194,7 @@ class DirectSCPIRelay(CommandRelay):
 			rv = self.inst.read()
 			self.log.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
-			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			self.log.error(f"DirectSCPIRelay failed to read from instrument {self.address}. ({e})")
 			return False, ""
 		
 		return True, ""
@@ -209,10 +210,10 @@ class DirectSCPIRelay(CommandRelay):
 		'''
 		
 		try:
-			rv = self.inst.query()
-			self.log.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
+			rv = self.inst.query(cmd)
+			self.log.lowdebug(f"DirectSCPIRelay queried instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
-			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			self.log.error(f"DirectSCPIRelay failed to query instrument {self.address}. ({e})")
 			return False, ""
 		
 		return True, ""
