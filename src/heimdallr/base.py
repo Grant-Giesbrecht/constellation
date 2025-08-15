@@ -931,14 +931,6 @@ def bool_to_str01(val:bool):
 	else:
 		return "0"
 
-def str01_to_bool(val:str):
-	''' Converts the string 0/1 to a boolean '''
-	
-	if '1' in val:
-		return True
-	else:
-		return False
-
 def bool_to_ONOFF(val:bool):
 	''' Converts a boolean value to 0/1 as a string '''
 	
