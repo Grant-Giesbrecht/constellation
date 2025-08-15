@@ -176,7 +176,8 @@ class ChannelList:
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
 			if ch != self.first_channel:
 				out = out + "\n"
-			out = out + f"{indent}>:qchannel {ch}<: >:a@:LOCK{truncate_str(self.get_ch_val(ch), 40)}@:UNLOCK<"
+			val = self.get_ch_val(ch)
+			out = out + f"{indent}>:qchannel {ch}<: >:a@:LOCK{truncate_str(val, 40)}@:UNLOCK<@:LOCK, ({type(val)})@:UNLOCK"
 		
 		out = plf.markdown(out)
 		return out
@@ -370,9 +371,9 @@ class Driver(ABC):
 		
 		# These parameters are used for certain instruments, but need to be
 		# defined in the Driver class so state saving/loading can see them.
-		self.first_channel_num = first_channel_num
+		self.first_channel = first_channel_num
 		self.max_channels = None
-		self.first_trace_num = first_trace_num
+		self.first_trace = first_trace_num
 		self.max_traces = None
 		
 		

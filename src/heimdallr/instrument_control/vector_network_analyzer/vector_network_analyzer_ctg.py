@@ -74,11 +74,11 @@ class VectorNetworkAnalyzerCtg(Driver):
 		self.max_channels = max_channels
 		self.max_traces = max_traces # This is per-channel
 		
-		self.state[VectorNetworkAnalyzerCtg.FREQ_START] = ChannelList(self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.FREQ_END] = ChannelList(self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.POWER] = ChannelList(self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = ChannelList(self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.RES_BW] = ChannelList(self.max_channels, log=self.log)
+		self.state[VectorNetworkAnalyzerCtg.FREQ_START] = ChannelList(self.first_channel, self.max_channels, log=self.log)
+		self.state[VectorNetworkAnalyzerCtg.FREQ_END] = ChannelList(self.first_channel, self.max_channels, log=self.log)
+		self.state[VectorNetworkAnalyzerCtg.POWER] = ChannelList(self.first_channel, self.max_channels, log=self.log)
+		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = ChannelList(self.first_channel, self.max_channels, log=self.log)
+		self.state[VectorNetworkAnalyzerCtg.RES_BW] = ChannelList(self.first_channel, self.max_channels, log=self.log)
 		self.state[VectorNetworkAnalyzerCtg.RF_ENABLE] = []
 		self.state[VectorNetworkAnalyzerCtg.TRACES] = []
 

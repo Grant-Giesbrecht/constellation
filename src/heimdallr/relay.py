@@ -216,7 +216,7 @@ class DirectSCPIRelay(CommandRelay):
 			self.log.error(f"DirectSCPIRelay failed to query instrument {self.address}. ({e})")
 			return False, ""
 		
-		return True, ""
+		return True, rv
 
 class RemoteSCPIRelay(CommandRelay):
 	''' A relay that connects to an instrument via a network and relays

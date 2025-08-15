@@ -56,7 +56,7 @@ class RigolDS1000Z(BasicOscilloscopeCtg):
 	
 	@superreturn
 	def get_chan_enable(self, channel:int):
-		self._super_hint = self.query(f":CHAN{channel}:DISP?")
+		self._super_hint = str_to_bool(self.query(f":CHAN{channel}:DISP?"))
 	
 	@superreturn
 	def get_waveform(self, channel:int):
