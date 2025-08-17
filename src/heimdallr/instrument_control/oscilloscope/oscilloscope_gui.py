@@ -110,6 +110,8 @@ class BasicOscilloscopeWidget(InstrumentWidget):
 	
 	def state_to_ui(self):
 		
+		self.plot_widget.ax1a.cla()
+		
 		self.log.debug(f"Refreshing UI from driver state.")
 		
 		self.tdiv_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.DIV_TIME]))
@@ -119,3 +121,14 @@ class BasicOscilloscopeWidget(InstrumentWidget):
 		for i in range(self.driver.first_channel, self.driver.first_channel+self.driver.max_channels):
 			
 			self.chan_widgets[i].state_to_ui()
+		
+			wav = self.driver.get_waveform(i)
+			
+			self.plot_widget.ax1a.plot(wav['time_s'], wav['volt_V'])
+		
+		self.plot_widget.ax1a.grid(True)
+		self.plot_widget.ax1a.grid("Time [S]")
+		self.plot_widget.ax1a.set_ylabel("Voltage [V]")
+		
+		self.plot_widget.fig1.tight_layout()
+		self.plot_widget.fig1.canvas.draw_idle()
