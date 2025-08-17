@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from jarnsaxa import hdf_to_dict, dict_to_hdf
 import datetime
 
+
+
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
 	# By default, this method only returns non-local IPv4 addresses
 	# To return IPv6 only, call get_ip('ipv6')
@@ -60,6 +62,9 @@ def truncate_str(s:str, limit:int=14):
 	else:
 		keep = (limit-3) // 2
 		return s[:keep] + '...' + s[-keep - (1 if (limit-3)%2 else 0):]
+
+def protect_str(x:str, limit:int=30):
+	return "@:LOCK" + truncate_str(x, limit) + "@:UNLOCK"
 
 class HostID:
 	''' Contains the IP address and host-name for the host. Primarily used

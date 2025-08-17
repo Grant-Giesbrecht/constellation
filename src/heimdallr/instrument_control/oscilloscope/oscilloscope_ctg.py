@@ -64,8 +64,6 @@ class BasicOscilloscopeCtg(Driver):
 			t_start = -1*t_span/2+self.state[BasicOscilloscopeCtg.OFFSET_TIME]
 			t_series = np.linspace(t_start, t_start + t_span, npoints)
 			
-			print(f"span = {t_span}")
-			
 			# Create waveform
 			wave = ampl * np.sin(t_series*2*np.pi*freq)
 			
@@ -133,7 +131,7 @@ class BasicOscilloscopeCtg(Driver):
 					rval = None
 					adjective = "unrecognized"
 				
-			self.debug(f"Default dummy responder sending >{rval}< to {adjective} function (>{func_name}<).")
+			self.debug(f"Dummy responder sending >{protect_str(rval)}< to {adjective} function (>{func_name}<).")
 			return rval
 		except Exception as e:
 			self.error(f"Failed to respond to dummy instruction. ({e})")
