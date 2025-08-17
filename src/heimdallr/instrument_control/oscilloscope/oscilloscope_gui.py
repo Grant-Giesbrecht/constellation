@@ -52,7 +52,6 @@ class ChannelWidget(QWidget):
 		self.log.lowdebug(f"Channel {self.channel_num} updating UI from state.")
 		
 		self.enable_button.setChecked(self.driver.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val(self.channel_num))
-		print(self.driver.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val(self.channel_num))
 		
 		self.vdiv_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(self.channel_num)))
 		

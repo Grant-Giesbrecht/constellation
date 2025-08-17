@@ -1,7 +1,5 @@
-""" The purpose of this example is to show how dummy mode works. Notice
-how the waveform is trimmed for the channel with the finer voltage
-resultion because the dummy waveform is mimicing clipping in the real
-hardware.
+""" The purpose of this example is to show how to make a basic
+oscilloscope GUI.
 """
 
 from heimdallr.all import *
@@ -29,6 +27,7 @@ app.setStyle(f"Fusion")
 main_window = HeimdallrWindow(log)
 osc_widget = BasicOscilloscopeWidget(main_window, osc, log)
 main_window.setCentralWidget(osc_widget)
+main_window.setWindowTitle("Oscilloscope")
 main_window.show()
 
 osc.set_div_time(0.001)
