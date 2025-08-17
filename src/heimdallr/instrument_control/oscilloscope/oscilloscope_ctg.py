@@ -133,7 +133,7 @@ class BasicOscilloscopeCtg(Driver):
 					rval = None
 					adjective = "unrecognized"
 				
-			self.debug(f"Default dummy responder sending >{rval}< to {adjective} function (>{func_name}<).")
+			self.debug(f"Dummy responder sending >{protect_str(rval)}< to {adjective} function (>{func_name}<).")
 			return rval
 		except Exception as e:
 			self.error(f"Failed to respond to dummy instruction. ({e})")
