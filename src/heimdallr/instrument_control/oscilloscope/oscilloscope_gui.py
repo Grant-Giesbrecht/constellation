@@ -48,7 +48,11 @@ class ChannelWidget(QWidget):
 		self.setLayout(self.main_layout)
 	
 	def state_to_ui(self):
+		
+		self.log.lowdebug(f"Channel {self.channel_num} updating UI from state.")
+		
 		self.enable_button.setChecked(self.driver.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val(self.channel_num))
+		print(self.driver.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val(self.channel_num))
 		
 		self.vdiv_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(self.channel_num)))
 		
@@ -98,7 +102,6 @@ class BasicOscilloscopeWidget(InstrumentWidget):
 		self.horiz_box_layout.addWidget(self.toff_edit, 2, 1)
 		self.horiz_box.setLayout(self.horiz_box_layout)
 		
-		
 		self.main_layout.addWidget(self.plot_widget, 0, 0)
 		self.main_layout.addWidget(self.horiz_box, 0, 1)
 		self.main_layout.addWidget(self.channel_box, 1, 0, 1, 2)
@@ -107,9 +110,12 @@ class BasicOscilloscopeWidget(InstrumentWidget):
 	
 	def state_to_ui(self):
 		
+		self.log.debug(f"Refreshing UI from driver state.")
+		
+		self.tdiv_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.DIV_TIME]))
+		self.toff_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.OFFSET_TIME]))
+		
 		# Init all channels
 		for i in range(self.driver.first_channel, self.driver.first_channel+self.driver.max_channels):
 			
 			self.chan_widgets[i].state_to_ui()
-			
-			self.main_layout.addWidget(self.chan_widgets[i], 0, i)

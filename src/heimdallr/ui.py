@@ -14,6 +14,8 @@ class HeimdallrWindow(QMainWindow):
 		super().__init__()
 		self.log = log
 		
+		self.instrument_widgets = []
+		
 		grid = QGridLayout()
 		
 		if add_menu:
@@ -49,9 +51,9 @@ class HeimdallrWindow(QMainWindow):
 		# self.save_graph_act.setShortcut("Ctrl+Shift+G")
 		# self.file_menu.addAction(self.save_graph_act)
 		
-		self.refresh_act = QAction("Refresh", self)
+		self.refresh_act = QAction("Refresh UI from State", self)
 		self.refresh_act.setShortcut("Ctrl+R")
-		self.refresh_act.triggered.connect(self._basic_menu_refresh)
+		self.refresh_act.triggered.connect(self._basic_menu_state_to_ui)
 		self.edit_menu.addAction(self.refresh_act)
 	
 	def _basic_menu_close(self):
@@ -62,8 +64,10 @@ class HeimdallrWindow(QMainWindow):
 		self.log.error(f"Log viewing not implemented.")
 		pass
 	
-	def _basic_menu_refresh(self):
-		pass
+	def _basic_menu_state_to_ui(self):
+		
+		for iw in self.instrument_widgets:
+			iw.state_to_ui()
 
 class PlotWidget(QWidget):
 	
@@ -107,13 +111,14 @@ class InstrumentWidget(QWidget):
 	def __init__(self, main_window, driver:Driver, log:plf.LogPile):
 		super().__init__(main_window)
 		
-		
 		# Local variables
 		self.main_window = main_window
 		self.log = log
 		self.driver = driver
 		
 		self.main_layout = QGridLayout()
+		
+		self.main_window.instrument_widgets.append(self)
 		
 		# # Automatically check if a local driver or remoteinstrument was provided
 		# self.is_remote = issubclass(type(self), RemoteInstrument)

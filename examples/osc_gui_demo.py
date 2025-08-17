@@ -31,4 +31,9 @@ osc_widget = BasicOscilloscopeWidget(main_window, osc, log)
 main_window.setCentralWidget(osc_widget)
 main_window.show()
 
+osc.set_div_time(3)
+osc.set_chan_enable(2, False)
+osc.set_chan_enable(3, False)
+osc.print_state()
+
 app.exec()
