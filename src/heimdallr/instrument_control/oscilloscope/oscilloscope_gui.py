@@ -1,6 +1,6 @@
 from heimdallr.base import *
 from heimdallr.instrument_control.oscilloscope.oscilloscope_ctg import *
-from heimdallr.ui import InstrumentWidget
+from heimdallr.ui import *
 
 from PyQt6.QtWidgets import QWidget, QGridLayout, QLabel, QTextEdit, QPushButton, QLineEdit, QGroupBox
 from PyQt6.QtGui import QDoubleValidator
@@ -61,14 +61,17 @@ class BasicOscilloscopeWidget(InstrumentWidget):
 		
 		self.chan_widgets = {}
 		
+		self.channel_box = QGroupBox()
+		self.channel_box_layout = QGridLayout()
+		self.channel_box.setLayout(self.channel_box_layout)
+		
 		# Init all channels
 		for i in range(self.driver.first_channel, self.driver.first_channel+self.driver.max_channels):
 			self.chan_widgets[i] = ChannelWidget(self.main_window, self.driver, self.log, i)
 			
-			self.main_layout.addWidget(self.chan_widgets[i], 1, i)
+			self.channel_box_layout.addWidget(self.chan_widgets[i], 1, i)
 		
-		self.channel_box = QGroupBox()
-		self.channel_box_layout = QGridLayout()
+		self.plot_widget = PlotWidget(self.main_window, self.log)
 		
 		self.horiz_label = QLabel("Horizontal")
 		
@@ -91,15 +94,13 @@ class BasicOscilloscopeWidget(InstrumentWidget):
 		self.horiz_box_layout.addWidget(self.horiz_label, 0, 0, 1, 2)
 		self.horiz_box_layout.addWidget(self.tdiv_label, 1, 0)
 		self.horiz_box_layout.addWidget(self.tdiv_edit, 1, 1)
+		self.horiz_box_layout.addWidget(self.toff_label, 2, 0)
+		self.horiz_box_layout.addWidget(self.toff_edit, 2, 1)
 		self.horiz_box.setLayout(self.horiz_box_layout)
 		
-		self.channel_box_layout.addWidget(self.tdiv_label, 4, 0)
-		self.channel_box_layout.addWidget(self.tdiv_edit, 4, 1)
-		self.channel_box_layout.addWidget(self.toff_label, 5, 0)
-		self.channel_box_layout.addWidget(self.toff_edit, 5, 1)
-		self.channel_box.setLayout(self.channel_box_layout)
 		
-		self.main_layout.addWidget(self.horiz_box, 0, 0)
+		self.main_layout.addWidget(self.plot_widget, 0, 0)
+		self.main_layout.addWidget(self.horiz_box, 0, 1)
 		self.main_layout.addWidget(self.channel_box, 1, 0, 1, 2)
 		
 		self.setLayout(self.main_layout)

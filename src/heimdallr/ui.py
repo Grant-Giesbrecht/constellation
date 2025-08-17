@@ -5,6 +5,9 @@ from PyQt6 import QtCore, QtGui
 from PyQt6.QtWidgets import QMainWindow, QGridLayout, QPushButton, QSlider, QGroupBox, QWidget, QTabWidget
 from PyQt6.QtGui import QAction
 
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
+
 class HeimdallrWindow(QMainWindow):
 	
 	def __init__(self, log:plf.LogPile, add_menu:bool=True):
@@ -61,6 +64,43 @@ class HeimdallrWindow(QMainWindow):
 	
 	def _basic_menu_refresh(self):
 		pass
+
+class PlotWidget(QWidget):
+	
+	def __init__(self, main_window, log:plf.LogPile, cust_render_func:callable=None, **kwargs): #, xlabel:str="", ylabel:str="", title:str="", ):
+		super().__init__(main_window)
+		
+		self.main_window = main_window
+		self.log = log
+		self.custom_render_func = cust_render_func
+		
+		# Create figure in matplotlib
+		self.fig1 = plt.figure()
+		self.gs = self.fig1.add_gridspec(1, 1)
+		self.ax1a = self.fig1.add_subplot(self.gs[0, 0])
+		
+		# Create Qt Figure Canvas
+		self.fig_canvas = FigureCanvas(self.fig1)
+		self.fig_toolbar = NavigationToolbar2QT(self.fig_canvas, self)
+		
+		self.grid = QGridLayout()
+		self.grid.addWidget(self.fig_toolbar, 0, 0)
+		self.grid.addWidget(self.fig_canvas, 1, 0)
+		
+		self.setLayout(self.grid)
+		
+		self._render_widget()
+	
+	def _render_widget(self):
+		
+		# Call custom renderer if provided
+		if self.custom_render_func is not None:
+			self.custom_render_func(self)
+		
+		self.fig1.tight_layout()
+		self.fig1.canvas.draw_idle()
+		
+		self.is_current = True
 
 class InstrumentWidget(QWidget):
 	
