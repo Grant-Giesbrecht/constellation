@@ -154,7 +154,7 @@ class InstrumentState(Packable):
 	"""
 	
 	def __init__(self, log:plf.LogPile):
-		super().__init__()
+		super().__init__(log=log)
 		self.log = log
 	
 	@abstractmethod
@@ -295,7 +295,7 @@ class IndexedList(Packable):
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
 	
 	def __init__(self, first_index:int, num_indices:int, validate_type=None, log:plf.LogPile=None):
-		super().__init__()
+		super().__init__(log=log)
 		
 		self.first_index = first_index
 		self.num_indices = num_indices

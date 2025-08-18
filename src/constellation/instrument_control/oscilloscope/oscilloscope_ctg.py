@@ -25,7 +25,7 @@ class BasicOscilloscopeState(InstrumentState):
 		
 		self.div_time = None
 		self.offset_time = None
-		self.channels = IndexedList(self.first_channel, self.num_channels, validate_type=BasicOscilloscopeChannelState)
+		self.channels = IndexedList(self.first_channel, self.num_channels, validate_type=BasicOscilloscopeChannelState, log=log)
 		
 		for ch_no in self.channels.get_range():
 			self.channels.set_idx_val(ch_no, BasicOscilloscopeChannelState())
