@@ -155,7 +155,7 @@ class InstrumentState:
 	def __init__(self):
 		pass
 
-class ChannelList:
+class IndexedList:
 	''' Used in driver.state and driver.data structures to organize values
 	for parameters which apply to more than one channel.
 	
@@ -283,7 +283,7 @@ class ChannelList:
 		return data
 	
 	def from_dict(self, data:dict):
-		''' Populates the ChannelList from a dictionary.
+		''' Populates the IndexedList from a dictionary.
 		
 		Args:
 			data (dict): Dictionary to populate from. Expects a key 'first_channel'
@@ -300,7 +300,7 @@ class ChannelList:
 			self.first_channel = data['first_channel']
 			self.max_channels = data['max_channels']
 		except Exception as e:
-			self.log.error(f"Failed to populate ChannelList from dict ({e}).")
+			self.log.error(f"Failed to populate IndexedList from dict ({e}).")
 			return False
 		
 		# Scan over all items
@@ -809,7 +809,7 @@ class Driver(ABC):
 			name, unit = split_param(k)
 			
 			# Print value
-			if isinstance(v, ChannelList):
+			if isinstance(v, IndexedList):
 				mdprint(f">:q{name}<:")
 				mdprint(f"    value:")
 				print(v.summarize(indent="        "))
@@ -848,7 +848,7 @@ class Driver(ABC):
 		state_dict = {}
 		for k, v in self.state.items():
 			
-			if isinstance(v, ChannelList):
+			if isinstance(v, IndexedList):
 				state_dict[k] = v.to_dict()
 			else:
 				state_dict[k] = v
@@ -859,7 +859,7 @@ class Driver(ABC):
 			data_dict = {}
 			for k, v in self.data.items():
 				
-				if isinstance(v, ChannelList):
+				if isinstance(v, IndexedList):
 					data_dict[k] = v.to_dict()
 				else:
 					data_dict[k] = v
@@ -926,7 +926,7 @@ class Driver(ABC):
 				
 				# Check if value is a dictionary
 				if isinstance(v, dict):
-					self.state[k].from_dict(v) # Dictionaries are from ChannelList objects
+					self.state[k].from_dict(v) # Dictionaries are from IndexedList objects
 				else:
 					self.state[k] = v # All others are directly saved
 			

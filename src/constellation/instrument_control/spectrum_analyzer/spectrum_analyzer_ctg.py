@@ -31,7 +31,7 @@ class SpectrumAnalyzerCtg(Driver):
 		self.state[SpectrumAnalyzerCtg.REF_LEVEL] = None
 		self.state[SpectrumAnalyzerCtg.Y_DIV] = None
 		
-		self.data[SpectrumAnalyzerCtg.TRACE_DATA] = ChannelList(self.first_channel, self.max_channels, log=self.log)
+		self.data[SpectrumAnalyzerCtg.TRACE_DATA] = IndexedList(self.first_channel, self.max_channels, log=self.log)
 		
 		if self.dummy:
 			self.init_dummy_state()
