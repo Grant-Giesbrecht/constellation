@@ -2,6 +2,7 @@
 Manual: https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/dl_common_library/dl_manuals/dl_user_manual/ZVA_ZVB_ZVT_OperatingManual_en_33.pdf
 """
 
+from jarnsaxa import Packable
 from heimdallr.base import *
 from heimdallr.helpers import lin_to_dB
 
@@ -21,7 +22,7 @@ def plot_vna_mag(data:dict, label:str=""):
 	plt.xlabel("Frequency [GHz]")
 	plt.ylabel("S-Parameters [dB]")
 
-class TraceMetadata:
+class VNATraceConfig(Packable):
 	""" Class used to represent a trace that is active on the VNA.
 	"""
 	
@@ -33,7 +34,37 @@ class TraceMetadata:
 		self.format = VectorNetworkAnalyzerCtg.FORM_LOG_MAG
 		
 		self.data = {}
+
+class VNAChannelConfig(Packable):
+	""" Describes the state of one VNA channel.
+	"""
 	
+	FREQ_START = "freq-start[Hz]"
+	FREQ_END = "freq-end[Hz]"
+	POWER = "power[dBm]"
+	NUM_POINTS = "num-points[1]"
+	RES_BW = "res-bw[Hz]"
+	
+	def __init__(self):
+		self.state[VNAChannelConfig.FREQ_START] = None
+		self.state[VNAChannelConfig.FREQ_END] = None
+		self.state[VNAChannelConfig.POWER] = None
+		self.state[VNAChannelConfig.NUM_POINTS] = None
+		self.state[VNAChannelConfig.RES_BW] = None
+	
+	def set_manifest(self):
+		
+		self.manifest.append("state")
+
+class VectorNetworkAnalyzerState(InstrumentState):
+	
+	def __init__(self, log:plf.LogPile):
+		super().__init__(log)
+		
+		self.channels = []
+		self.rf_enable = []
+		self.traces = []
+
 class VectorNetworkAnalyzerCtg(Driver):
 	
 	# Measurement options
@@ -60,11 +91,7 @@ class VectorNetworkAnalyzerCtg(Driver):
 	SWEEP_OFF = "sweep-off"
 	
 	# State parameters
-	FREQ_START = "freq-start[Hz]"
-	FREQ_END = "freq-end[Hz]"
-	POWER = "power[dBm]"
-	NUM_POINTS = "num-points[]"
-	RES_BW = "res-bw[Hz]"
+	CHANNELS = "channels"
 	RF_ENABLE = "rf-enable[bool]"
 	TRACES = "traces"
 	
@@ -74,14 +101,12 @@ class VectorNetworkAnalyzerCtg(Driver):
 		self.max_channels = max_channels
 		self.max_traces = max_traces # This is per-channel
 		
-		self.state[VectorNetworkAnalyzerCtg.FREQ_START] = ChannelList(self.first_channel, self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.FREQ_END] = ChannelList(self.first_channel, self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.POWER] = ChannelList(self.first_channel, self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.NUM_POINTS] = ChannelList(self.first_channel, self.max_channels, log=self.log)
-		self.state[VectorNetworkAnalyzerCtg.RES_BW] = ChannelList(self.first_channel, self.max_channels, log=self.log)
+		self.state = VectorNetworkAnalyzerState()
+		
+		self.state[VectorNetworkAnalyzerCtg.CHANNELS] = []
 		self.state[VectorNetworkAnalyzerCtg.RF_ENABLE] = []
 		self.state[VectorNetworkAnalyzerCtg.TRACES] = []
-
+	
 	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float, channel:int=1):

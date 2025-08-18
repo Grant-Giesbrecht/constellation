@@ -148,6 +148,13 @@ def superreturn(func):
 		return super_method(*args, **kwargs)
 	return wrapper
 
+class InstrumentState:
+	""" Used to describe the state of a Driver or instrument.
+	"""
+	
+	def __init__(self):
+		pass
+
 class ChannelList:
 	''' Used in driver.state and driver.data structures to organize values
 	for parameters which apply to more than one channel.
@@ -700,6 +707,45 @@ class Driver(ABC):
 			else:
 				try:
 					self.state[param].set_ch_val(channel, value)
+				except Exception as e:
+					self.log.error(f"Failed to modify internal state. {e}")
+			val = value
+		else:
+			val = query_func()
+		
+		return val
+	
+	def modify_state2(self, query_func:callable, param:str, value, channel:int=None):
+		"""
+		Updates the internal state tracker.
+		
+		Parameters:
+			query_func (callable): Function used to query the state of this parameter from
+				the instrument. This parameter should be set to None if modify_state is 
+				being called from a query function. 
+			param (str): Parameter to update
+			value: Value for parameter being sent to the instrument. This will be used to
+				update the internal state if query_func is None, or if the instrument is in
+				dummy mode or blind_state_update mode. 
+			channel (int): Optional value for parameters that apply to individual channels of
+				an instrument. Should be set to None (default) for parameters which do not
+				have multiple channels. Channels are indexed from 1, not 0.
+			
+		Returns:
+			value, or result of query_func if provided.
+		"""
+		
+		if (query_func is None) or self.dummy or self.blind_state_update:
+			prev_val = self.state[param]
+			
+			# Record ing log
+			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+			
+			if channel is None:
+				self.state[param] = value
+			else:
+				try:
+					self.state.edit_param(param).set_ch_val(channel, value)
 				except Exception as e:
 					self.log.error(f"Failed to modify internal state. {e}")
 			val = value

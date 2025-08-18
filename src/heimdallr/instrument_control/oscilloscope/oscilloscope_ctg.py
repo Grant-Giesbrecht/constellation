@@ -147,6 +147,37 @@ class BasicOscilloscopeCtg(Driver):
 		return self.modify_state(None, BasicOscilloscopeCtg.DIV_TIME, self._super_hint)
 	
 	@abstractmethod
+	def set_div_time0(self, time_s:float):
+		self.modify_state(self.get_div_time, "div_time", time_s)
+	
+	@abstractmethod
+	@enabledummy
+	def get_div_time0(self):
+		return self.modify_state(None, "div_time", self._super_hint)
+	
+	@abstractmethod
+	@enabledummy
+	def get_div_time0(self):
+		return self.modify_state(None, ("channels", "traces", "start_freq"), self._super_hint, indices=(channel, trace))
+	
+	@abstractmethod
+	def set_div_time2(self, time_s:float):
+		self.setter_update_state(self.get_div_time)
+		
+		self.modify_state(self.get_div_time, BasicOscilloscopeCtg.DIV_TIME, time_s)
+	
+	@abstractmethod
+	@enabledummy
+	def get_div_time2(self):
+		
+		self.state.div_time = self._super_hint
+		return self._super_hint
+	
+	
+	
+	
+	
+	@abstractmethod
 	def set_offset_time(self, time_s:float):
 		self.modify_state(self.get_offset_time, BasicOscilloscopeCtg.OFFSET_TIME, time_s)
 		
