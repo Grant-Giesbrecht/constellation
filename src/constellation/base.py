@@ -228,7 +228,49 @@ class InstrumentState():
 	def get(self, params:tuple, indices:tuple=None):
 		'''
 		'''
-		pass
+		
+		obj_under = None # Object one notch lower
+		obj_top = self # Object at top of stack
+		
+		# Scan over all params... get top level object
+		for idx, p in enumerate(params):
+			
+			# Check that parameter exists
+			if not hasattr(obj_top, p):
+				self.log.error(f"Cannot set state. Parameter >{p}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
+				return None
+			
+			# Update object references
+			obj_under = obj_top
+			obj_top = getattr(obj_under, p)
+			
+			# Handle lists
+			list_at_top = False # Indicates if the top level object is an IndexedList
+			if isinstance(obj_top, IndexedList):
+				
+				# Validate that an index exists
+				if indices is None:
+					self.log.error(f"Cannot set state. Required a valid index tuple for indices paramter.")
+					return None
+				if len(indices) < idx+1:
+					self.log.error(f"Cannot set state. Required indices paramter with greater length.")
+					return None
+				if indices[idx] is None:
+					self.log.error(f"Cannot set state. Required indices paramter value not equal to None.")
+					return None
+				
+				# Move into list if not at end of navigating tree
+				if idx != len(params)-1:
+					# Object is a list - shift obj_top to correct item in the list, not the list itself
+					obj_top = obj_top.get_idx_val(indices[idx])
+				else:
+					list_at_top = True
+		
+		# Update value of final parameter
+		if list_at_top:
+			return obj_top.get_idx_val(indices[idx])
+		else:
+			return getattr(obj_under, p[-1])
 
 class IndexedList:
 	''' Used in driver.state and driver.data structures to organize values

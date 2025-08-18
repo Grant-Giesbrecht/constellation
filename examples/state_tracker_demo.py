@@ -23,6 +23,8 @@ class DemoState(InstrumentState):
 log = plf.LogPile()
 ds = DemoState(log)
 
+#============= Test the set functions ==============
+
 # First, a simple example
 ds.set(["time", "a"], 100)
 print(f"100 = ds.time.a = {ds.time.a}")
@@ -34,3 +36,10 @@ print(f"DemoA = {ds.chans.get_idx_val(1)}")
 # Now show how IndexedList's objects can be edited
 ds.set(["chans", "c"], 17, [1])
 print(f"17 = {ds.chans.get_idx_val(1).c}")
+
+
+#============= Test the get functions ==============
+
+ds.get(["time", "a"], )
+ds.get(["chans"], indices=[1])
+ds.get(["chans", "c"], [1])
