@@ -148,7 +148,7 @@ def superreturn(func):
 		return super_method(*args, **kwargs)
 	return wrapper
 
-class InstrumentState():
+class InstrumentState(Packable):
 	""" Used to describe the state of a Driver or instrument.
 	"""
 	
@@ -287,11 +287,13 @@ class IndexedList:
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
 	
-	def __init__(self, first_index:int, num_indices:int, log:plf.LogPile=None):
+	def __init__(self, first_index:int, num_indices:int, validate_type=None, log:plf.LogPile=None):
 		
 		self.first_index = first_index
 		self.num_indices = num_indices
 		self.index_data = {}
+		
+		self.validate_type = validate_type
 		
 		if log is None:
 			self.log = plf.LogPile()
@@ -341,6 +343,11 @@ class IndexedList:
 		Returns:
 			None
 		'''
+		
+		if self.validate_type is not None:
+			if not isinstance(value, self.validate_type):
+				raise TypeError
+		
 		chan = self.get_valid_idx(index)
 		self.index_data[chan] = value
 	
