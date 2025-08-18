@@ -3,7 +3,8 @@ from constellation.networking.net_client import *
 
 class BasicOscilloscopeChannelState(Packable):
 	
-	def __init__(self):
+	def __init__(self, log):
+		super().__init__(log=log)
 		self.div_volt = None
 		self.offset_volt = None
 		self.chan_en = None
@@ -28,7 +29,7 @@ class BasicOscilloscopeState(InstrumentState):
 		self.channels = IndexedList(self.first_channel, self.num_channels, validate_type=BasicOscilloscopeChannelState, log=log)
 		
 		for ch_no in self.channels.get_range():
-			self.channels.set_idx_val(ch_no, BasicOscilloscopeChannelState())
+			self.channels.set_idx_val(ch_no, BasicOscilloscopeChannelState(log))
 	
 	def set_manifest(self):
 		self.manifest.append("first_channel")

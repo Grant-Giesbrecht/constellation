@@ -149,6 +149,32 @@ def superreturn(func):
 		return super_method(*args, **kwargs)
 	return wrapper
 
+def param_idx_to_str(params:list, indices:list=None) -> str:
+	''' Creates a nicely formated plf-markdown string from a set of params
+	and indices for modifying InstrumentStates.
+	'''
+	
+	s = "["
+	
+	for idx, par in enumerate(params):
+		
+		# Add parameter names
+		s = s + f">'{par}'<"
+		
+		# Add indices
+		if indices is not None:
+			if idx < len(indices):
+				ind = indices[idx]
+				s = s + f">:q[{ind}]<"
+		
+		# Add commas
+		if idx != len(params)-1 :
+			s = s + ", "
+		else:
+			s = s + "]"
+	
+	return s
+
 class InstrumentState(Packable):
 	""" Used to describe the state of a Driver or instrument.
 	"""
@@ -862,10 +888,12 @@ class Driver(ABC):
 			# prev_val = self.state.get(params, indices=indices)
 			
 			# Record ing log
-			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: >{params}<=>:a{truncate_str(value)}<.") #, detail=f"Previous value was {truncate_str(prev_val)}")
 			
-			self.state.set(params, value, indices=indices)
 			
+			if self.state.set(params, value, indices=indices):
+				self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: {param_idx_to_str(params, indices=indices)} \\<- >:a{truncate_str(value)}<.") #, detail=f"Previous value was {truncate_str(prev_val)}")
+			else:
+				self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) Failed to modify state: {param_idx_to_str(params, indices=indices)} \\<- >:a{truncate_str(value)}<.") #, detail=f"Previous value was {truncate_str(prev_val)}")
 			# if channel is None:
 			# 	self.state[param] = value
 			# else:
@@ -903,7 +931,7 @@ class Driver(ABC):
 			prev_val = self.data[param]
 			
 			# Record ing log
-			self.log.add_log(self.state_change_log_level, f"(Driver: >:q{self.id.short_str()}<) State modified; >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+			self.log.add_log(self.state_change_log_level, f"(Driver: >:q{self.id.short_str()}<) Data-sate modified; >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
 			
 			if channel is None:
 				self.data[param] = value
