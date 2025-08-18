@@ -3,6 +3,7 @@ oscilloscope GUI.
 """
 
 from heimdallr.all import *
+from PyQt6 import QtWidgets
 # from heimdallr.ui import HeimdallrWindow
 import matplotlib.pyplot as plt
 from heimdallr.instrument_control.oscilloscope.oscilloscope_gui import *
