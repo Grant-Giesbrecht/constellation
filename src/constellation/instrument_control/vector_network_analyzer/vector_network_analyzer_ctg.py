@@ -1,8 +1,3 @@
-"""
-Manual: https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/dl_common_library/dl_manuals/dl_user_manual/ZVA_ZVB_ZVT_OperatingManual_en_33.pdf
-"""
-
-from jarnsaxa import Packable
 from constellation.base import *
 from constellation.helpers import lin_to_dB
 

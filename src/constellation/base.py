@@ -9,9 +9,9 @@ from socket import getaddrinfo, gethostname
 import ipaddress
 import fnmatch
 import matplotlib.pyplot as plt
-from jarnsaxa import hdf_to_dict, dict_to_hdf
+from jarnsaxa import hdf_to_dict, dict_to_hdf, Packable
 import datetime
-
+import numbers
 
 
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
@@ -148,19 +148,84 @@ def superreturn(func):
 		return super_method(*args, **kwargs)
 	return wrapper
 
-class InstrumentState:
+class InstrumentState():
 	""" Used to describe the state of a Driver or instrument.
 	"""
 	
-	def __init__(self):
-		pass
+	def __init__(self, log:plf.LogPile):
+		self.log = log
 	
-	def set(params:tuple, value, indices:tuple=None):
-		''' Sets the value
+	def is_valid_type(self, test_obj):
+		''' Checks if test_obj is a valid type for 
 		'''
-		pass
+		if isinstance(test_obj, IndexedList):
+			return True
+		if isinstance(test_obj, Packable):
+			return True
+		if isinstance(test_obj, dict):
+			return True
+		if isinstance(test_obj, numbers.Number): # TODO: How to save complex to HDF/JSON/dict?
+			return True
+		if isinstance(test_obj, str):
+			return True
+		#TODO: Should lists be accepted?
+		
+		return False
 	
-	def get(params:tuple, indices:tuple=None):
+	def set(self, params:tuple, value, indices:tuple=None) -> bool:
+		''' Sets the value. Note that lists of objects MUST be stored
+		in the IndexedList class.
+		
+		
+		
+		'''
+		
+		obj_under = None # Object one notch lower
+		obj_top = self # Object at top of stack
+		
+		# Scan over all params... get top level object
+		for idx, p in enumerate(params):
+			
+			# Check that parameter exists
+			if not hasattr(obj_top, p):
+				self.log.error(f"Cannot set state. Parameter >{p}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
+				return False
+			
+			# Update object references
+			obj_under = obj_top
+			obj_top = getattr(obj_under, p)
+			
+			# Handle lists
+			list_at_top = False # Indicates if the top level object is an IndexedList
+			if isinstance(obj_top, IndexedList):
+				
+				# Validate that an index exists
+				if indices is None:
+					self.log.error(f"Cannot set state. Required a valid index tuple for indices paramter.")
+					return False
+				if len(indices) < idx+1:
+					self.log.error(f"Cannot set state. Required indices paramter with greater length.")
+					return False
+				if indices[idx] is None:
+					self.log.error(f"Cannot set state. Required indices paramter value not equal to None.")
+					return False
+				
+				# Move into list if not at end of navigating tree
+				if idx != len(params)-1:
+					# Object is a list - shift obj_top to correct item in the list, not the list itself
+					obj_top = obj_top.get_idx_val(indices[idx])
+				else:
+					list_at_top = True
+		
+		# Update value of final parameter
+		if list_at_top:
+			obj_top.set_idx_val(indices[idx], value)
+		else:
+			setattr(obj_under, p[-1], value)
+		
+		return True
+	
+	def get(self, params:tuple, indices:tuple=None):
 		'''
 		'''
 		pass
@@ -234,7 +299,7 @@ class IndexedList:
 		Returns:
 			None
 		'''
-		chan = self.get_valid_ch(index)
+		chan = self.get_valid_idx(index)
 		self.index_data[chan] = value
 	
 	def get_idx_val(self, index:int):
@@ -247,7 +312,7 @@ class IndexedList:
 			Value assigned to index. Any type. Returns None if value
 			has not been assigned to index yet.
 		'''
-		chan = self.get_valid_ch(index)
+		chan = self.get_valid_idx(index)
 		if not self.idx_is_populated(chan):
 			self.log.error(f"Cannot return index value; index has not been populated.")
 			return None
