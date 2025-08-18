@@ -14,18 +14,23 @@ class BasicOscilloscopeChannelState(Packable):
 		self.manifest.append("chan_en")
 
 class BasicOscilloscopeState(InstrumentState):
-	def __init__(self, log:plf.LogPile, first_channel:int, num_channels:int):
+	def __init__(self, log:plf.LogPile, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert):
 		super().__init__(log=log)
 		
 		self.first_channel = first_channel
 		self.num_channels = num_channels
 		
+		self.ndiv_horiz = ndiv_horiz
+		self.ndiv_vert = ndiv_vert
+		
 		self.div_time = None
 		self.offset_time = None
 		self.channels = IndexedList(self.first_channel, self.num_channels, validate_type=BasicOscilloscopeChannelState)
+		
+		for ch_no in self.channels.get_range():
+			self.channels.set_idx_val(ch_no, BasicOscilloscopeChannelState())
 	
 	def set_manifest(self):
-		
 		self.manifest.append("first_channel")
 		self.manifest.append("num_channels")
 		self.manifest.append("div_time")
@@ -40,18 +45,18 @@ class BasicOscilloscopeCtg(Driver):
 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
 		
 		self.max_channels = max_channels
-		self.num_div_horiz = num_div_horiz
-		self.num_div_vert = num_div_vert
 		
-		self.state = BasicOscilloscopeState(self.log, self.first_channel, self.max_channels)
+		self.state = BasicOscilloscopeState(self.log, self.first_channel, self.max_channels, num_div_horiz, num_div_vert)
 		
 		self.data[BasicOscilloscopeCtg.WAVEFORM] = IndexedList(self.first_channel, self.max_channels, log=self.log)
 		
 		if self.dummy:
 			self.init_dummy_state()
+			self.print_state()
 		
 	def init_dummy_state(self) -> None:
 		self.set_div_time(10e-3)
+		print(f"div_time = {self.state.div_time}")
 		self.set_offset_time(0)
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
 			self.set_div_volt(ch, 1)
@@ -78,16 +83,16 @@ class BasicOscilloscopeCtg(Driver):
 			npoints = 101
 			
 			# Create time series
-			t_span = self.state[BasicOscilloscopeCtg.NDIV_HORIZ] * self.state[BasicOscilloscopeCtg.DIV_TIME]
-			t_start = -1*t_span/2+self.state[BasicOscilloscopeCtg.OFFSET_TIME]
+			t_span = self.state.get(["ndiv_horiz"]) * self.state.get(["div_time"])
+			t_start = -1*t_span/2+self.state.get(["offset_time"])
 			t_series = np.linspace(t_start, t_start + t_span, npoints)
 			
 			# Create waveform
 			wave = ampl * np.sin(t_series*2*np.pi*freq)
 			
 			# Trim waveform to represent clipping on real scope
-			v_span = self.state[BasicOscilloscopeCtg.NDIV_VERT] * self.state[BasicOscilloscopeCtg.DIV_VOLT].get_idx_val(channel)
-			v_min = -1*v_span/2+self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_idx_val(channel)
+			v_span = self.state.get(["ndiv_vert"]) * self.state.get(["channels", "div_volt"], indices=[channel])
+			v_min = -1*v_span/2+self.state.get(["channels", "offset_volt"], indices=[channel])
 			v_max = v_min + v_span
 			wave_clipped = [np.max([np.min([element, v_max]), v_min]) for element in wave]
 			
@@ -111,23 +116,23 @@ class BasicOscilloscopeCtg(Driver):
 				case "set_div_time":
 					rval = None
 				case "get_div_time":
-					rval = self.state[BasicOscilloscopeCtg.DIV_TIME]
+					rval = self.state.get(["div_time"])
 				case "set_offset_time":
 					rval = None
 				case "get_offset_time":
-					rval = self.state[BasicOscilloscopeCtg.OFFSET_TIME]
+					rval = self.state.get(["offset_time"])
 				case "set_div_volt":
 					rval = None
 				case "get_div_volt":
-					rval = self.state[BasicOscilloscopeCtg.DIV_VOLT]
+					rval = self.state.get(["channels", "div_volt"], indices=[args[0]])
 				case "set_offset_volt":
 					rval = None
 				case "get_offset_volt":
-					rval = self.state[BasicOscilloscopeCtg.OFFSET_VOLT]
+					rval = self.state.get(["channels", "offset_volt"], indices=[args[0]])
 				case "set_chan_enable":
 					rval = None
 				case "get_chan_enable":
-					rval = self.state[BasicOscilloscopeCtg.CHAN_EN].get_idx_val(args[0])
+					rval = self.state.get(["channels", "chan_en"], indices=[args[0]])
 				case "get_waveform":
 					self.remake_dummy_waves()
 					rval = self.data[BasicOscilloscopeCtg.WAVEFORM].get_idx_val(args[0])
@@ -157,84 +162,54 @@ class BasicOscilloscopeCtg(Driver):
 	
 	@abstractmethod
 	def set_div_time(self, time_s:float):
-		self.modify_state(self.get_div_time, BasicOscilloscopeCtg.DIV_TIME, time_s)
+		self.modify_state(self.get_div_time, ["div_time"], time_s)
 	
 	@abstractmethod
 	@enabledummy
 	def get_div_time(self):
-		return self.modify_state(None, BasicOscilloscopeCtg.DIV_TIME, self._super_hint)
-	
-	# @abstractmethod
-	# def set_div_time0(self, time_s:float):
-	# 	self.modify_state(self.get_div_time, "div_time", time_s)
-	
-	# @abstractmethod
-	# @enabledummy
-	# def get_div_time0(self):
-	# 	return self.modify_state(None, "div_time", self._super_hint)
-	
-	# @abstractmethod
-	# @enabledummy
-	# def get_div_time0(self):
-	# 	return self.modify_state(None, ("channels", "traces", "start_freq"), self._super_hint, indices=(channel, trace))
-	
-	# @abstractmethod
-	# def set_div_time2(self, time_s:float):
-	# 	self.setter_update_state(self.get_div_time)
-		
-	# 	self.modify_state(self.get_div_time, BasicOscilloscopeCtg.DIV_TIME, time_s)
-	
-	# @abstractmethod
-	# @enabledummy
-	# def get_div_time2(self):
-		
-	# 	self.state.div_time = self._super_hint
-	# 	return self._super_hint
-	
-	
-	
+		return self.modify_state(None, ["div_time"], self._super_hint)
 	
 	
 	@abstractmethod
 	def set_offset_time(self, time_s:float):
-		self.modify_state(self.get_offset_time, BasicOscilloscopeCtg.OFFSET_TIME, time_s)
+		self.modify_state(self.get_offset_time, ["offset_time"], time_s)
 		
 	@abstractmethod
 	@enabledummy
 	def get_offset_time(self):
-		return self.modify_state(None, BasicOscilloscopeCtg.OFFSET_TIME, self._super_hint)
+		return self.modify_state(None, ["offset_time"], self._super_hint)
 	
 	@abstractmethod
 	def set_div_volt(self, channel:int, volt_V:float):
-		self.modify_state(lambda: self.get_div_volt(channel), BasicOscilloscopeCtg.DIV_VOLT, volt_V, channel=channel)
+		self.modify_state(lambda: self.get_div_volt(channel), ["channels", "div_volt"], volt_V, indices=[channel])
 		
 	@abstractmethod
 	@enabledummy
 	def get_div_volt(self, channel:int):
-		return self.modify_state(None, BasicOscilloscopeCtg.DIV_VOLT, self._super_hint, channel=channel)
+		return self.modify_state(None, ["channels", "div_volt"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_offset_volt(self, channel:int, volt_V:float):
-		self.modify_state(lambda: self.get_offset_volt(channel), BasicOscilloscopeCtg.OFFSET_VOLT, volt_V, channel=channel)
+		self.modify_state(lambda: self.get_offset_volt(channel), ["channels", "offset_volt"], volt_V, indices=[channel])
 		
 	@abstractmethod
 	@enabledummy
 	def get_offset_volt(self, channel:int):
-		return self.modify_state(None, BasicOscilloscopeCtg.OFFSET_VOLT, self._super_hint, channel=channel)
+		return self.modify_state(None, ["channels", "offset_volt"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_chan_enable(self, channel:int, enable:bool):
-		self.modify_state(lambda: self.get_chan_enable(channel), BasicOscilloscopeCtg.CHAN_EN, enable, channel=channel)
+		self.modify_state(lambda: self.get_chan_enable(channel), ["channels", "chan_en"], enable, indices=[channel])
 		
 	@abstractmethod
 	@enabledummy
 	def get_chan_enable(self, channel:int):
-		return self.modify_state(None, BasicOscilloscopeCtg.CHAN_EN, self._super_hint, channel=channel)
+		return self.modify_state(None, ["channels", "chan_en"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	@enabledummy
 	def get_waveform(self, channel:int):
-		return self.modify_data_state(None, BasicOscilloscopeCtg.WAVEFORM, self._super_hint, channel=channel)
+		return self.modify_data_state(None, BasicOscilloscopeCtg.WAVEFORM, self._super_hint, indices=[channel])
 	
 	def refresh_state(self):
 		self.get_div_time()
@@ -245,12 +220,12 @@ class BasicOscilloscopeCtg(Driver):
 			self.get_chan_enable(ch)
 	
 	def apply_state(self):
-		self.set_div_time(self.state[BasicOscilloscopeCtg.DIV_TIME])
-		self.set_offset_time(self.state[BasicOscilloscopeCtg.OFFSET_TIME])
+		self.set_div_time(self.state.get(["div_time"]))
+		self.set_offset_time(self.state.get(["offset_time"]))
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
-			self.set_div_volt(ch, self.state[BasicOscilloscopeCtg.DIV_VOLT].get_idx_val(ch))
-			self.set_offset_volt(ch, self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_idx_val(ch))
-			self.set_chan_enable(ch, self.state[BasicOscilloscopeCtg.CHAN_EN].get_idx_val(ch))
+			self.set_div_volt(ch, self.state.get(["channels", "div_volt"], indices=[ch]))
+			self.set_offset_volt(ch, self.state.get(["channels", "offset_volt"], indices=[ch]))
+			self.set_chan_enable(ch, self.state.get(["channels", "chan_en"], indices=[ch]))
 	
 	def refresh_data(self):
 		

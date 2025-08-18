@@ -1,5 +1,6 @@
 import pyvisa as pv
 import pylogfile.base as plf
+from pylogfile.base import mdprint
 from constellation.relay import *
 import numpy as np
 import time
@@ -12,7 +13,7 @@ import matplotlib.pyplot as plt
 from jarnsaxa import hdf_to_dict, dict_to_hdf, Packable
 import datetime
 import numbers
-
+from ganymede import dict_summary
 
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
 	# By default, this method only returns non-local IPv4 addresses
@@ -153,7 +154,13 @@ class InstrumentState(Packable):
 	"""
 	
 	def __init__(self, log:plf.LogPile):
+		super().__init__()
 		self.log = log
+	
+	@abstractmethod
+	def set_manifest(self):
+		""" This function will populate the manifest and obj_manifest objects"""
+		pass
 	
 	def is_valid_type(self, test_obj):
 		''' Checks if test_obj is a valid type for 
@@ -188,7 +195,7 @@ class InstrumentState(Packable):
 			
 			# Check that parameter exists
 			if not hasattr(obj_top, p):
-				self.log.error(f"Cannot set state. Parameter >{p}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
+				self.log.error(f"Cannot set state. Parameter >{p}< not found in object >:q{obj_top}<.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
 				return False
 			
 			# Update object references
@@ -221,7 +228,7 @@ class InstrumentState(Packable):
 		if list_at_top:
 			obj_top.set_idx_val(indices[idx], value)
 		else:
-			setattr(obj_under, p[-1], value)
+			setattr(obj_under, params[-1], value)
 		
 		return True
 	
@@ -237,7 +244,7 @@ class InstrumentState(Packable):
 			
 			# Check that parameter exists
 			if not hasattr(obj_top, p):
-				self.log.error(f"Cannot set state. Parameter >{p}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
+				self.log.error(f"Cannot get state. Parameter >{p}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)})")
 				return None
 			
 			# Update object references
@@ -250,13 +257,13 @@ class InstrumentState(Packable):
 				
 				# Validate that an index exists
 				if indices is None:
-					self.log.error(f"Cannot set state. Required a valid index tuple for indices paramter.")
+					self.log.error(f"Cannot get state. Required a valid index tuple for indices paramter.")
 					return None
 				if len(indices) < idx+1:
-					self.log.error(f"Cannot set state. Required indices paramter with greater length.")
+					self.log.error(f"Cannot get state. Required indices paramter with greater length.")
 					return None
 				if indices[idx] is None:
-					self.log.error(f"Cannot set state. Required indices paramter value not equal to None.")
+					self.log.error(f"Cannot get state. Required indices paramter value not equal to None.")
 					return None
 				
 				# Move into list if not at end of navigating tree
@@ -270,7 +277,7 @@ class InstrumentState(Packable):
 		if list_at_top:
 			return obj_top.get_idx_val(indices[idx])
 		else:
-			return getattr(obj_under, p[-1])
+			return getattr(obj_under, params[-1])
 
 class IndexedList(Packable):
 	''' Used in driver.state and driver.data structures to organize values
@@ -288,10 +295,13 @@ class IndexedList(Packable):
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
 	
 	def __init__(self, first_index:int, num_indices:int, validate_type=None, log:plf.LogPile=None):
+		super().__init__()
 		
 		self.first_index = first_index
 		self.num_indices = num_indices
 		self.index_data = {}
+		
+		self._iter_index = 0
 		
 		self.validate_type = validate_type
 		
@@ -386,6 +396,21 @@ class IndexedList(Packable):
 		'''
 		
 		return (f"idx-{index}" in self.index_data.keys())
+	
+	def __iter__(self):
+		self._iter_index = self.first_index  # Reset iteration
+		return self
+
+	def __next__(self):
+		if self._iter_index < self.first_index+self.num_indices:
+			result = self.get_idx_val(self._iter_index)
+			self._iter_index += 1
+			return result
+		else:
+			raise StopIteration
+	
+	def get_range(self):
+		return range(self.first_index, self.first_index+self.num_indices)
 	
 	# def to_dict(self):
 	# 	''' Converts the object to a dictionary so it can be saved
@@ -834,10 +859,10 @@ class Driver(ABC):
 			# For these cases, the instrument is not queried (or at least, not again). Instead,
 			# the `value` parameter is saved to the interal state tracker and returned.
 			
-			prev_val = self.state.get(params, indices=indices)
+			# prev_val = self.state.get(params, indices=indices)
 			
 			# Record ing log
-			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: >{params}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: >{params}<=>:a{truncate_str(value)}<.") #, detail=f"Previous value was {truncate_str(prev_val)}")
 			
 			self.state.set(params, value, indices=indices)
 			
@@ -895,29 +920,29 @@ class Driver(ABC):
 	
 	def print_state(self):
 		
-		def mdprint(s:str):
-			print(plf.markdown(s))
+		# def split_param(s):
+		# 	before_brackets = s[:s.index("[")]
+		# 	inside_brackets = s[s.index("[")+1:s.index("]")]
+		# 	return before_brackets, inside_brackets
 		
-		def split_param(s):
-			before_brackets = s[:s.index("[")]
-			inside_brackets = s[s.index("[")+1:s.index("]")]
-			return before_brackets, inside_brackets
+		# for k, v in self.state.items():
+			
+		# 	# Get name and unit strings
+		# 	name, unit = split_param(k)
+			
+		# 	# Print value
+		# 	if isinstance(v, IndexedList):
+		# 		mdprint(f">:q{name}<:")
+		# 		mdprint(f"    value:")
+		# 		print(v.summarize(indent="        "))
+		# 		mdprint(f"    unit: >{unit}<")
+		# 	else:
+		# 		mdprint(f">:q{name}<:")
+		# 		mdprint(f"    value: >:a{truncate_str(v, limit=40)}<")
+		# 		mdprint(f"    unit: >{unit}<")\
 		
-		for k, v in self.state.items():
-			
-			# Get name and unit strings
-			name, unit = split_param(k)
-			
-			# Print value
-			if isinstance(v, IndexedList):
-				mdprint(f">:q{name}<:")
-				mdprint(f"    value:")
-				print(v.summarize(indent="        "))
-				mdprint(f"    unit: >{unit}<")
-			else:
-				mdprint(f">:q{name}<:")
-				mdprint(f"    value: >:a{truncate_str(v, limit=40)}<")
-				mdprint(f"    unit: >{unit}<")
+		state_dict = self.state.pack()
+		dict_summary(state_dict, verbose=1) #TODO: Make this a flag
 	
 	def state_to_dict(self, include_data:bool=False):
 		''' Saves the current instrument state to a dictionary. Note that it does NOT
