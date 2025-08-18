@@ -154,27 +154,37 @@ class InstrumentState:
 	
 	def __init__(self):
 		pass
+	
+	def set(params:tuple, value, indices:tuple=None):
+		''' Sets the value
+		'''
+		pass
+	
+	def get(params:tuple, indices:tuple=None):
+		'''
+		'''
+		pass
 
 class IndexedList:
 	''' Used in driver.state and driver.data structures to organize values
-	for parameters which apply to more than one channel.
+	for parameters which apply to more than one index.
 	
 	It also supports 'traces' for instruments that have both multiple traces and 
-	multiple channels such as a vector network analyzer.
+	multiple indices such as a vector network analyzer.
 	
-	NOTE: Channel numbering is internally zero-indexed. Most modern lab instruments
-	with multiple channels use 1-based indexing. This discrepency, when handled by
+	NOTE: Index numbering is internally zero-indexed. Most modern lab instruments
+	with multiple indices use 1-based indexing. This discrepency, when handled by
 	Heimdallr, will make the 1-based indexing purely cosmetic and converted to 0-based
 	as soon as possible internally.
 	'''
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
 	
-	def __init__(self, first_channel:int, max_channels:int, log:plf.LogPile=None, max_traces:int=0, ):
+	def __init__(self, first_index:int, num_indices:int, log:plf.LogPile=None):
 		
-		self.first_channel = first_channel
-		self.max_channels = max_channels
-		self.channel_data = {}
+		self.first_index = first_index
+		self.num_indices = num_indices
+		self.index_data = {}
 		
 		if log is None:
 			self.log = plf.LogPile()
@@ -185,98 +195,98 @@ class IndexedList:
 		
 		out = ""
 		
-		for ch in range(self.first_channel, self.first_channel+self.max_channels):
-			if ch != self.first_channel:
+		for ch in range(self.first_index, self.first_index+self.num_indices):
+			if ch != self.first_index:
 				out = out + "\n"
-			val = self.get_ch_val(ch)
-			out = out + f"{indent}>:qchannel {ch}<: >:a@:LOCK{truncate_str(val, 40)}@:UNLOCK<@:LOCK, ({type(val)})@:UNLOCK"
+			val = self.get_idx_val(ch)
+			out = out + f"{indent}>:qindex {ch}<: >:a@:LOCK{truncate_str(val, 40)}@:UNLOCK<@:LOCK, ({type(val)})@:UNLOCK"
 		
 		out = plf.markdown(out)
 		return out
 	
-	def get_valid_ch(self, channel:int) -> int:
-		''' Checks if a given channel number is valid. If not, returns
-		closest valid channel.
+	def get_valid_idx(self, index:int) -> int:
+		''' Checks if a given index number is valid. If not, returns
+		closest valid index.
 		
 		Args:
-			channel (int): Channel value to validate. Zero-indexed.
+			index (int): Index value to validate. Zero-indexed.
 		
 		Returns:
-			int: Validated channel number.
+			int: Validated index number.
 		
 		'''
-		if channel >= self.first_channel+self.max_channels:
-			self.log.error(f"Max channel exceeded. Defaulting to last possible channel") #TODO: Needs prefix
-			return self.first_channel+self.max_channels-1
-		elif channel < self.first_channel:
-			self.log.error(f"Min channel exceeded. Defaulting to first possible channel") #TODO: Needs prefix
-			return self.first_channel
+		if index >= self.first_index+self.num_indices:
+			self.log.error(f"Max index exceeded. Defaulting to last possible index") #TODO: Needs prefix
+			return self.first_index+self.num_indices-1
+		elif index < self.first_index:
+			self.log.error(f"Min index exceeded. Defaulting to first possible index") #TODO: Needs prefix
+			return self.first_index
 		else:
-			return channel
+			return index
 	
-	def set_ch_val(self, channel:int, value) -> None:
-		''' Sets the value assigned to the specified channel. 
+	def set_idx_val(self, index:int, value) -> None:
+		''' Sets the value assigned to the specified index. 
 		
 		Args:
-			channel (int): Channel number, zero-indexed.
-			value (any): Value to assign to channel.
+			index (int): Index number, zero-indexed.
+			value (any): Value to assign to index.
 		
 		Returns:
 			None
 		'''
-		chan = self.get_valid_ch(channel)
-		self.channel_data[chan] = value
+		chan = self.get_valid_ch(index)
+		self.index_data[chan] = value
 	
-	def get_ch_val(self, channel:int):
-		''' Get the value assigned to the channel.
+	def get_idx_val(self, index:int):
+		''' Get the value assigned to the index.
 		
 		Args:
-			channel (int): Channel to get, zero-indexed.
+			index (int): Index to get, zero-indexed.
 		
 		Returns:
-			Value assigned to channel. Any type. Returns None if value
-			has not been assigned to channel yet.
+			Value assigned to index. Any type. Returns None if value
+			has not been assigned to index yet.
 		'''
-		chan = self.get_valid_ch(channel)
-		if not self.ch_is_populated(chan):
-			self.log.error(f"Cannot return channel value; channel has not been populated.")
+		chan = self.get_valid_ch(index)
+		if not self.idx_is_populated(chan):
+			self.log.error(f"Cannot return index value; index has not been populated.")
 			return None
-		return self.channel_data[chan]
+		return self.index_data[chan]
 	
-	def ch_is_populated(self, channel:int):
-		''' Checks if the specified channel has been assigned a value.
+	def idx_is_populated(self, index:int):
+		''' Checks if the specified index has been assigned a value.
 		
 		Args:
-			channel (int): Channel to get, zero-indexed.
+			index (int): Index to get, zero-indexed.
 		
 		Returns:
-			bool: True if channel has been assigned a value.
+			bool: True if index has been assigned a value.
 		'''
 		
-		return (channel in self.channel_data.keys())
+		return (index in self.index_data.keys())
 	
 	def to_dict(self):
 		''' Converts the object to a dictionary so it can be saved
 		more easily to disk.
 		
 		Returns:
-			dict: Dictionary containing the value for each channel,
-			with channel numbers (zero-indexed) as keys. For compatability
-			with HDF, the keys as saved as "ch-<number>" rather than
-			just the channel number. Non-populated channels will not be saved
-			to save space. Also includes two other keys, 'first_channel' and 
-			'max_channels' containing those state variables.
+			dict: Dictionary containing the value for each index,
+			with index numbers (zero-indexed) as keys. For compatability
+			with HDF, the keys as saved as "idx-<number>" rather than
+			just the index number. Non-populated indices will not be saved
+			to save space. Also includes two other keys, 'first_index' and 
+			'num_indices' containing those state variables.
 		'''
 		
-		data = {'first_channel':self.first_channel, 'max_channels':self.max_channels}
-		for ch in range(self.first_channel, self.first_channel+self.max_channels):
+		data = {'first_index':self.first_index, 'num_indices':self.num_indices}
+		for ch in range(self.first_index, self.first_index+self.num_indices):
 			
-			ch_str = f"ch-{ch}"
+			ch_str = f"idx-{ch}"
 			
-			if not self.ch_is_populated(ch):
+			if not self.idx_is_populated(ch):
 				data[ch_str] = None
 			else:
-				data[ch_str] = self.get_ch_val(ch)
+				data[ch_str] = self.get_idx_val(ch)
 				
 				#TODO: Error check that this item is JSON serializable
 		
@@ -286,9 +296,9 @@ class IndexedList:
 		''' Populates the IndexedList from a dictionary.
 		
 		Args:
-			data (dict): Dictionary to populate from. Expects a key 'first_channel'
-				and a key 'max_channels' to define the valid channel range. All 
-				other keys follow the format 'ch-<n>' where n is the channel number,
+			data (dict): Dictionary to populate from. Expects a key 'first_index'
+				and a key 'num_indices' to define the valid index range. All 
+				other keys follow the format 'ch-<n>' where n is the index number,
 				and the following value is the data value, in any JSON serializable
 				format.
 		
@@ -297,8 +307,8 @@ class IndexedList:
 		'''
 		
 		try:
-			self.first_channel = data['first_channel']
-			self.max_channels = data['max_channels']
+			self.first_index = data['first_index']
+			self.num_indices = data['num_indices']
 		except Exception as e:
 			self.log.error(f"Failed to populate IndexedList from dict ({e}).")
 			return False
@@ -306,16 +316,16 @@ class IndexedList:
 		# Scan over all items
 		for k_str, v in data.items():
 			
-			if k_str == 'first_channel' or k_str == 'max_channels':
+			if k_str == 'first_index' or k_str == 'num_indices':
 				continue
 			
 			# Attempt to get int key and set value
 			try:
-				# Get just the channel number
+				# Get just the index number
 				ch = int(k_str.split('-', 1)[1])
 				
 				# Save value
-				self.set_ch_val(ch, v)
+				self.set_idx_val(ch, v)
 				
 			except Exception as e:
 				self.log.error(f"Failed to parse key(>:q@:LOCK{k_str}@:UNLOCK<), value(>:q@:LOCK{v}@:UNLOCK<) pair. ({e})")
@@ -676,7 +686,7 @@ class Driver(ABC):
 	def critical(self, message:str, detail:str=""):
 		self.log.critical(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
-	def modify_state(self, query_func:callable, param:str, value, channel:int=None):
+	def modify_state(self, query_func:callable, params:tuple, value, indices:tuple=None):
 		"""
 		Updates the internal state tracker.
 		
@@ -684,70 +694,38 @@ class Driver(ABC):
 			query_func (callable): Function used to query the state of this parameter from
 				the instrument. This parameter should be set to None if modify_state is 
 				being called from a query function. 
-			param (str): Parameter to update
+			param (tuple): Tuple of strings containing the state class attribute(s) to 
+				update. Multiple parameters can be passed for nested objects.
 			value: Value for parameter being sent to the instrument. This will be used to
 				update the internal state if query_func is None, or if the instrument is in
 				dummy mode or blind_state_update mode. 
-			channel (int): Optional value for parameters that apply to individual channels of
-				an instrument. Should be set to None (default) for parameters which do not
-				have multiple channels. Channels are indexed from 1, not 0.
+			indices (tuple): Tuple of ints. If N strings are contained in the `param`
+				tuple, indices must contain N-1 ints. indices's first value contains the index for 
+				the first param, assuming it's an IndexedList. If it is not, pass None for that
+				value in indices.
 			
 		Returns:
 			value, or result of query_func if provided.
 		"""
 		
 		if (query_func is None) or self.dummy or self.blind_state_update:
-			prev_val = self.state[param]
+			# For these cases, the instrument is not queried (or at least, not again). Instead,
+			# the `value` parameter is saved to the interal state tracker and returned.
+			
+			prev_val = self.state.get(params, indices=indices)
 			
 			# Record ing log
-			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: >{params}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
 			
-			if channel is None:
-				self.state[param] = value
-			else:
-				try:
-					self.state[param].set_ch_val(channel, value)
-				except Exception as e:
-					self.log.error(f"Failed to modify internal state. {e}")
-			val = value
-		else:
-			val = query_func()
-		
-		return val
-	
-	def modify_state2(self, query_func:callable, param:str, value, channel:int=None):
-		"""
-		Updates the internal state tracker.
-		
-		Parameters:
-			query_func (callable): Function used to query the state of this parameter from
-				the instrument. This parameter should be set to None if modify_state is 
-				being called from a query function. 
-			param (str): Parameter to update
-			value: Value for parameter being sent to the instrument. This will be used to
-				update the internal state if query_func is None, or if the instrument is in
-				dummy mode or blind_state_update mode. 
-			channel (int): Optional value for parameters that apply to individual channels of
-				an instrument. Should be set to None (default) for parameters which do not
-				have multiple channels. Channels are indexed from 1, not 0.
+			self.state.set(params, value, indices=indices)
 			
-		Returns:
-			value, or result of query_func if provided.
-		"""
-		
-		if (query_func is None) or self.dummy or self.blind_state_update:
-			prev_val = self.state[param]
-			
-			# Record ing log
-			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
-			
-			if channel is None:
-				self.state[param] = value
-			else:
-				try:
-					self.state.edit_param(param).set_ch_val(channel, value)
-				except Exception as e:
-					self.log.error(f"Failed to modify internal state. {e}")
+			# if channel is None:
+			# 	self.state[param] = value
+			# else:
+			# 	try:
+			# 		self.state[param].set_idx_val(channel, value)
+			# 	except Exception as e:
+			# 		self.log.error(f"Failed to modify internal state. {e}")
 			val = value
 		else:
 			val = query_func()
@@ -784,7 +762,7 @@ class Driver(ABC):
 				self.data[param] = value
 			else:
 				try:
-					self.data[param].set_ch_val(1, value)
+					self.data[param].set_idx_val(1, value)
 				except Exception as e:
 					self.error(f"Failed to modify internal state. {e}")
 			val = value

@@ -68,13 +68,13 @@ class BasicOscilloscopeCtg(Driver):
 			wave = ampl * np.sin(t_series*2*np.pi*freq)
 			
 			# Trim waveform to represent clipping on real scope
-			v_span = self.state[BasicOscilloscopeCtg.NDIV_VERT] * self.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(channel)
-			v_min = -1*v_span/2+self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_ch_val(channel)
+			v_span = self.state[BasicOscilloscopeCtg.NDIV_VERT] * self.state[BasicOscilloscopeCtg.DIV_VOLT].get_idx_val(channel)
+			v_min = -1*v_span/2+self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_idx_val(channel)
 			v_max = v_min + v_span
 			wave_clipped = [np.max([np.min([element, v_max]), v_min]) for element in wave]
 			
 			# Return result
-			self.data[BasicOscilloscopeCtg.WAVEFORM].set_ch_val(channel, {"time_s":t_series, "volt_V":wave_clipped})
+			self.data[BasicOscilloscopeCtg.WAVEFORM].set_idx_val(channel, {"time_s":t_series, "volt_V":wave_clipped})
 	
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
@@ -109,10 +109,10 @@ class BasicOscilloscopeCtg(Driver):
 				case "set_chan_enable":
 					rval = None
 				case "get_chan_enable":
-					rval = self.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val(args[0])
+					rval = self.state[BasicOscilloscopeCtg.CHAN_EN].get_idx_val(args[0])
 				case "get_waveform":
 					self.remake_dummy_waves()
-					rval = self.data[BasicOscilloscopeCtg.WAVEFORM].get_ch_val(args[0])
+					rval = self.data[BasicOscilloscopeCtg.WAVEFORM].get_idx_val(args[0])
 				case _:
 					found = False
 				
@@ -230,9 +230,9 @@ class BasicOscilloscopeCtg(Driver):
 		self.set_div_time(self.state[BasicOscilloscopeCtg.DIV_TIME])
 		self.set_offset_time(self.state[BasicOscilloscopeCtg.OFFSET_TIME])
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
-			self.set_div_volt(ch, self.state[BasicOscilloscopeCtg.DIV_VOLT].get_ch_val(ch))
-			self.set_offset_volt(ch, self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_ch_val(ch))
-			self.set_chan_enable(ch, self.state[BasicOscilloscopeCtg.CHAN_EN].get_ch_val(ch))
+			self.set_div_volt(ch, self.state[BasicOscilloscopeCtg.DIV_VOLT].get_idx_val(ch))
+			self.set_offset_volt(ch, self.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_idx_val(ch))
+			self.set_chan_enable(ch, self.state[BasicOscilloscopeCtg.CHAN_EN].get_idx_val(ch))
 	
 	def refresh_data(self):
 		
