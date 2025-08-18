@@ -272,7 +272,7 @@ class InstrumentState(Packable):
 		else:
 			return getattr(obj_under, p[-1])
 
-class IndexedList:
+class IndexedList(Packable):
 	''' Used in driver.state and driver.data structures to organize values
 	for parameters which apply to more than one index.
 	
@@ -299,6 +299,14 @@ class IndexedList:
 			self.log = plf.LogPile()
 		else:
 			self.log = log
+	
+	def set_manifest(self):
+		self.manifest.append("first_index")
+		self.manifest.append("num_indices")
+		self.manifest.append("index_data")
+		
+		#TODO: Should validate_type somehow be added?
+		#TODO: Should log be added?
 	
 	def summarize(self, indent:str=""):
 		
@@ -349,7 +357,7 @@ class IndexedList:
 				raise TypeError
 		
 		chan = self.get_valid_idx(index)
-		self.index_data[chan] = value
+		self.index_data[f"idx-{chan}"] = value
 	
 	def get_idx_val(self, index:int):
 		''' Get the value assigned to the index.
@@ -365,7 +373,7 @@ class IndexedList:
 		if not self.idx_is_populated(chan):
 			self.log.error(f"Cannot return index value; index has not been populated.")
 			return None
-		return self.index_data[chan]
+		return self.index_data[f"idx-{chan}"]
 	
 	def idx_is_populated(self, index:int):
 		''' Checks if the specified index has been assigned a value.
@@ -377,75 +385,75 @@ class IndexedList:
 			bool: True if index has been assigned a value.
 		'''
 		
-		return (index in self.index_data.keys())
+		return (f"idx-{index}" in self.index_data.keys())
 	
-	def to_dict(self):
-		''' Converts the object to a dictionary so it can be saved
-		more easily to disk.
+	# def to_dict(self):
+	# 	''' Converts the object to a dictionary so it can be saved
+	# 	more easily to disk.
 		
-		Returns:
-			dict: Dictionary containing the value for each index,
-			with index numbers (zero-indexed) as keys. For compatability
-			with HDF, the keys as saved as "idx-<number>" rather than
-			just the index number. Non-populated indices will not be saved
-			to save space. Also includes two other keys, 'first_index' and 
-			'num_indices' containing those state variables.
-		'''
+	# 	Returns:
+	# 		dict: Dictionary containing the value for each index,
+	# 		with index numbers (zero-indexed) as keys. For compatability
+	# 		with HDF, the keys as saved as "idx-<number>" rather than
+	# 		just the index number. Non-populated indices will not be saved
+	# 		to save space. Also includes two other keys, 'first_index' and 
+	# 		'num_indices' containing those state variables.
+	# 	'''
 		
-		data = {'first_index':self.first_index, 'num_indices':self.num_indices}
-		for ch in range(self.first_index, self.first_index+self.num_indices):
+	# 	data = {'first_index':self.first_index, 'num_indices':self.num_indices}
+	# 	for ch in range(self.first_index, self.first_index+self.num_indices):
 			
-			ch_str = f"idx-{ch}"
+	# 		ch_str = f"idx-{ch}"
 			
-			if not self.idx_is_populated(ch):
-				data[ch_str] = None
-			else:
-				data[ch_str] = self.get_idx_val(ch)
+	# 		if not self.idx_is_populated(ch):
+	# 			data[ch_str] = None
+	# 		else:
+	# 			data[ch_str] = self.get_idx_val(ch)
 				
-				#TODO: Error check that this item is JSON serializable
+	# 			#TODO: Error check that this item is JSON serializable
 		
-		return data
+	# 	return data
 	
-	def from_dict(self, data:dict):
-		''' Populates the IndexedList from a dictionary.
+	# def from_dict(self, data:dict):
+	# 	''' Populates the IndexedList from a dictionary.
 		
-		Args:
-			data (dict): Dictionary to populate from. Expects a key 'first_index'
-				and a key 'num_indices' to define the valid index range. All 
-				other keys follow the format 'ch-<n>' where n is the index number,
-				and the following value is the data value, in any JSON serializable
-				format.
+	# 	Args:
+	# 		data (dict): Dictionary to populate from. Expects a key 'first_index'
+	# 			and a key 'num_indices' to define the valid index range. All 
+	# 			other keys follow the format 'ch-<n>' where n is the index number,
+	# 			and the following value is the data value, in any JSON serializable
+	# 			format.
 		
-		Returns:
-			bool: True if dictionary was properly interpreted.
-		'''
+	# 	Returns:
+	# 		bool: True if dictionary was properly interpreted.
+	# 	'''
 		
-		try:
-			self.first_index = data['first_index']
-			self.num_indices = data['num_indices']
-		except Exception as e:
-			self.log.error(f"Failed to populate IndexedList from dict ({e}).")
-			return False
+	# 	try:
+	# 		self.first_index = data['first_index']
+	# 		self.num_indices = data['num_indices']
+	# 	except Exception as e:
+	# 		self.log.error(f"Failed to populate IndexedList from dict ({e}).")
+	# 		return False
 		
-		# Scan over all items
-		for k_str, v in data.items():
+	# 	# Scan over all items
+	# 	for k_str, v in data.items():
 			
-			if k_str == 'first_index' or k_str == 'num_indices':
-				continue
+	# 		if k_str == 'first_index' or k_str == 'num_indices':
+	# 			continue
 			
-			# Attempt to get int key and set value
-			try:
-				# Get just the index number
-				ch = int(k_str.split('-', 1)[1])
+	# 		# Attempt to get int key and set value
+	# 		try:
+	# 			# Get just the index number
+	# 			ch = int(k_str.split('-', 1)[1])
 				
-				# Save value
-				self.set_idx_val(ch, v)
+	# 			# Save value
+	# 			self.set_idx_val(ch, v)
 				
-			except Exception as e:
-				self.log.error(f"Failed to parse key(>:q@:LOCK{k_str}@:UNLOCK<), value(>:q@:LOCK{v}@:UNLOCK<) pair. ({e})")
-				return False
+	# 		except Exception as e:
+	# 			self.log.error(f"Failed to parse key(>:q@:LOCK{k_str}@:UNLOCK<), value(>:q@:LOCK{v}@:UNLOCK<) pair. ({e})")
+	# 			return False
 		
-		return True
+	# 	return True
 
 class DataEntry:
 	''' Used in driver.data to describe a measurement result and its

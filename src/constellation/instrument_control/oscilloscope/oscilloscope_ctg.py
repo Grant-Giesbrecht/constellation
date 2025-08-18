@@ -1,16 +1,40 @@
 from constellation.base import *
 from constellation.networking.net_client import *
 
+class BasicOscilloscopeChannelState(Packable):
+	
+	def __init__(self):
+		self.div_volt = None
+		self.offset_volt = None
+		self.chan_en = None
+	
+	def set_manifest(self):
+		self.manifest.append("div_volt")
+		self.manifest.append("offset_volt")
+		self.manifest.append("chan_en")
+
+class BasicOscilloscopeState(InstrumentState):
+	def __init__(self, log:plf.LogPile, first_channel:int, num_channels:int):
+		super().__init__(log=log)
+		
+		self.first_channel = first_channel
+		self.num_channels = num_channels
+		
+		self.div_time = None
+		self.offset_time = None
+		self.channels = IndexedList(self.first_channel, self.num_channels, validate_type=BasicOscilloscopeChannelState)
+	
+	def set_manifest(self):
+		
+		self.manifest.append("first_channel")
+		self.manifest.append("num_channels")
+		self.manifest.append("div_time")
+		self.manifest.append("offset_time")
+		self.obj_manifest.append("channels")
+
 class BasicOscilloscopeCtg(Driver):
 	
-	DIV_TIME = "div-time[s]"
-	OFFSET_TIME = "offset-time[s]"
-	DIV_VOLT = "div-volt[V]"
-	OFFSET_VOLT = "offset-volt[V]"
-	CHAN_EN = "chan_en[bool]"
-	NDIV_VERT = "num-div-vert[1]"
-	NDIV_HORIZ = "num-div-horiz[1]"
-	WAVEFORM = "waveform[V]"
+	WAVEFORM = "waveform"
 	
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
@@ -19,13 +43,7 @@ class BasicOscilloscopeCtg(Driver):
 		self.num_div_horiz = num_div_horiz
 		self.num_div_vert = num_div_vert
 		
-		self.state[BasicOscilloscopeCtg.DIV_TIME] = None
-		self.state[BasicOscilloscopeCtg.OFFSET_TIME] = None
-		self.state[BasicOscilloscopeCtg.NDIV_HORIZ] = num_div_horiz
-		self.state[BasicOscilloscopeCtg.NDIV_VERT] = num_div_vert
-		self.state[BasicOscilloscopeCtg.DIV_VOLT] = IndexedList(self.first_channel, self.max_channels, log=self.log)
-		self.state[BasicOscilloscopeCtg.OFFSET_VOLT] = IndexedList(self.first_channel, self.max_channels, log=self.log)
-		self.state[BasicOscilloscopeCtg.CHAN_EN] = IndexedList(self.first_channel, self.max_channels, log=self.log)
+		self.state = BasicOscilloscopeState(self.log, self.first_channel, self.max_channels)
 		
 		self.data[BasicOscilloscopeCtg.WAVEFORM] = IndexedList(self.first_channel, self.max_channels, log=self.log)
 		
