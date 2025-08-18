@@ -4,8 +4,8 @@ https://www.keysight.com/us/en/assets/9018-03876/service-manuals/9018-03876.pdf?
 '''
 
 import array
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.digital_multimeter_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.digital_multimeter_ctg import *
 
 class Keysight34400(DigitalMultimeterCtg):
 	

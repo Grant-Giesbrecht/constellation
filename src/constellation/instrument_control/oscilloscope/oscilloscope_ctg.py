@@ -1,5 +1,5 @@
-from heimdallr.base import *
-from heimdallr.networking.net_client import *
+from constellation.base import *
+from constellation.networking.net_client import *
 
 class BasicOscilloscopeCtg(Driver):
 	

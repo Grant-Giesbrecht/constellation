@@ -4,8 +4,8 @@
 from pyfrost.pf_server import *
 from pylogfile.base import *
 import argparse
-from heimdallr.base import *
-from heimdallr.networking.net_server import *
+from constellation.base import *
+from constellation.networking.net_server import *
 
 # Parse arguments
 parser = argparse.ArgumentParser()

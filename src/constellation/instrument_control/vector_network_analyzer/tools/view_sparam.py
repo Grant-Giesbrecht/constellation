@@ -14,7 +14,7 @@ import argparse
 import mplcursors
 
 from pylogfile.base import mdprint
-from heimdallr.helpers import lin_to_dB
+from constellation.helpers import lin_to_dB
 from jarnsaxa import hdf_to_dict
 
 parser = argparse.ArgumentParser()

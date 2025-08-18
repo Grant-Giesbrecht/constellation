@@ -4,8 +4,8 @@ Primarily from translating MATLAB code originally written by Manuel Castellanos-
 '''
 
 import array
-from heimdallr.base import *
-# from heimdallr.instrument_control.categories.spectrum_analyzer_ctg import *
+from constellation.base import *
+# from constellation.instrument_control.categories.spectrum_analyzer_ctg import *
 
 class Keysight_33000X(Driver):
 	

@@ -2,7 +2,7 @@
 actually work. I think the LeCroy is using unconventional commands.
 """
 
-from heimdallr.instrument_control.oscilloscope.oscilloscope_ctg import *
+from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
 
 class LeCroy44Xi(BasicOscilloscopeCtg):
 

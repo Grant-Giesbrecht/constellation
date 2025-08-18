@@ -1,4 +1,4 @@
-from heimdallr.base import *
+from constellation.base import *
 
 def lin_to_dB(x_lin:float, use10:bool=False):
 	if use10:

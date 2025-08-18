@@ -3,8 +3,8 @@
 Manual (Requires login and R&S approval): https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/dl_common_library/dl_manuals/gb_1/z/zva_2/ZVA_ZVB_ZVT_OperatingManual_en_33.pdf
 '''
 
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.vector_network_analyzer_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.vector_network_analyzer_ctg import *
 import array
 
 class RohdeSchwarzZVA(VectorNetworkAnalyzerCtg):

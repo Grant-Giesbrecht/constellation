@@ -12,8 +12,6 @@ import matplotlib.pyplot as plt
 from jarnsaxa import hdf_to_dict, dict_to_hdf
 import datetime
 
-
-
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
 	# By default, this method only returns non-local IPv4 addresses
 	# To return IPv6 only, call get_ip('ipv6')

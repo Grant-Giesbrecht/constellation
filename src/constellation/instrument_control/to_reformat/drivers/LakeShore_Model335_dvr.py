@@ -4,7 +4,7 @@
 Manual: https://www.lakeshore.com/docs/default-source/product-downloads/335_manual038a7cfe0db7421f941ebb45db85741f.pdf?sfvrsn=e16b9529_1
 """
 
-from heimdallr.instrument_control.categories.all_ctgs import *
+from constellation.instrument_control.categories.all_ctgs import *
 
 class LakeShoreModel335(PIDTemperatureControllerCtg):
 	

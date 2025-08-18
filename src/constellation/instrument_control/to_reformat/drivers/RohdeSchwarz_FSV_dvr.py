@@ -5,8 +5,8 @@ Manual: https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/dl_common_library/dl_
 '''
 
 import array
-from heimdallr.base import *
-# from heimdallr.instrument_control.categories.spectrum_analyzer_ctg import *
+from constellation.base import *
+# from constellation.instrument_control.categories.spectrum_analyzer_ctg import *
 
 class RohdeSchwarzFSV(Driver):
 	

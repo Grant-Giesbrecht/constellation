@@ -1,6 +1,6 @@
 from pyfrost.base import *
 from pyfrost.pf_client import *
-from heimdallr.base import *
+from constellation.base import *
 
 class NetworkCommand(Packable):
 	''' Object used to represent a function call passed over the Heimdallr

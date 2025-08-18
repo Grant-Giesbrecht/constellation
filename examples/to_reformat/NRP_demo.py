@@ -1,4 +1,4 @@
-from heimdallr.all import *
+from constellation.all import *
 import sys
 
 log = plf.LogPile()

@@ -1,6 +1,6 @@
-from heimdallr.base import *
-from heimdallr.instrument_control.oscilloscope.oscilloscope_ctg import *
-from heimdallr.ui import *
+from constellation.base import *
+from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
+from constellation.ui import *
 
 from PyQt6.QtWidgets import QWidget, QGridLayout, QLabel, QTextEdit, QPushButton, QLineEdit, QGroupBox
 from PyQt6.QtGui import QDoubleValidator

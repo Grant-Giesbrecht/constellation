@@ -3,8 +3,8 @@ Manual: https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/dl_common_library/dl_
 """
 
 from jarnsaxa import Packable
-from heimdallr.base import *
-from heimdallr.helpers import lin_to_dB
+from constellation.base import *
+from constellation.helpers import lin_to_dB
 
 def plot_vna_mag(data:dict, label:str=""):
 	''' Helper function to plot the data output from a VNA get_trace_data() call.

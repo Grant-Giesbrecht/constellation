@@ -1,5 +1,5 @@
-from heimdallr.all import *
-from heimdallr.networking.network import *
+from constellation.all import *
+from constellation.networking.network import *
 import argparse
 
 parser = argparse.ArgumentParser()

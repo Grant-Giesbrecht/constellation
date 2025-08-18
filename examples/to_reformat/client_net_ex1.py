@@ -1,10 +1,10 @@
 ''' Minimum example for setting up a command line client using Heimdallr.
 '''
 
-from heimdallr.all import *
-from heimdallr.networking.network import *
-from heimdallr.networking.net_server import *
-from heimdallr.networking.net_client import *
+from constellation.all import *
+from constellation.networking.network import *
+from constellation.networking.net_server import *
+from constellation.networking.net_client import *
 import argparse
 
 # Parse Commandline arguments

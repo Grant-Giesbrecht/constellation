@@ -6,7 +6,7 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'Heimdallr'
+project = 'constellation'
 copyright = '2024, Grant Giesbrecht'
 author = 'Grant Giesbrecht'
 release = '0.0.0'

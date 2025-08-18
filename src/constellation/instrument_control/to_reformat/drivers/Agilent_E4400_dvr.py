@@ -3,8 +3,8 @@
 Manual: http://www.doe.carleton.ca/~nagui/labequip/synth/manuals/e4400324.pdf
 """
 
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.rf_signal_generator_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.rf_signal_generator_ctg import *
 
 class AgilentE4400(RFSignalGeneratorCtg):
 

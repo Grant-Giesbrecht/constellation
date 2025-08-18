@@ -1,6 +1,6 @@
 from pylogfile.base import *
-from heimdallr.networking.network import *
-from heimdallr.base import *
+from constellation.networking.network import *
+from constellation.base import *
 
 class HeimdallrClientAgent(ClientAgent):
 	

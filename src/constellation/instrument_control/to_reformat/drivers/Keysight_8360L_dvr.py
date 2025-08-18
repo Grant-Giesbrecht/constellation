@@ -1,8 +1,8 @@
 """ Keysight 8360L Series Swept CW Generator
 """
 
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.rf_signal_generator_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.rf_signal_generator_ctg import *
 
 class Keysight8360L(RFSignalGeneratorCtg):
 

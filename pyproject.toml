@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "heimdallr-py"
+name = "constellation-py"
 version = "0.0.0.dev1"
 authors = [
   { name="Grant Giesbrecht", email="grant.giesbrecht@colorado.edu" },
@@ -30,5 +30,5 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Grant-Giesbrecht/heimdallr"
-Issues = "https://github.com/Grant-Giesbrecht/heimdallr/issues"
+Homepage = "https://github.com/Grant-Giesbrecht/constellation"
+Issues = "https://github.com/Grant-Giesbrecht/constellation/issues"

@@ -8,8 +8,8 @@ Manual: https://www.testworld.com/wp-content/uploads/user-guide-help-agilent-e83
 '''
 
 import array
-from heimdallr.base import *
-from heimdallr.instrument_control.spectrum_analyzer.spectrum_analyzer_ctg import *
+from constellation.base import *
+from constellation.instrument_control.spectrum_analyzer.spectrum_analyzer_ctg import *
 
 class SiglentSSA3000X(SpectrumAnalyzerCtg):
 	

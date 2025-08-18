@@ -4,7 +4,7 @@ resultion because the dummy waveform is mimicing clipping in the real
 hardware.
 """
 
-from heimdallr.all import *
+from constellation.all import *
 import matplotlib.pyplot as plt
 
 log = plf.LogPile()

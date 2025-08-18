@@ -3,8 +3,8 @@
 Manual: 
 '''
 
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.lock_in_amplifier_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.lock_in_amplifier_ctg import *
 import zhinst.utils
 
 def bool_to_int(x:bool):

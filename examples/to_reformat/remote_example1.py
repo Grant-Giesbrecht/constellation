@@ -1,4 +1,4 @@
-from heimdallr import *
+from constellation import *
 
 sa1 = SpectrumAnalyzerRemote(remote_id="RohdeSchwarz_FSQ")
 

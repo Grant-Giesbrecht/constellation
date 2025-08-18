@@ -3,8 +3,8 @@
 Manual: https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/pdm/cl_manuals/user_manual/1178_5566_01/NRX_UserManual_en_10.pdf
 '''
 
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.rf_power_sensor_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.rf_power_sensor_ctg import *
 
 class RohdeSchwarzNRX(RFPowerSensor):
 	

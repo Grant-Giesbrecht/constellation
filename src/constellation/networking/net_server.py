@@ -3,8 +3,8 @@ from colorama import Fore, Style, Back
 from pyfrost.base import *
 from pyfrost.pf_server import *
 
-from heimdallr.networking.network import *
-from heimdallr.base import *
+from constellation.networking.network import *
+from constellation.base import *
 
 from Crypto.Random import get_random_bytes
 from Crypto.Cipher import AES

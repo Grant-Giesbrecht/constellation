@@ -2,11 +2,11 @@
 oscilloscope GUI.
 """
 
-from heimdallr.all import *
+from constellation.all import *
 from PyQt6 import QtWidgets
-# from heimdallr.ui import HeimdallrWindow
+# from constellation.ui import HeimdallrWindow
 import matplotlib.pyplot as plt
-from heimdallr.instrument_control.oscilloscope.oscilloscope_gui import *
+from constellation.instrument_control.oscilloscope.oscilloscope_gui import *
 
 log = plf.LogPile()
 log.str_format.show_detail = False

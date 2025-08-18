@@ -3,10 +3,10 @@ Saves S-parameters from a VNA to disk.
 """
 
 
-from heimdallr.all import *
+from constellation.all import *
 import matplotlib.pyplot as plt
 from jarnsaxa import hdf_to_dict, dict_to_hdf
-from heimdallr.instrument_control.vector_network_analyzer.drivers.RohdeSchwarz_ZVA_dvr import *
+from constellation.instrument_control.vector_network_analyzer.drivers.RohdeSchwarz_ZVA_dvr import *
 
 
 

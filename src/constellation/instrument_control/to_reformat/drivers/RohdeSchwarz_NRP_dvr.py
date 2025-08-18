@@ -4,8 +4,8 @@ Manual: https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/pdm/cl_manuals/user_m
 	    https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/pdm/cl_manuals/user_manual/1177_5079_01/NRPxxSN_UserManual_en_21.pdf
 '''
 
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.rf_power_sensor_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.rf_power_sensor_ctg import *
 
 class RohdeSchwarzNRP(RFPowerSensor):
 	

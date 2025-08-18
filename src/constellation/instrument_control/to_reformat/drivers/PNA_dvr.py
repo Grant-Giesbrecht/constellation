@@ -5,8 +5,8 @@
 Manual: https://www.testworld.com/wp-content/uploads/user-guide-help-agilent-e8362b-e8363b-e8364b-e8361a-n5230a-n5242a-pna-series-microwave-network-analyzers.pdf
 '''
 
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.vector_network_analyzer_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.vector_network_analyzer_ctg import *
 
 class KeysightPNAE8364B(VectorNetworkAnalyzerCtg):
 	

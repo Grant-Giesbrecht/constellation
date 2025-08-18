@@ -1,8 +1,8 @@
 """ Rohde & Schwarz SGMA RF Signal Generator
 """
 
-from heimdallr.base import *
-from heimdallr.instrument_control.categories.rf_signal_generator_ctg import *
+from constellation.base import *
+from constellation.instrument_control.categories.rf_signal_generator_ctg import *
 
 class RohdeSchwarz_SGMA(RFSignalGeneratorCtg):
 

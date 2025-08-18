@@ -1,4 +1,4 @@
-from heimdallr.base import *
+from constellation.base import *
 
 def test_bool_conversion():
 	assert bool_to_str01(True) == "1"
