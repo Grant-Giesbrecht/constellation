@@ -17,41 +17,53 @@ def plot_vna_mag(data:dict, label:str=""):
 	plt.xlabel("Frequency [GHz]")
 	plt.ylabel("S-Parameters [dB]")
 
-class VNATraceConfig(Packable):
+class VNATraceState(Packable):
 	""" Class used to represent a trace that is active on the VNA.
 	"""
 	
-	def __init__(self):
+	def __init__(self, log:plf.LogPile):
+		super().__init__(log)
+		
 		self.num = 1 # Trace number
 		self.channel = 1 # Channel that trace is defined on
 		self.id_str = "Tr1"
-		self.measurement = VectorNetworkAnalyzerCtg.MEAS_S11
-		self.format = VectorNetworkAnalyzerCtg.FORM_LOG_MAG
+		self.measurement = BasicVectorNetworkAnalyzerState.MEAS_S11
+		self.format = BasicVectorNetworkAnalyzerState.FORM_LOG_MAG
 		
 		self.data = {}
-
-class VNAChannelConfig(Packable):
-	""" Describes the state of one VNA channel.
-	"""
-	
-	FREQ_START = "freq-start[Hz]"
-	FREQ_END = "freq-end[Hz]"
-	POWER = "power[dBm]"
-	NUM_POINTS = "num-points[1]"
-	RES_BW = "res-bw[Hz]"
-	
-	def __init__(self):
-		self.state[VNAChannelConfig.FREQ_START] = None
-		self.state[VNAChannelConfig.FREQ_END] = None
-		self.state[VNAChannelConfig.POWER] = None
-		self.state[VNAChannelConfig.NUM_POINTS] = None
-		self.state[VNAChannelConfig.RES_BW] = None
 	
 	def set_manifest(self):
 		
-		self.manifest.append("state")
+		self.manifest.append("num")
+		self.manifest.append("channel")
+		self.manifest.append("id_str")
+		self.manifest.append("measurements")
+		self.manifest.append("format")
+		
+		self.manifest.append("data")
 
-class VectorNetworkAnalyzerState(InstrumentState):
+class VNAChannelState(Packable):
+	""" Describes the state of one VNA channel.
+	"""
+	
+	def __init__(self, log:plf.LogPile):
+		super().__init__(log)
+		
+		self.freq_start = None
+		self.freq_end = None
+		self.power = None
+		self.num_points = None
+		self.rew_bw = None
+	
+	def set_manifest(self):
+		
+		self.manifest.append("freq_start")
+		self.manifest.append("freq_end")
+		self.manifest.append("power")
+		self.manifest.append("num_points")
+		self.manifest.append("res_bw")
+
+class BasicVectorNetworkAnalyzerState(InstrumentState):
 	
 	def __init__(self, log:plf.LogPile):
 		super().__init__(log)
@@ -59,8 +71,11 @@ class VectorNetworkAnalyzerState(InstrumentState):
 		self.channels = []
 		self.rf_enable = []
 		self.traces = []
+	
+	def set_manifest(self):
+		pass
 
-class VectorNetworkAnalyzerCtg(Driver):
+class BasicVectorNetworkAnalyzerCtg(Driver):
 	
 	# Measurement options
 	MEAS_S11 = "meas-s11"
@@ -96,11 +111,11 @@ class VectorNetworkAnalyzerCtg(Driver):
 		self.max_channels = max_channels
 		self.max_traces = max_traces # This is per-channel
 		
-		self.state = VectorNetworkAnalyzerState()
+		self.state = BasicVectorNetworkAnalyzerState()
 		
-		self.state[VectorNetworkAnalyzerCtg.CHANNELS] = []
-		self.state[VectorNetworkAnalyzerCtg.RF_ENABLE] = []
-		self.state[VectorNetworkAnalyzerCtg.TRACES] = []
+		self.state[BasicVectorNetworkAnalyzerState.CHANNELS] = []
+		self.state[BasicVectorNetworkAnalyzerState.RF_ENABLE] = []
+		self.state[BasicVectorNetworkAnalyzerState.TRACES] = []
 	
 	
 	@abstractmethod
