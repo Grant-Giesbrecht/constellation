@@ -196,7 +196,7 @@ class BasicOscilloscopeCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_waveform(self, channel:int):
-		return self.modify_data_state(None, ["channels", "waveform"], self._super_hint, indices=[channel])
+		return self.modify_state(None, ["channels", "waveform"], self._super_hint, indices=[channel])
 	
 	def refresh_state(self):
 		self.get_div_time()

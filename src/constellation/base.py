@@ -1,4 +1,5 @@
 import pyvisa as pv
+import copy
 import pylogfile.base as plf
 from pylogfile.base import mdprint
 from constellation.relay import *
@@ -322,6 +323,128 @@ class IndexedList(Packable):
 	def get_range(self):
 		return range(self.first_index, self.first_index+self.num_indices)
 	
+	def pack_state(self):
+		''' Similar to pack, but skips all items that are listed
+		in `is_data`. '''
+		
+		# Initialize dictionary
+		d = {}
+		
+		# Add items in manifest to packaged data
+		for mi in self.manifest:
+			
+			d[mi] = getattr(self, mi)
+		
+		# Scan over object manifest
+		for mi in self.obj_manifest:
+			
+			# Pack object and add to output data
+			try:
+				d[mi] = getattr(self, mi).pack_state()
+			except:
+				raise Exception(f"'Packable' object had corrupt object manifest item '{mi}'. Cannot pack.")
+				
+		# Scan over list manifest
+		for mi in self.list_manifest:
+			
+			# Pack objects in list and add to output data
+			d[mi] = [x.pack_state() for x in getattr(self, mi)]
+		
+		# Scan over dict manifest
+		for mi in self.dict_manifest:
+			
+			mi_deref = getattr(self, mi)
+			
+			# Pack objects in dict and add to output data
+			d[mi] = {}
+			for midk in mi_deref.keys():
+				d[mi][midk] = mi_deref[midk].pack_state()
+				
+		# Return data list
+		return d
+	
+	def unpack_state(self, data:dict):
+		''' Similar to unpack, but skips all items that are listed
+		in `is_data`. '''
+		
+		# Try to populate each item in manifest
+		for mi in self.manifest:
+			
+			self.log.lowdebug(f"Unpacking manifest, item:>{mi}<")
+			
+			# Try to assign the new value
+			try:
+				setattr(self, mi, data[mi])
+			except Exception as e:
+				self.log.error(f"Failed to unpack item in object of type '{type(self).__name__}'. ({e})", detail=f"Type = {type(self)}")
+				return
+		
+		# Try to populate each Packable object in manifest
+		for mi in self.obj_manifest:
+			
+			self.log.lowdebug(f"Unpacking obj_manifest, item:>{mi}<")
+			
+			# Try to update the object by unpacking the item
+			try:
+				getattr(self, mi).unpack_state(data[mi])
+			except Exception as e:
+				self.log.error(f"Failed to unpack Packable in object of type '{type(self).__name__}'. ({e})", detail=f"Type = {type(self)}")
+				return
+			
+		# Try to populate each list of Packable objects in manifest
+		for mi in self.list_manifest.keys():
+			
+			# Scan over list, unpacking each element
+			temp_list = []
+			for list_item in data[mi]:
+				self.log.lowdebug(f"Unpacking list_manifest, item:>{mi}<, element:>:a{list_item}<")
+				
+				# Try to create a new object and unpack a list element
+				try:
+					# Create a new object of the correct type
+					new_obj = copy.deepcopy(self.list_manifest[mi])
+					
+					# Populate the new object by unpacking it, add to list
+					new_obj.unpack_state(list_item)
+					temp_list.append(new_obj)
+				except Exception as e:
+					self.log.error(f"Failed to unpack list of Packables in object of type '{type(self).__name__}'. Type={type(self)}. ({e})", detail=f"Type = {type(self)}")
+					return
+			setattr(self, mi, temp_list)
+				# self.obj_manifest[mi] = copy.deepcopy(temp_list)
+		
+		# Scan over dict manifest
+		for mi in self.dict_manifest.keys():
+			
+			# mi_deref = getattr(self, mi)
+			
+			# # Pack objects in list and add to output data
+			# d[mi] = [mi_deref[midk].pack() for midk in mi_deref.keys()]
+			
+			# Scan over list, unpacking each element
+			temp_dict = {}
+			for dmk in data[mi].keys():
+				self.log.lowdebug(f"Unpacking manifest, item:>{mi}<, element:>:a{dmk}<")
+				
+				# Try to create a new object and unpack a list element
+				try:
+					# Create a new object of the correct type
+					try:
+						new_obj = copy.deepcopy(self.dict_manifest[mi])
+					except Exception as e:
+						print("Dict Manifest:")
+						print(self.dict_manifest)
+						self.log.error(f"Failed to unpack dict_manifest[{mi}], ({e})")
+						return
+					
+					# Populate the new object by unpacking it, add to list
+					new_obj.unpack(data[mi][dmk])
+					temp_dict[dmk] = new_obj
+				except Exception as e:
+					prob_item = data[mi][dmk]
+					self.log.error(f"Failed to unpack dict of Packables in object of type '{type(self).__name__}'. ({e})", detail=f"Class={type(self)}, problem manifest item=(name:{dmk}, type:{type(prob_item)})")
+					return
+			setattr(self, mi, temp_dict)
 
 class InstrumentState(Packable):
 	""" Used to describe the state of a Driver or instrument.
@@ -342,6 +465,161 @@ class InstrumentState(Packable):
 		# Used to specify which parameters are "data" and don't need to be considered
 		# state information.
 		self.is_data = []
+	
+	def pack_state(self):
+		''' Similar to pack, but skips all items that are listed
+		in `is_data`. '''
+		
+		# Initialize dictionary
+		d = {}
+		
+		# Add items in manifest to packaged data
+		for mi in self.manifest:
+			
+			# Skip data elements
+			if mi in self.is_data:
+				continue
+			
+			d[mi] = getattr(self, mi)
+		
+		# Scan over object manifest
+		for mi in self.obj_manifest:
+			
+			# Skip data elements
+			if mi in self.is_data:
+				continue
+			
+			# Pack object and add to output data
+			try:
+				d[mi] = getattr(self, mi).pack_state()
+			except:
+				raise Exception(f"'Packable' object had corrupt object manifest item '{mi}'. Cannot pack.")
+				
+		# Scan over list manifest
+		for mi in self.list_manifest:
+			
+			# Skip data elements
+			if mi in self.is_data:
+				continue
+			
+			# Pack objects in list and add to output data
+			d[mi] = [x.pack_state() for x in getattr(self, mi)]
+		
+		# Scan over dict manifest
+		for mi in self.dict_manifest:
+			
+			# Skip data elements
+			if mi in self.is_data:
+				continue
+			
+			mi_deref = getattr(self, mi)
+			
+			# Pack objects in dict and add to output data
+			d[mi] = {}
+			for midk in mi_deref.keys():
+				d[mi][midk] = mi_deref[midk].pack_state()
+				
+		# Return data list
+		return d
+	
+	def unpack_state(self, data:dict):
+		''' Similar to unpack, but skips all items that are listed
+		in `is_data`. '''
+		
+		# Try to populate each item in manifest
+		for mi in self.manifest:
+			
+			# Skip data elements
+			if mi in self.is_data:
+				continue
+			
+			self.log.lowdebug(f"Unpacking manifest, item:>{mi}<")
+			
+			# Try to assign the new value
+			try:
+				setattr(self, mi, data[mi])
+			except Exception as e:
+				self.log.error(f"Failed to unpack item in object of type '{type(self).__name__}'. ({e})", detail=f"Type = {type(self)}")
+				return
+		
+		# Try to populate each Packable object in manifest
+		for mi in self.obj_manifest:
+			
+			# Skip data elements
+			if mi in self.is_data:
+				continue
+			
+			self.log.lowdebug(f"Unpacking obj_manifest, item:>{mi}<")
+			
+			# Try to update the object by unpacking the item
+			try:
+				getattr(self, mi).unpack_state(data[mi])
+			except Exception as e:
+				self.log.error(f"Failed to unpack Packable in object of type '{type(self).__name__}'. ({e})", detail=f"Type = {type(self)}")
+				return
+			
+		# Try to populate each list of Packable objects in manifest
+		for mi in self.list_manifest.keys():
+			
+			# Skip data elements
+			if mi in self.is_data:
+				continue
+			
+			# Scan over list, unpacking each element
+			temp_list = []
+			for list_item in data[mi]:
+				self.log.lowdebug(f"Unpacking list_manifest, item:>{mi}<, element:>:a{list_item}<")
+				
+				# Try to create a new object and unpack a list element
+				try:
+					# Create a new object of the correct type
+					new_obj = copy.deepcopy(self.list_manifest[mi])
+					
+					# Populate the new object by unpacking it, add to list
+					new_obj.unpack_state(list_item)
+					temp_list.append(new_obj)
+				except Exception as e:
+					self.log.error(f"Failed to unpack list of Packables in object of type '{type(self).__name__}'. Type={type(self)}. ({e})", detail=f"Type = {type(self)}")
+					return
+			setattr(self, mi, temp_list)
+				# self.obj_manifest[mi] = copy.deepcopy(temp_list)
+		
+		# Scan over dict manifest
+		for mi in self.dict_manifest.keys():
+			
+			# Skip data elements
+			if mi in self.is_data:
+				continue
+			
+			# mi_deref = getattr(self, mi)
+			
+			# # Pack objects in list and add to output data
+			# d[mi] = [mi_deref[midk].pack() for midk in mi_deref.keys()]
+			
+			# Scan over list, unpacking each element
+			temp_dict = {}
+			for dmk in data[mi].keys():
+				self.log.lowdebug(f"Unpacking manifest, item:>{mi}<, element:>:a{dmk}<")
+				
+				# Try to create a new object and unpack a list element
+				try:
+					# Create a new object of the correct type
+					try:
+						new_obj = copy.deepcopy(self.dict_manifest[mi])
+					except Exception as e:
+						print("Dict Manifest:")
+						print(self.dict_manifest)
+						self.log.error(f"Failed to unpack dict_manifest[{mi}], ({e})")
+						return
+					
+					# Populate the new object by unpacking it, add to list
+					new_obj.unpack(data[mi][dmk])
+					temp_dict[dmk] = new_obj
+				except Exception as e:
+					prob_item = data[mi][dmk]
+					self.log.error(f"Failed to unpack dict of Packables in object of type '{type(self).__name__}'. ({e})", detail=f"Class={type(self)}, problem manifest item=(name:{dmk}, type:{type(prob_item)})")
+					return
+			setattr(self, mi, temp_dict)
 	
 	def add_param(self, name:str, unit:str, is_data:bool=False, value=None ):
 		''' Adds a parameter in the __init__ function.
@@ -891,44 +1169,44 @@ class Driver(ABC):
 		
 		return val
 	
-	def modify_data_state(self, query_func:callable, param:str, value, channel:int=None):
-		"""
-		Updates the internal data-state tracker.
-		
-		Parameters:
-			query_func (callable): Function used to query the state of this parameter from
-				the instrument. This parameter should be set to None if modify_state is 
-				being called from a query function. 
-			param (str): Parameter to update
-			value: Value for parameter being sent to the instrument. This will be used to
-				update the internal state if query_func is None, or if the instrument is in
-				dummy mode or blind_state_update mode. 
-			channel (int): Optional value for parameters that apply to individual channels of
-				an instrument. Should be set to None (default) for parameters which do not
-				have multiple channels. Channels are indexed from 1, not 0.
-			
-		Returns:
-			value, or result of query_func if provided.
-		"""
-		
-		if (query_func is None) or self.dummy or self.blind_state_update:
-			prev_val = self.data[param]
-			
-			# Record ing log
-			self.log.add_log(self.state_change_log_level, f"(Driver: >:q{self.id.short_str()}<) Data-sate modified; >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
-			
-			if channel is None:
-				self.data[param] = value
-			else:
-				try:
-					self.data[param].set_idx_val(1, value)
-				except Exception as e:
-					self.error(f"Failed to modify internal state. {e}")
-			val = value
-		else:
-			val = query_func()
-		
-		return val
+	# def modify_data_state(self, query_func:callable, param:str, value, channel:int=None):
+	# 	"""
+	# 	Updates the internal data-state tracker.
+	# 	
+	# 	Parameters:
+	# 		query_func (callable): Function used to query the state of this parameter from
+	# 			the instrument. This parameter should be set to None if modify_state is 
+	# 			being called from a query function. 
+	# 		param (str): Parameter to update
+	# 		value: Value for parameter being sent to the instrument. This will be used to
+	# 			update the internal state if query_func is None, or if the instrument is in
+	# 			dummy mode or blind_state_update mode. 
+	# 		channel (int): Optional value for parameters that apply to individual channels of
+	# 			an instrument. Should be set to None (default) for parameters which do not
+	# 			have multiple channels. Channels are indexed from 1, not 0.
+	# 		
+	# 	Returns:
+	# 		value, or result of query_func if provided.
+	# 	"""
+	# 	
+	# 	if (query_func is None) or self.dummy or self.blind_state_update:
+	# 		prev_val = self.data[param]
+	# 		
+	# 		# Record ing log
+	# 		self.log.add_log(self.state_change_log_level, f"(Driver: >:q{self.id.short_str()}<) Data-sate modified; >{param}<=>:a{truncate_str(value)}<.", detail=f"Previous value was {truncate_str(prev_val)}")
+	# 		
+	# 		if channel is None:
+	# 			self.data[param] = value
+	# 		else:
+	# 			try:
+	# 				self.data[param].set_idx_val(1, value)
+	# 			except Exception as e:
+	# 				self.error(f"Failed to modify internal state. {e}")
+	# 		val = value
+	# 	else:
+	# 		val = query_func()
+	# 	
+	# 	return val
 	
 	def print_state(self):
 		
