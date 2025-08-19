@@ -25,14 +25,15 @@ class ChannelWidget(QWidget):
 		self.vdiv_label = QLabel("Volts/div [V]:")
 		self.vdiv_edit = QLineEdit()
 		self.vdiv_edit.setValidator(QDoubleValidator())
-		vdiv_val = driver.state[BasicOscilloscopeCtg.DIV_VOLT].get_idx_val(self.channel_num)
+		vdiv_val = self.driver.state.channels[self.channel_num].div_volt
 		self.vdiv_edit.setText(f"{vdiv_val}")
 		self.vdiv_edit.setFixedWidth(80)
 		
 		self.voff_label = QLabel("Voltage offset [V]:")
 		self.voff_edit = QLineEdit()
 		self.voff_edit.setValidator(QDoubleValidator())
-		temp = driver.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_idx_val(self.channel_num)
+		
+		temp = self.driver.state.channels[self.channel_num].offset_volt
 		self.voff_edit.setText(f"{temp}")
 		self.voff_edit.setFixedWidth(80)
 		
@@ -51,11 +52,11 @@ class ChannelWidget(QWidget):
 		
 		self.log.lowdebug(f"Channel {self.channel_num} updating UI from state.")
 		
-		self.enable_button.setChecked(self.driver.state[BasicOscilloscopeCtg.CHAN_EN].get_idx_val(self.channel_num))
+		self.enable_button.setChecked( self.driver.state.channels[self.channel_num].chan_en )
 		
-		self.vdiv_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.DIV_VOLT].get_idx_val(self.channel_num)))
+		self.vdiv_edit.setText(str( self.driver.state.channels[self.channel_num].div_volt ))
 		
-		self.voff_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.OFFSET_VOLT].get_idx_val(self.channel_num)))
+		self.voff_edit.setText(str( self.driver.state.channels[self.channel_num].offset_volt ))
 
 class BasicOscilloscopeWidget(InstrumentWidget):
 	
@@ -81,14 +82,14 @@ class BasicOscilloscopeWidget(InstrumentWidget):
 		self.tdiv_label = QLabel("Time/div [s]:")
 		self.tdiv_edit = QLineEdit()
 		self.tdiv_edit.setValidator(QDoubleValidator())
-		tdiv_val = driver.state[BasicOscilloscopeCtg.DIV_TIME]
+		tdiv_val = driver.state.div_time
 		self.tdiv_edit.setText(f"{tdiv_val}")
 		self.tdiv_edit.setFixedWidth(80)
 		
 		self.toff_label = QLabel("Time offset [s]:")
 		self.toff_edit = QLineEdit()
 		self.toff_edit.setValidator(QDoubleValidator())
-		temp = driver.state[BasicOscilloscopeCtg.OFFSET_TIME]
+		temp = driver.state.offset_time
 		self.toff_edit.setText(f"{temp}")
 		self.toff_edit.setFixedWidth(80)
 		
@@ -113,8 +114,8 @@ class BasicOscilloscopeWidget(InstrumentWidget):
 		
 		self.log.debug(f"Refreshing UI from driver state.")
 		
-		self.tdiv_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.DIV_TIME]))
-		self.toff_edit.setText(str(self.driver.state[BasicOscilloscopeCtg.OFFSET_TIME]))
+		self.tdiv_edit.setText(str(self.driver.state.div_time))
+		self.toff_edit.setText(str(self.driver.state.offset_time))
 		
 		# Init all channels
 		for i in range(self.driver.first_channel, self.driver.first_channel+self.driver.max_channels):
