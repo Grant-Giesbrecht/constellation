@@ -311,11 +311,6 @@ class IndexedList(Packable):
 	
 	It also supports 'traces' for instruments that have both multiple traces and 
 	multiple indices such as a vector network analyzer.
-	
-	NOTE: Index numbering is internally zero-indexed. Most modern lab instruments
-	with multiple indices use 1-based indexing. This discrepency, when handled by
-	Heimdallr, will make the 1-based indexing purely cosmetic and converted to 0-based
-	as soon as possible internally.
 	'''
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.

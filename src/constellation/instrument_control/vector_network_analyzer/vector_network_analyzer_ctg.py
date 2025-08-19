@@ -113,9 +113,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		
 		self.state = BasicVectorNetworkAnalyzerState()
 		
-		self.state[BasicVectorNetworkAnalyzerState.CHANNELS] = []
-		self.state[BasicVectorNetworkAnalyzerState.RF_ENABLE] = []
-		self.state[BasicVectorNetworkAnalyzerState.TRACES] = []
+		self.data = []
 	
 	
 	@abstractmethod
