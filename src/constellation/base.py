@@ -344,6 +344,30 @@ class IndexedList(Packable):
 		#TODO: Should validate_type somehow be added?
 		#TODO: Should log be added?
 	
+	def __getitem__(self, key:int):
+		
+		if key < self.first_index or key >= self.first_index + self.num_indices:
+			raise KeyError(f"Index {key} out of range.")
+		
+		try:
+			if not self.idx_is_populated(key):
+				return None
+			else:
+				return self.index_data[f"idx-{key}"]
+		except:
+			raise KeyError(f"Index '{key}' not found.")
+	
+	def __setitem__(self, key:int, value):
+		
+		if self.validate_type is not None:
+			if not isinstance(value, self.validate_type):
+				raise TypeError
+		
+		if key < self.first_index or key >= self.first_index + self.num_indices:
+			raise KeyError(f"Index {key} out of range.")
+		
+		self.index_data[f"idx-{key}"] = value
+	
 	def summarize(self, indent:str=""):
 		
 		out = ""
