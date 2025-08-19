@@ -1,63 +1,49 @@
 from constellation.base import *
 from constellation.networking.net_client import *
 
-class BasicOscilloscopeChannelState(Packable):
+class BasicOscilloscopeChannelState(InstrumentState):
 	
-	def __init__(self, log):
+	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)
-		self.div_volt = None
-		self.offset_volt = None
-		self.chan_en = None
-	
-	def set_manifest(self):
-		self.manifest.append("div_volt")
-		self.manifest.append("offset_volt")
-		self.manifest.append("chan_en")
+		
+		self.add_param("div_volt", unit="V")
+		self.add_param("offset_volt", unit="V")
+		self.add_param("chan_en", unit="bool")
+		
+		self.add_param("waveform", unit="", is_data=True, value=[])
 
 class BasicOscilloscopeState(InstrumentState):
-	def __init__(self, log:plf.LogPile, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert):
+	def __init__(self, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert, log:plf.LogPile=None):
 		super().__init__(log=log)
 		
-		self.first_channel = first_channel
-		self.num_channels = num_channels
+		self.add_param("first_channel", unit="1", value=first_channel)
+		self.add_param("num_channels", unit="1", value=num_channels)
 		
-		self.ndiv_horiz = ndiv_horiz
-		self.ndiv_vert = ndiv_vert
+		self.add_param("ndiv_horiz", unit="1", value=ndiv_horiz)
+		self.add_param("ndiv_vert", unit="1", value=ndiv_vert)
 		
-		self.div_time = None
-		self.offset_time = None
-		self.channels = IndexedList(self.first_channel, self.num_channels, validate_type=BasicOscilloscopeChannelState, log=log)
+		self.add_param("div_time", unit="s")
+		self.add_param("offset_time", unit="s")
+		
+		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=BasicOscilloscopeChannelState, log=log))
 		
 		for ch_no in self.channels.get_range():
-			self.channels.set_idx_val(ch_no, BasicOscilloscopeChannelState(log))
-	
-	def set_manifest(self):
-		self.manifest.append("first_channel")
-		self.manifest.append("num_channels")
-		self.manifest.append("div_time")
-		self.manifest.append("offset_time")
-		self.obj_manifest.append("channels")
+			self.channels[ch_no] = BasicOscilloscopeChannelState(log=log)
 
 class BasicOscilloscopeCtg(Driver):
-	
-	WAVEFORM = "waveform"
 	
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
 		
 		self.max_channels = max_channels
 		
-		self.state = BasicOscilloscopeState(self.log, self.first_channel, self.max_channels, num_div_horiz, num_div_vert)
-		
-		self.data[BasicOscilloscopeCtg.WAVEFORM] = IndexedList(self.first_channel, self.max_channels, log=self.log)
+		self.state = BasicOscilloscopeState(self.first_channel, self.max_channels, num_div_horiz, num_div_vert, log=log)
 		
 		if self.dummy:
 			self.init_dummy_state()
-			self.print_state()
 		
 	def init_dummy_state(self) -> None:
 		self.set_div_time(10e-3)
-		print(f"div_time = {self.state.div_time}")
 		self.set_offset_time(0)
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
 			self.set_div_volt(ch, 1)
@@ -98,7 +84,7 @@ class BasicOscilloscopeCtg(Driver):
 			wave_clipped = [np.max([np.min([element, v_max]), v_min]) for element in wave]
 			
 			# Return result
-			self.data[BasicOscilloscopeCtg.WAVEFORM].set_idx_val(channel, {"time_s":t_series, "volt_V":wave_clipped})
+			self.state.channels[channel].waveform = {"time_s":t_series, "volt_V":wave_clipped}
 	
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
@@ -136,7 +122,7 @@ class BasicOscilloscopeCtg(Driver):
 					rval = self.state.get(["channels", "chan_en"], indices=[args[0]])
 				case "get_waveform":
 					self.remake_dummy_waves()
-					rval = self.data[BasicOscilloscopeCtg.WAVEFORM].get_idx_val(args[0])
+					rval = self.state.channels[args[0]].waveform
 				case _:
 					found = False
 				
@@ -210,7 +196,7 @@ class BasicOscilloscopeCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_waveform(self, channel:int):
-		return self.modify_data_state(None, BasicOscilloscopeCtg.WAVEFORM, self._super_hint, indices=[channel])
+		return self.modify_data_state(None, ["channels", "waveform"], self._super_hint, indices=[channel])
 	
 	def refresh_state(self):
 		self.get_div_time()

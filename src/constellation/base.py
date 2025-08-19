@@ -175,136 +175,6 @@ def param_idx_to_str(params:list, indices:list=None) -> str:
 	
 	return s
 
-class InstrumentState(Packable):
-	""" Used to describe the state of a Driver or instrument.
-	"""
-	
-	def __init__(self, log:plf.LogPile):
-		super().__init__(log=log)
-		self.log = log
-	
-	@abstractmethod
-	def set_manifest(self):
-		""" This function will populate the manifest and obj_manifest objects"""
-		pass
-	
-	def is_valid_type(self, test_obj):
-		''' Checks if test_obj is a valid type for 
-		'''
-		if isinstance(test_obj, IndexedList):
-			return True
-		if isinstance(test_obj, Packable):
-			return True
-		if isinstance(test_obj, dict):
-			return True
-		if isinstance(test_obj, numbers.Number): # TODO: How to save complex to HDF/JSON/dict?
-			return True
-		if isinstance(test_obj, str):
-			return True
-		#TODO: Should lists be accepted?
-		
-		return False
-	
-	def set(self, params:tuple, value, indices:tuple=None) -> bool:
-		''' Sets the value. Note that lists of objects MUST be stored
-		in the IndexedList class.
-		
-		
-		
-		'''
-		
-		obj_under = None # Object one notch lower
-		obj_top = self # Object at top of stack
-		
-		# Scan over all params... get top level object
-		for idx, p in enumerate(params):
-			
-			# Check that parameter exists
-			if not hasattr(obj_top, p):
-				self.log.error(f"Cannot set state. Parameter >{p}< not found in object >:q{obj_top}<.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
-				return False
-			
-			# Update object references
-			obj_under = obj_top
-			obj_top = getattr(obj_under, p)
-			
-			# Handle lists
-			list_at_top = False # Indicates if the top level object is an IndexedList
-			if isinstance(obj_top, IndexedList):
-				
-				# Validate that an index exists
-				if indices is None:
-					self.log.error(f"Cannot set state. Required a valid index tuple for indices paramter.")
-					return False
-				if len(indices) < idx+1:
-					self.log.error(f"Cannot set state. Required indices paramter with greater length.")
-					return False
-				if indices[idx] is None:
-					self.log.error(f"Cannot set state. Required indices paramter value not equal to None.")
-					return False
-				
-				# Move into list if not at end of navigating tree
-				if idx != len(params)-1:
-					# Object is a list - shift obj_top to correct item in the list, not the list itself
-					obj_top = obj_top.get_idx_val(indices[idx])
-				else:
-					list_at_top = True
-		
-		# Update value of final parameter
-		if list_at_top:
-			obj_top.set_idx_val(indices[idx], value)
-		else:
-			setattr(obj_under, params[-1], value)
-		
-		return True
-	
-	def get(self, params:tuple, indices:tuple=None):
-		'''
-		'''
-		
-		obj_under = None # Object one notch lower
-		obj_top = self # Object at top of stack
-		
-		# Scan over all params... get top level object
-		for idx, p in enumerate(params):
-			
-			# Check that parameter exists
-			if not hasattr(obj_top, p):
-				self.log.error(f"Cannot get state. Parameter >{p}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)})")
-				return None
-			
-			# Update object references
-			obj_under = obj_top
-			obj_top = getattr(obj_under, p)
-			
-			# Handle lists
-			list_at_top = False # Indicates if the top level object is an IndexedList
-			if isinstance(obj_top, IndexedList):
-				
-				# Validate that an index exists
-				if indices is None:
-					self.log.error(f"Cannot get state. Required a valid index tuple for indices paramter.")
-					return None
-				if len(indices) < idx+1:
-					self.log.error(f"Cannot get state. Required indices paramter with greater length.")
-					return None
-				if indices[idx] is None:
-					self.log.error(f"Cannot get state. Required indices paramter value not equal to None.")
-					return None
-				
-				# Move into list if not at end of navigating tree
-				if idx != len(params)-1:
-					# Object is a list - shift obj_top to correct item in the list, not the list itself
-					obj_top = obj_top.get_idx_val(indices[idx])
-				else:
-					list_at_top = True
-		
-		# Update value of final parameter
-		if list_at_top:
-			return obj_top.get_idx_val(indices[idx])
-		else:
-			return getattr(obj_under, params[-1])
-
 class IndexedList(Packable):
 	''' Used in driver.state and driver.data structures to organize values
 	for parameters which apply to more than one index.
@@ -312,6 +182,9 @@ class IndexedList(Packable):
 	It also supports 'traces' for instruments that have both multiple traces and 
 	multiple indices such as a vector network analyzer.
 	'''
+	
+	#NOTE: In this version, I'm enforcing that every value stored is a 
+	#child of InstrumentState. This is required for it to be properly packable.
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
 	
@@ -329,7 +202,7 @@ class IndexedList(Packable):
 	def set_manifest(self):
 		self.manifest.append("first_index")
 		self.manifest.append("num_indices")
-		self.manifest.append("index_data")
+		self.dict_manifest["index_data"] = InstrumentState()
 		
 		#TODO: Should validate_type somehow be added?
 		#TODO: Should log be added?
@@ -449,73 +322,173 @@ class IndexedList(Packable):
 	def get_range(self):
 		return range(self.first_index, self.first_index+self.num_indices)
 	
-	# def to_dict(self):
-	# 	''' Converts the object to a dictionary so it can be saved
-	# 	more easily to disk.
-		
-	# 	Returns:
-	# 		dict: Dictionary containing the value for each index,
-	# 		with index numbers (zero-indexed) as keys. For compatability
-	# 		with HDF, the keys as saved as "idx-<number>" rather than
-	# 		just the index number. Non-populated indices will not be saved
-	# 		to save space. Also includes two other keys, 'first_index' and 
-	# 		'num_indices' containing those state variables.
-	# 	'''
-		
-	# 	data = {'first_index':self.first_index, 'num_indices':self.num_indices}
-	# 	for ch in range(self.first_index, self.first_index+self.num_indices):
-			
-	# 		ch_str = f"idx-{ch}"
-			
-	# 		if not self.idx_is_populated(ch):
-	# 			data[ch_str] = None
-	# 		else:
-	# 			data[ch_str] = self.get_idx_val(ch)
-				
-	# 			#TODO: Error check that this item is JSON serializable
-		
-	# 	return data
+
+class InstrumentState(Packable):
+	""" Used to describe the state of a Driver or instrument.
+	"""
 	
-	# def from_dict(self, data:dict):
-	# 	''' Populates the IndexedList from a dictionary.
+	def __init__(self, log:plf.LogPile=None):
+		super().__init__(log=log)
+		self.log = log
 		
-	# 	Args:
-	# 		data (dict): Dictionary to populate from. Expects a key 'first_index'
-	# 			and a key 'num_indices' to define the valid index range. All 
-	# 			other keys follow the format 'ch-<n>' where n is the index number,
-	# 			and the following value is the data value, in any JSON serializable
-	# 			format.
+		# Optional dictionary to contain unit information for the parameters.
+		#  - Keys are names of variables
+		#  - Values are the units for each
+		# Note that these units are only for human readability/clarification. It
+		# doesn't have to be any python type or object or something, it's just an
+		# SI unit, or a clarifying phrase like 'bool' or 'num' or '1'.
+		self.units = {}
 		
-	# 	Returns:
-	# 		bool: True if dictionary was properly interpreted.
-	# 	'''
+		# Used to specify which parameters are "data" and don't need to be considered
+		# state information.
+		self.is_data = []
+	
+	def add_param(self, name:str, unit:str, is_data:bool=False, value=None ):
+		''' Adds a parameter in the __init__ function.
 		
-	# 	try:
-	# 		self.first_index = data['first_index']
-	# 		self.num_indices = data['num_indices']
-	# 	except Exception as e:
-	# 		self.log.error(f"Failed to populate IndexedList from dict ({e}).")
-	# 		return False
+		Should only be used to add JSON serializable items, or IndexedLists,
+		otherwise set_manifest won't be properly used.
+		'''
 		
-	# 	# Scan over all items
-	# 	for k_str, v in data.items():
+		# Create parameter
+		setattr(self, name, value)
+		
+		# Populate unit and is_data
+		self.units[name] = unit
+		if is_data:
+			self.is_data.append(name)
+		
+		# Add to manifest
+		if isinstance(value, IndexedList):
+			self.obj_manifest.append(name)
+		else:
+			self.manifest.append(name)
+		
+	def set_manifest(self):
+		""" This function will populate the manifest and obj_manifest objects"""
+		
+		#NOTE: The log is intentionally ignored
+		
+		self.manifest.append("units")
+		self.manifest.append("is_data")
+	
+	def is_valid_type(self, test_obj):
+		''' Checks if test_obj is a valid type for 
+		'''
+		if isinstance(test_obj, IndexedList):
+			return True
+		if isinstance(test_obj, Packable):
+			return True
+		if isinstance(test_obj, dict):
+			return True
+		if isinstance(test_obj, numbers.Number): # TODO: How to save complex to HDF/JSON/dict?
+			return True
+		if isinstance(test_obj, str):
+			return True
+		#TODO: Should lists be accepted?
+		
+		return False
+	
+	def set(self, params:tuple, value, indices:tuple=None) -> bool:
+		''' Sets the value. Note that lists of objects MUST be stored
+		in the IndexedList class.
+		
+		
+		
+		'''
+		
+		obj_under = None # Object one notch lower
+		obj_top = self # Object at top of stack
+		
+		# Scan over all params... get top level object
+		for idx, p in enumerate(params):
 			
-	# 		if k_str == 'first_index' or k_str == 'num_indices':
-	# 			continue
+			# Check that parameter exists
+			if not hasattr(obj_top, p):
+				self.log.error(f"Cannot set state. Parameter >{p}< not found in object >:q{obj_top}<.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
+				return False
 			
-	# 		# Attempt to get int key and set value
-	# 		try:
-	# 			# Get just the index number
-	# 			ch = int(k_str.split('-', 1)[1])
+			# Update object references
+			obj_under = obj_top
+			obj_top = getattr(obj_under, p)
+			
+			# Handle lists
+			list_at_top = False # Indicates if the top level object is an IndexedList
+			if isinstance(obj_top, IndexedList):
 				
-	# 			# Save value
-	# 			self.set_idx_val(ch, v)
+				# Validate that an index exists
+				if indices is None:
+					self.log.error(f"Cannot set state. Required a valid index tuple for indices paramter.")
+					return False
+				if len(indices) < idx+1:
+					self.log.error(f"Cannot set state. Required indices paramter with greater length.")
+					return False
+				if indices[idx] is None:
+					self.log.error(f"Cannot set state. Required indices paramter value not equal to None.")
+					return False
 				
-	# 		except Exception as e:
-	# 			self.log.error(f"Failed to parse key(>:q@:LOCK{k_str}@:UNLOCK<), value(>:q@:LOCK{v}@:UNLOCK<) pair. ({e})")
-	# 			return False
+				# Move into list if not at end of navigating tree
+				if idx != len(params)-1:
+					# Object is a list - shift obj_top to correct item in the list, not the list itself
+					obj_top = obj_top.get_idx_val(indices[idx])
+				else:
+					list_at_top = True
 		
-	# 	return True
+		# Update value of final parameter
+		if list_at_top:
+			obj_top.set_idx_val(indices[idx], value)
+		else:
+			setattr(obj_under, params[-1], value)
+		
+		return True
+	
+	def get(self, params:tuple, indices:tuple=None):
+		'''
+		'''
+		
+		obj_under = None # Object one notch lower
+		obj_top = self # Object at top of stack
+		
+		# Scan over all params... get top level object
+		for idx, p in enumerate(params):
+			
+			# Check that parameter exists
+			if not hasattr(obj_top, p):
+				self.log.error(f"Cannot get state. Parameter >{p}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)})")
+				return None
+			
+			# Update object references
+			obj_under = obj_top
+			obj_top = getattr(obj_under, p)
+			
+			# Handle lists
+			list_at_top = False # Indicates if the top level object is an IndexedList
+			if isinstance(obj_top, IndexedList):
+				
+				# Validate that an index exists
+				if indices is None:
+					self.log.error(f"Cannot get state. Required a valid index tuple for indices paramter.")
+					return None
+				if len(indices) < idx+1:
+					self.log.error(f"Cannot get state. Required indices paramter with greater length.")
+					return None
+				if indices[idx] is None:
+					self.log.error(f"Cannot get state. Required indices paramter value not equal to None.")
+					return None
+				
+				# Move into list if not at end of navigating tree
+				if idx != len(params)-1:
+					# Object is a list - shift obj_top to correct item in the list, not the list itself
+					obj_top = obj_top.get_idx_val(indices[idx])
+				else:
+					list_at_top = True
+		
+		# Update value of final parameter
+		if list_at_top:
+			return obj_top.get_idx_val(indices[idx])
+		else:
+			return getattr(obj_under, params[-1])
+
 
 class DataEntry:
 	''' Used in driver.data to describe a measurement result and its
