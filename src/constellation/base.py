@@ -330,11 +330,6 @@ class IndexedList(Packable):
 		self._iter_index = 0
 		
 		self.validate_type = validate_type
-		
-		if log is None:
-			self.log = plf.LogPile()
-		else:
-			self.log = log
 	
 	def set_manifest(self):
 		self.manifest.append("first_index")
@@ -393,11 +388,9 @@ class IndexedList(Packable):
 		
 		'''
 		if index >= self.first_index+self.num_indices:
-			self.log.error(f"Max index exceeded. Defaulting to last possible index") #TODO: Needs prefix
-			return self.first_index+self.num_indices-1
+			raise KeyError(f"Max index exceeded")
 		elif index < self.first_index:
-			self.log.error(f"Min index exceeded. Defaulting to first possible index") #TODO: Needs prefix
-			return self.first_index
+			raise KeyError(f"Min index exceeded")
 		else:
 			return index
 	
@@ -431,7 +424,6 @@ class IndexedList(Packable):
 		'''
 		chan = self.get_valid_idx(index)
 		if not self.idx_is_populated(chan):
-			self.log.error(f"Cannot return index value; index has not been populated.")
 			return None
 		return self.index_data[f"idx-{chan}"]
 	
