@@ -337,6 +337,11 @@ class IndexedList(Packable):
 		else:
 			raise StopIteration
 	
+	def iteration_idx(self):
+		''' Used to access the current IndexedList index while being iterated
+		over, similar to enumerate.'''
+		return self._iter_index-1
+	
 	def get_range(self):
 		return range(self.first_index, self.first_index+self.num_indices)
 	
