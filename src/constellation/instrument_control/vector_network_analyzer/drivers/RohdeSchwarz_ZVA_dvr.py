@@ -36,9 +36,9 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 		''' Returns the index for the requested trace. Returns NOne if not found.
 		'''
 		
-		for idx, tr in enumerate(self.traces):
+		for tr in self.state.traces:
 			if tr.id_str == trace_name:
-				return idx
+				return self.state.traces.iteration_idx()
 		
 		return None
 	
@@ -89,15 +89,25 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 			str: Format constant as understood by the class, such as BasicVectorNetworkAnalyzerCtg.FORM_LOG_MAG.
 		'''
 		
+		# Stip line endings off code
+		_code = code.strip()
+		
 		# Find all keys that map to the given value
-		matching_keys = [key for key, value in self.format_table.items() if value == code]
+		matching_keys = [key for key, value in self.format_table.items() if value == _code]
 		
 		# Check for errors
 		if not matching_keys:
-			self.debug(f"Format code >{code}< not found in format_table, setting to >:qFORM_OTHER<.")
+			
+			print(f"self.format_table:")
+			print(self.format_table)
+			
+			lm = self.format_table[BasicVectorNetworkAnalyzerCtg.FORM_LOG_MAG]
+			print(f"Code = {_code}, likely match = {lm}")
+			
+			self.debug(f"Format code >{_code}< not found in format_table, setting to >:qFORM_OTHER<.")
 			return BasicVectorNetworkAnalyzerCtg.FORM_OTHER
 		elif len(matching_keys) > 1:
-			self.warning(f"Multiple matches found for format code >{code}<. Matching keys: >{matching_keys}<. Selecting first match.")
+			self.warning(f"Multiple matches found for format code >{_code}<. Matching keys: >{matching_keys}<. Selecting first match.")
 		
 		# Return matching key
 		return matching_keys[0]
@@ -162,15 +172,15 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 			
 			#TODO: Store this info somewhere
 			_enabled = False
-			if str_to_bool(self.query(f"CONF:CHAN{i+1}:STAT?")):
+			if str_to_bool(self.query(f"CONF:CHAN{i}:STAT?")):
 				_enabled = True
-				c_list.append(i+1)
+				c_list.append(i)
 				
 				# Update channel state enabled tracker
-				self.channels[i] = VNAChannelState()
-				self.channels[i].enabled = True
+				self.state.channels[i] = VNAChannelState()
+				self.state.channels[i].enabled = True
 			
-			print(f"Read channel #{i} enabled:{_enabled}")
+			self.lowdebug(f"Read channel #{i} enabled:{_enabled}")
 			
 
 			# self.modify_state(None, ["channels", "enabled"], _enabled, indices=[i])
@@ -340,7 +350,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 		
 		# Get channel number for specified trace
 		tr_idx = self._get_trace_idx(trace_name)
-		channel = self.traces[tr_idx].channel
+		channel = self.state.traces[tr_idx].channel
 		
 		# Select the specified measurement/trace
 		self.write(f"CALC{channel}:PAR:SEL {trace_name}")
@@ -352,15 +362,15 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 		self.write(f"CALC{channel}:DATA? SDATA")
 		
 		# Read the packet header first (size prefix)
-		header = self.inst.read_bytes(2)
+		header = self.relay.inst.read_bytes(2)
 		digits_in_size_num = int(header[1:2])
 		
 		# Read the size of the data packet
-		size_bytes = self.inst.read_bytes(digits_in_size_num)
+		size_bytes = self.relay.inst.read_bytes(digits_in_size_num)
 		packet_size = int(size_bytes.decode())
 		
 		# Read the actual packet data
-		data_raw = self.inst.read_bytes(packet_size)
+		data_raw = self.relay.inst.read_bytes(packet_size)
 		
 		# Convert the raw binary data to an array of floats
 		float_data = list(array.array('d', data_raw))  # 'd' ensures double precision floats

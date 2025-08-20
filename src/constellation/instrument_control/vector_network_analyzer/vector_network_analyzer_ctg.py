@@ -116,6 +116,17 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		
 		self.state = BasicVectorNetworkAnalyzerState(self.first_channel, self.max_channels, self.first_trace, self.max_traces, log=log)
 	
+	def find_trace(self, meas:str, format:str=FORM_LOG_MAG) -> str:
+		''' Looks for a trace with the specified measurement and format, and if found,
+		returns the trace's name. Returns NOne if no such trace is found.
+		'''
+		
+		for tr in self.state.traces:
+			if (tr.measurement == meas) and (tr.format == format):
+				return tr.id_str
+		
+		return None
+	
 	@abstractmethod
 	def _get_trace_idx(self, trace_name:str) -> int:
 		pass
@@ -131,7 +142,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_freq_start(self, channel:int=1):
-		self.modify_state(None, ["channels", "freq_start"], self._super_hint, indices=[channel])
+		return self.modify_state(None, ["channels", "freq_start"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_freq_end(self, f_Hz:float, channel:int=1):
@@ -140,7 +151,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_freq_end(self, channel:int=1):
-		self.modify_state(None, ["channels", "freq_end"], self._super_hint, indices=[channel])
+		return self.modify_state(None, ["channels", "freq_end"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_power(self, p_dBm:float, channel:int=1):
@@ -149,7 +160,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_power(self, channel:int=1):
-		self.modify_state(None, ["channels", "power"], self._super_hint, indices=[channel])
+		return self.modify_state(None, ["channels", "power"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_num_points(self, points:int, channel:int=1):
@@ -158,7 +169,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@abstractmethod
 	@enabledummy 
 	def get_num_points(self, channel:int=1):
-		self.modify_state(None, ["channels", "num_points"], self._super_hint, indices=[channel])
+		return self.modify_state(None, ["channels", "num_points"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_res_bandwidth(self, rbw_Hz:float, channel:int=1):
@@ -167,7 +178,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_res_bandwidth(self, channel:int=1):
-		self.modify_state(None, ["channels", "res_bw"], self._super_hint, indices=[channel])
+		return self.modify_state(None, ["channels", "res_bw"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def clear_traces(self):
@@ -182,7 +193,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_trace_data(self, trace_name:str):
-		self.modify_state(None, ["traces", "data"], self._super_hint, indices=[self._get_trace_idx(trace_name)])
+		return self.modify_state(None, ["traces", "data"], self._super_hint, indices=[self._get_trace_idx(trace_name)])
 	
 	@abstractmethod
 	def set_rf_enable(self, enable:bool):
@@ -191,7 +202,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_rf_enable(self):
-		self.modify_state(None, ["rf_enable"], self._super_hint)
+		return self.modify_state(None, ["rf_enable"], self._super_hint)
 	
 	@abstractmethod
 	def set_rf_power(self, power_dBm:float, channel:int=1):
@@ -200,7 +211,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@abstractmethod
 	@enabledummy
 	def get_rf_power(self, channel:int=1):
-		self.modify_state(None, ["channels", "power"], self._super_hint, indices=[channel])
+		return self.modify_state(None, ["channels", "power"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def refresh_channels_and_traces(self):
