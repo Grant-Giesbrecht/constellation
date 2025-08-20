@@ -45,9 +45,12 @@ class VNAChannelState(InstrumentState):
 		self.add_param("freq_start", unit="Hz")
 		self.add_param("freq_end", unit="Hz")
 		self.add_param("res_bw", unit="Hz")
+		self.add_param("cal_enabled", unit="bool")
 		
 		self.add_param("num_points", unit="")
 		self.add_param("power", unit="dBm")
+	
+	
 
 
 class BasicVectorNetworkAnalyzerState(InstrumentState):
@@ -179,6 +182,15 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	@enabledummy
 	def get_res_bandwidth(self, channel:int=1):
 		return self.modify_state(None, ["channels", "res_bw"], self._super_hint, indices=[channel])
+	
+	@abstractmethod
+	def set_cal_enabled(self, enable:bool, channel:int=1):
+		self.modify_state(self.get_cal_enabled, ["channels", "cal_enabled"], enable, indices=[channel])
+	
+	@abstractmethod
+	@enabledummy
+	def get_cal_enabled(self, channel:int=1):
+		return self.modify_state(None, ["channels", "cal_enabled"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def clear_traces(self):

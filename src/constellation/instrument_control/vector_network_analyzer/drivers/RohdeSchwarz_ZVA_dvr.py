@@ -223,6 +223,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 			self.get_res_bandwidth(ch)
 			self.get_num_points(ch)
 			self.get_power(ch)
+			self.get_cal_enabled(ch)
 	
 	@superreturn
 	def _set_active_trace(self, trace:int, channel:int=1):
@@ -274,6 +275,14 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	@superreturn
 	def get_res_bandwidth(self, channel:int=1):
 		self._super_hint = float(self.query(f"SENS{channel}:BAND:RES?"))
+	
+	@superreturn
+	def set_cal_enabled(self, enable:bool, channel:int=1):
+		self.write(f"SENS{channel}:CORR:STAT {bool_to_ONOFF(enable)}")
+	
+	@superreturn
+	def get_cal_enabled(self, channel:int=1):
+		self._super_hint = str_to_bool(self.query(f"SENS{channel}:CORR:STAT?"))
 	
 	@superreturn
 	def set_rf_enable(self, enable:bool):
