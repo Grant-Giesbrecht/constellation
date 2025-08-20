@@ -324,6 +324,13 @@ class IndexedList(Packable):
 
 	def __next__(self):
 		if self._iter_index < self.first_index+self.num_indices:
+			
+			# Advance until a populated index is found
+			while not self.idx_is_populated(self._iter_index):
+				self._iter_index += 1
+				if self._iter_index >= self.first_index+self.num_indices:
+					raise StopIteration
+			
 			result = self.get_idx_val(self._iter_index)
 			self._iter_index += 1
 			return result
