@@ -813,7 +813,7 @@ class InstrumentState(Packable):
 					temp_dict[dmk] = new_obj
 				except Exception as e:
 					prob_item = data[mi][dmk]
-					self.log.error(f"Failed to unpack dict of Packables in object of type '{type(self).__name__}'. ({e})", detail=f"Class={type(self)}, problem manifest item=(name:{dmk}, type:{type(prob_item)})")
+					self.log.error(f"Failed to unpack dict of Packables in object of type '{type(self).__name__}'. ({e})", detail=f"Class={type(self)}, problem manifest item=(name:{dmk}, type:{type(new_obj)}), src-type:{type(prob_item)})")
 					return
 			setattr(self, mi, temp_dict)
 
@@ -1257,10 +1257,10 @@ class Driver(ABC):
 	# 	
 	# 	return val
 				
-	def print_state(self, make_pretty:bool=True):
+	def print_state(self, pretty:bool=True):
 		
 		# Use pretty state formatting
-		if make_pretty:
+		if pretty:
 			print(self.state.state_str())
 		
 		# Print full dictionary
@@ -1293,29 +1293,31 @@ class Driver(ABC):
 		meta_dict["max_channels"] = self.max_channels
 		meta_dict["max_traces"] = self.max_traces
 		
-		# Create state dictionary
-		state_dict = {}
-		for k, v in self.state.items():
-			
-			if isinstance(v, IndexedList):
-				state_dict[k] = v.to_dict()
-			else:
-				state_dict[k] = v
+		# # Create state dictionary
+		# state_dict = {}
+		# for k, v in self.state.items():
+		# 	
+		# 	if isinstance(v, IndexedList):
+		# 		state_dict[k] = v.to_dict()
+		# 	else:
+		# 		state_dict[k] = v
 		
 		# CreaTe data dictionary if requested, package output dict
 		if include_data:
 			
-			data_dict = {}
-			for k, v in self.data.items():
-				
-				if isinstance(v, IndexedList):
-					data_dict[k] = v.to_dict()
-				else:
-					data_dict[k] = v
+			state_dict = self.state.pack()
 			
-			out_dict = {"metadata":meta_dict, "state":state_dict, "data":data_dict}
+			# data_dict = {}
+			# for k, v in self.data.items():
+			# 	
+			# 	if isinstance(v, IndexedList):
+			# 		data_dict[k] = v.to_dict()
+			# 	else:
+			# 		data_dict[k] = v
 		else:
-			out_dict = {"metadata":meta_dict, "state":state_dict}
+			state_dict = self.state.pack_state()
+			
+		out_dict = {"metadata":meta_dict, "state":state_dict}
 		
 		return out_dict
 	
@@ -1341,7 +1343,7 @@ class Driver(ABC):
 		# Save data
 		return dict_to_hdf(out_dict, filename)
 	
-	def load_state_dict(self, state_dict:dict):
+	def load_state_dict(self, state_dict:dict) -> bool:
 		''' Loads a state from a dictionary. Note that this only updates the 
 		internal state, it does NOT apply the state to the hardware. To do this,
 		the `apply_state()` function must be used.
@@ -1353,35 +1355,43 @@ class Driver(ABC):
 			bool: True if state is succesfully loaded.
 		'''
 		
-		# Get max channels and traces
-		try:
-			self.max_channels = int(state_dict['metadata']['max_channels'])
-		except:
-			self.max_channels = None
+		# # Get max channels and traces
+		# try:
+		# 	self.max_channels = int(state_dict['metadata']['max_channels'])
+		# except:
+		# 	return False
+		# 
+		# try:
+		# 	self.max_traces = int(state_dict['metadata']['max_traces'])
+		# except:
+		# 	return False
+		
+		# self.state.unpack_state(state_dict['state'])
 		
 		try:
-			self.max_traces = int(state_dict['metadata']['max_traces'])
-		except:
-			self.max_traces = None
-		
-		# Interpret state parameters
-		try:
-			
-			# Get state dictionary
-			sd = state_dict['state']
-			
-			# Loop over dictionary
-			for k, v in sd.items():
-				
-				# Check if value is a dictionary
-				if isinstance(v, dict):
-					self.state[k].from_dict(v) # Dictionaries are from IndexedList objects
-				else:
-					self.state[k] = v # All others are directly saved
-			
+			self.state.unpack_state(state_dict['state'])
 		except Exception as e:
-			self.error(f"Failed to apply state dictionary ({e}).")
+			self.error(f"Failed to unpack state. ({e})")
 			return False
+		
+		# # Interpret state parameters
+		# try:
+		# 	
+		# 	# Get state dictionary
+		# 	sd = state_dict['state']
+		# 	
+		# 	# Loop over dictionary
+		# 	for k, v in sd.items():
+		# 		
+		# 		# Check if value is a dictionary
+		# 		if isinstance(v, dict):
+		# 			self.state[k].from_dict(v) # Dictionaries are from IndexedList objects
+		# 		else:
+		# 			self.state[k] = v # All others are directly saved
+		# 	
+		# except Exception as e:
+		# 	self.error(f"Failed to apply state dictionary ({e}).")
+		# 	return False
 		
 		return True
 	
