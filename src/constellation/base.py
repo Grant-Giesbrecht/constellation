@@ -196,9 +196,13 @@ class IndexedList(Packable):
 		self.num_indices = num_indices
 		self.index_data = {}
 		
-		self._iter_index = 0
+		self._iter_index = self.first_index
 		
 		self.validate_type = validate_type
+	
+	def clear(self):
+		self.index_data = {}
+		
 	
 	def set_manifest(self):
 		self.manifest.append("first_index")
@@ -225,7 +229,7 @@ class IndexedList(Packable):
 		
 		if self.validate_type is not None:
 			if not isinstance(value, self.validate_type):
-				raise TypeError
+				raise TypeError(f"Expected value of type '{self.validate_type}' but received value of type '{type(value)}'.")
 		
 		if key < self.first_index or key >= self.first_index + self.num_indices:
 			raise KeyError(f"Index {key} out of range.")
@@ -248,7 +252,7 @@ class IndexedList(Packable):
 		# 	val = self.get_idx_val(ch)
 		# 	out = out + f"{indent}>:qindex {ch}<: >:a@:LOCK{truncate_str(val, 40)}@:UNLOCK<@:LOCK, ({type(val)})@:UNLOCK"
 		
-		out = plf.markdown(out)
+		out = plf.markdown(out) + "\n"
 		return out
 	
 	def get_valid_idx(self, index:int) -> int:
@@ -282,7 +286,7 @@ class IndexedList(Packable):
 		
 		if self.validate_type is not None:
 			if not isinstance(value, self.validate_type):
-				raise TypeError
+				raise TypeError(f"Expected value of type '{self.validate_type}' but received value of type '{type(value)}'.")
 		
 		chan = self.get_valid_idx(index)
 		self.index_data[f"idx-{chan}"] = value
@@ -475,7 +479,7 @@ class InstrumentState(Packable):
 		# List of all properly added parameters (helpful for listing state in printout)
 		self.valid_params = []
 	
-	def add_param(self, name:str, unit:str, is_data:bool=False, value=None ):
+	def add_param(self, name:str, unit:str="", is_data:bool=False, value=None ):
 		''' Adds a parameter in the __init__ function.
 		
 		Should only be used to add JSON serializable items, or IndexedLists,

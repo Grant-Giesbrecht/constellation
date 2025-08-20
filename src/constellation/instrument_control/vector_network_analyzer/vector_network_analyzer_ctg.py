@@ -17,63 +17,66 @@ def plot_vna_mag(data:dict, label:str=""):
 	plt.xlabel("Frequency [GHz]")
 	plt.ylabel("S-Parameters [dB]")
 
-class VNATraceState(Packable):
+class VNATraceState(InstrumentState):
 	""" Class used to represent a trace that is active on the VNA.
 	"""
 	
-	def __init__(self, log:plf.LogPile):
+	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log)
 		
-		self.num = 1 # Trace number
-		self.channel = 1 # Channel that trace is defined on
-		self.id_str = "Tr1"
-		self.measurement = BasicVectorNetworkAnalyzerState.MEAS_S11
-		self.format = BasicVectorNetworkAnalyzerState.FORM_LOG_MAG
+		self.add_param("enabled", unit="bool", value=False)
 		
-		self.data = {}
-	
-	def set_manifest(self):
+		self.add_param("channel")
+		self.add_param("id_str") # Trace name
+		self.add_param("measurement") # For example: BasicVectorNetworkAnalyzerState.MEAS_S11
+		self.add_param("format") # For example: BasicVectorNetworkAnalyzerState.FORM_LOG_MAG
 		
-		self.manifest.append("num")
-		self.manifest.append("channel")
-		self.manifest.append("id_str")
-		self.manifest.append("measurements")
-		self.manifest.append("format")
-		
-		self.manifest.append("data")
+		self.add_param("data", is_data=True, value={"freq_Hz":[], "meas_dB":[]})
 
-class VNAChannelState(Packable):
+class VNAChannelState(InstrumentState):
 	""" Describes the state of one VNA channel.
 	"""
 	
-	def __init__(self, log:plf.LogPile):
+	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log)
 		
-		self.freq_start = None
-		self.freq_end = None
-		self.power = None
-		self.num_points = None
-		self.rew_bw = None
-	
-	def set_manifest(self):
+		self.add_param("enabled", unit="bool", value=False)
 		
-		self.manifest.append("freq_start")
-		self.manifest.append("freq_end")
-		self.manifest.append("power")
-		self.manifest.append("num_points")
-		self.manifest.append("res_bw")
+		self.add_param("freq_start", unit="Hz")
+		self.add_param("freq_end", unit="Hz")
+		self.add_param("res_bw", unit="Hz")
+		
+		self.add_param("num_points", unit="")
+		self.add_param("power", unit="dBm")
+
 
 class BasicVectorNetworkAnalyzerState(InstrumentState):
-	
-	def __init__(self, log:plf.LogPile):
+
+	def __init__(self, first_channel:int, num_channels:int, first_trace:int, num_traces:int, log:plf.LogPile=None):
 		super().__init__(log)
 		
-		self.channels = []
-		self.rf_enable = []
-		self.traces = []
-	
-	def set_manifest(self):
-		pass
+		self.add_param("first_channel", unit="1", value=first_channel)
+		self.add_param("num_channels", unit="1", value=num_channels)
+		self.add_param("first_trace", unit="1", value=first_trace)
+		self.add_param("num_traces", unit="1", value=num_traces)
+		
+		self.add_param("rf_enable", unit="bool")
+		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=VNAChannelState, log=log))
+		self.add_param("traces", unit="", value=IndexedList(self.first_trace, self.num_traces, validate_type=VNATraceState, log=log))
+		
+		#NOTE: Unlike the oscilloscope state object, which immediately creates
+		# all channel objects, this will dynamically create more as needed. This is to prevent the
+		# state dict from getting massive (max possible size) when only a few traces or channels
+		# are needed. THis is particularly important due to the large number of channels and traces
+		# permitted for VNAs.
+		
+		# # Initialize channels
+		# for ch in self.channels.get_range():
+		# 	self.channels[ch] = VNAChannelState(log=log)
+		
+		# # Initialize traces
+		# for tr in self.traces.get_range():
+		# 	self.traces[tr] = VNATraceState(log=log)
 
 class BasicVectorNetworkAnalyzerCtg(Driver):
 	
@@ -105,81 +108,107 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	RF_ENABLE = "rf-enable[bool]"
 	TRACES = "traces"
 	
-	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, **kwargs)
+	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", first_channel:int=1, first_trace:int=1, **kwargs):
+		super().__init__(address, log, expected_idn=expected_idn, first_channel_num=first_channel, first_trace_num=first_trace, **kwargs)
 		
 		self.max_channels = max_channels
 		self.max_traces = max_traces # This is per-channel
 		
-		self.state = BasicVectorNetworkAnalyzerState()
-		
-		self.data = []
+		self.state = BasicVectorNetworkAnalyzerState(self.first_channel, self.max_channels, self.first_trace, self.max_traces, log=log)
 	
+	@abstractmethod
+	def _get_trace_idx(self, trace_name:str) -> int:
+		pass
+	
+	@abstractmethod
+	def valid_trace_name(self, name:str):
+		pass
 	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float, channel:int=1):
-		pass
+		self.modify_state(self.get_freq_start, ["channels", "freq_start"], f_Hz, indices=[channel])
+	
 	@abstractmethod
+	@enabledummy
 	def get_freq_start(self, channel:int=1):
-		pass
+		self.modify_state(None, ["channels", "freq_start"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_freq_end(self, f_Hz:float, channel:int=1):
-		pass
+		self.modify_state(self.get_freq_start, ["channels", "freq_end"], f_Hz, indices=[channel])
+	
 	@abstractmethod
+	@enabledummy
 	def get_freq_end(self, channel:int=1):
-		pass
+		self.modify_state(None, ["channels", "freq_end"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_power(self, p_dBm:float, channel:int=1):
-		pass
+		self.modify_state(self.get_power, ["channels", "power"], p_dBm, indices=[channel])
+	
 	@abstractmethod
+	@enabledummy
 	def get_power(self, channel:int=1):
-		pass
+		self.modify_state(None, ["channels", "power"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_num_points(self, points:int, channel:int=1):
-		pass
+		self.modify_state(self.get_num_points, ["channels", "num_points"], points, indices=[channel])
+	
 	@abstractmethod
+	@enabledummy 
 	def get_num_points(self, channel:int=1):
-		pass
+		self.modify_state(None, ["channels", "num_points"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def set_res_bandwidth(self, rbw_Hz:float, channel:int=1):
-		pass
+		self.modify_state(self.get_res_bandwidth, ["channels", "res_bw"], rbw_Hz, indices=[channel])
+	
 	@abstractmethod
+	@enabledummy
 	def get_res_bandwidth(self, channel:int=1):
-		pass
+		self.modify_state(None, ["channels", "res_bw"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	def clear_traces(self):
-		pass
+		self.state.traces.clear()
 	
 	@abstractmethod
-	def add_trace(self, channel:int, measurement:str):
+	def add_trace(self, channel:int, trace_name:str, measurement:str) -> bool:
 		''' Returns trace number '''
 		pass
+		#TODO: Add to state tracking somehow
 	
-	# @abstractmethod
-	# def get_trace(self, trace:int):
-	# 	pass
+	@abstractmethod
+	@enabledummy
+	def get_trace_data(self, trace_name:str):
+		self.modify_state(None, ["traces", "data"], self._super_hint, indices=[self._get_trace_idx(trace_name)])
 	
 	@abstractmethod
 	def set_rf_enable(self, enable:bool):
-		pass
+		self.modify_state(self.get_rf_enable, ["rf_enable"], enable)
 	
 	@abstractmethod
+	@enabledummy
 	def get_rf_enable(self):
+		self.modify_state(None, ["rf_enable"], self._super_hint)
+	
+	@abstractmethod
+	def set_rf_power(self, power_dBm:float, channel:int=1):
+		self.modify_state(self.get_rf_power, ["channels", "power"], power_dBm, indices=[channel])
+	
+	@abstractmethod
+	@enabledummy
+	def get_rf_power(self, channel:int=1):
+		self.modify_state(None, ["channels", "power"], self._super_hint, indices=[channel])
+	
+	@abstractmethod
+	def refresh_channels_and_traces(self):
 		pass
 	
 	def refresh_state(self):
-		self.warning(f">:qrefresh_state()< not implemented.")
-		# self.get_freq_start() # Skipping - not sure how to handle querying number of traces
-		# self.get_freq_end()
-		# self.get_power()
-		# self.get_num_points()
-		# self.get_res_bandwidth()
-		pass
+		self.refresh_channels_and_traces()
+		self.get_rf_enable()
 	
 	def apply_state(self, new_state):
 		# Skipping - not sure how to handle querying number of traces

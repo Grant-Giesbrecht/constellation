@@ -10,7 +10,7 @@ class BasicOscilloscopeChannelState(InstrumentState):
 		self.add_param("offset_volt", unit="V")
 		self.add_param("chan_en", unit="bool")
 		
-		self.add_param("waveform", unit="", is_data=True, value=[])
+		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
 
 class BasicOscilloscopeState(InstrumentState):
 	def __init__(self, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert, log:plf.LogPile=None):
