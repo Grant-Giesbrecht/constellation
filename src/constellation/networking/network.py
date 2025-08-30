@@ -3,7 +3,7 @@ from pyfrost.pf_client import *
 from constellation.base import *
 
 class NetworkCommand(Packable):
-	''' Object used to represent a function call passed over the Heimdallr
+	''' Object used to represent a function call passed over the Constellation
 	network to a remote instrument. '''
 	
 	def __init__(self, gc:GenCommand=None):
@@ -61,7 +61,7 @@ class NetworkCommand(Packable):
 
 class NetworkReply(Packable):
 	''' Object used to represent the return value (and success state) of a
-	function call passed over the Heimdallr	network to a remote instrument
+	function call passed over the Constellation	network to a remote instrument
 	via a NetworkCommand object. '''
 	
 	def __init__(self, gc:GenCommand=None):

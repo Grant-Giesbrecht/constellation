@@ -4,7 +4,7 @@ oscilloscope GUI.
 
 from constellation.all import *
 from PyQt6 import QtWidgets
-# from constellation.ui import HeimdallrWindow
+# from constellation.ui import ConstellationWindow
 import matplotlib.pyplot as plt
 from constellation.instrument_control.oscilloscope.oscilloscope_gui import *
 
@@ -25,7 +25,7 @@ osc = RigolDS1000Z("TCPIP0::192.168.0.70::INSTR", log=log, dummy=True)
 app = QtWidgets.QApplication(sys.argv)
 app.setStyle(f"Fusion")
 
-main_window = HeimdallrWindow(log)
+main_window = ConstellationWindow(log)
 osc_widget = BasicOscilloscopeWidget(main_window, osc, log)
 main_window.setCentralWidget(osc_widget)
 main_window.setWindowTitle("Oscilloscope")

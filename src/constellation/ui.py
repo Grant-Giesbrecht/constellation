@@ -8,7 +8,7 @@ from PyQt6.QtGui import QAction
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
 
-class HeimdallrWindow(QMainWindow):
+class ConstellationWindow(QMainWindow):
 	
 	def __init__(self, log:plf.LogPile, add_menu:bool=True):
 		super().__init__()

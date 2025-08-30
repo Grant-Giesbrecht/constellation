@@ -207,7 +207,7 @@ class IndexedList(Packable):
 	def set_manifest(self):
 		self.manifest.append("first_index")
 		self.manifest.append("num_indices")
-		self.dict_manifest["index_data"] = InstrumentState()
+		self.dict_manifest["index_data"] = InstrumentState(log=self.log)
 		
 		#TODO: Should validate_type somehow be added?
 		#TODO: Should log be added?
@@ -440,6 +440,8 @@ class IndexedList(Packable):
 			
 			# mi_deref = getattr(self, mi)
 			
+			print(f"IndexedList.log = {self.log}")
+			
 			# # Pack objects in list and add to output data
 			# d[mi] = [mi_deref[midk].pack() for midk in mi_deref.keys()]
 			
@@ -448,19 +450,26 @@ class IndexedList(Packable):
 			for dmk in data[mi].keys():
 				self.log.lowdebug(f"Unpacking manifest, item:>{mi}<, element:>:a{dmk}<")
 				
+				print(f"Unpacking dict_manifest item {mi}, key: {dmk}")
+				print(f"dict_manifest: {self.dict_manifest}")
+				
 				# Try to create a new object and unpack a list element
 				try:
 					# Create a new object of the correct type
 					try:
 						new_obj = copy.deepcopy(self.dict_manifest[mi])
+						new_obj.log = self.log
 					except Exception as e:
 						print("Dict Manifest:")
 						print(self.dict_manifest)
 						self.log.error(f"Failed to unpack dict_manifest[{mi}], ({e})")
 						return
 					
+					print(f"Created new object of type {type(new_obj)}. new_obj.log = {new_obj.log}")
+					
 					# Populate the new object by unpacking it, add to list
-					new_obj.unpack(data[mi][dmk])
+					new_obj.unpack_state(data[mi][dmk])
+					print(f"Unpacked new object")
 					temp_dict[dmk] = new_obj
 				except Exception as e:
 					prob_item = data[mi][dmk]

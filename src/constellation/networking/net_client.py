@@ -2,7 +2,7 @@ from pylogfile.base import *
 from constellation.networking.network import *
 from constellation.base import *
 
-class HeimdallrClientAgent(ClientAgent):
+class ConstellationClientAgent(ClientAgent):
 	
 	def __init__(self, log:plf.LogPile, address:str=None, port:int=None, **kwargs):
 		super().__init__(log=log, address=address, port=port, **kwargs)
@@ -199,7 +199,7 @@ class RemoteInstrument:
 	connection or driver locally.
 	'''
 	
-	def __init__(self, ca:HeimdallrClientAgent, log:plf.LogPile, remote_id:str=None, remote_address:str=None):
+	def __init__(self, ca:ConstellationClientAgent, log:plf.LogPile, remote_id:str=None, remote_address:str=None):
 		
 		# Populate id
 		self.id = Identifier()

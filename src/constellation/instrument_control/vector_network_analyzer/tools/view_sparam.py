@@ -45,7 +45,7 @@ plot_params = ["S11", "S22", "S12", "S21"]
 color_definitions = {"S11":"tab:blue", "S22":"tab:orange", "S12":"tab:green", "S21":"tab:red"}
 
 for param in plot_params:
-	# NOTE: plot_vna_mag() can be imported from Heimdallr and used as a shorthand for plotting S-parameters
+	# NOTE: plot_vna_mag() can be imported from Constellation and used as a shorthand for plotting S-parameters
 	plt.plot(np.array(data[param]['x'])/1e9, lin_to_dB(np.abs(data[param]['y'])), label=param, color=color_definitions[param])
 	
 ax1a.set_xlabel("Frequency (GHz)")

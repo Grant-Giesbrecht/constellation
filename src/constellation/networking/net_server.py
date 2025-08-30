@@ -86,7 +86,7 @@ def server_init_function(sa:ServerAgent):
 	return sa
 
 def server_callback_send(sa:ServerAgent, gc:GenCommand):
-	''' Function passed to ServerAgents to execute custom send-commands for Heimdallr
+	''' Function passed to ServerAgents to execute custom send-commands for Constellation
 	 networks (ie. those without a return value). '''
 	global serv_master
 	
@@ -184,7 +184,7 @@ def server_callback_send(sa:ServerAgent, gc:GenCommand):
 	return None
 
 def server_callback_query(sa:ServerAgent, gc:GenCommand):
-	''' Function passed to ServerAgents to execute custom query-commands for Heimdallr
+	''' Function passed to ServerAgents to execute custom query-commands for Constellation
 	 networks (ie. those with a return value). '''
 	global serv_master
 	

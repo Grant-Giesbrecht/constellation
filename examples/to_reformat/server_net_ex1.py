@@ -1,4 +1,4 @@
-''' Minimum example for setting up a server using Heimdallr.
+''' Minimum example for setting up a server using Constellation.
 '''
 
 from pyfrost.pf_server import *

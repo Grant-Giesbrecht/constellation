@@ -29,7 +29,7 @@ if args.loglevel is not None:
 log.str_format.show_detail = args.detail
 
 # Create client agent
-ca = HeimdallrClientAgent(log)
+ca = ConstellationClientAgent(log)
 ca.set_addr(ip_address, port)
 ca.connect_socket()
 

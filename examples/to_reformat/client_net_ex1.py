@@ -1,4 +1,4 @@
-''' Minimum example for setting up a command line client using Heimdallr.
+''' Minimum example for setting up a command line client using Constellation.
 '''
 
 from constellation.all import *
