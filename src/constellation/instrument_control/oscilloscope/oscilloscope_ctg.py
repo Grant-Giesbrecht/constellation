@@ -225,69 +225,6 @@ class BasicOscilloscopeCtg(Driver):
 		
 		for ch in range(1, self.max_channels):
 			self.get_waveform(ch)
-			
-
-# class RemoteBasicOscilloscopeCtg(RemoteInstrument, BasicOscilloscopeCtg):
-	
-# 	''' This class mirrors the function in BasicOscilloscopeCtg, but each function
-# 	is decorated with RemoteFunction. This lets a T/C client create RemoteInstruments
-# 	for this category of instrument using this class and callings its functions, rather
-# 	than creating a RemoteInstrument object and always calling remote_call.'''
-	
-# 	def __init__(self, ca:ClientAgent, log:plf.LogPile, remote_id:str=None, remote_address:str=None):
-# 		super().__init__(ca, log, remote_id=remote_id, remote_address=remote_address)
-	
-# 	@remotefunction
-# 	def set_div_time(self, time_s:float):
-# 		pass
-	
-# 	@remotefunction
-# 	def get_div_time(self):
-# 		pass
-	
-# 	@remotefunction
-# 	def set_offset_time(self, time_s:float):
-# 		pass
-	
-# 	@remotefunction
-# 	def get_offset_time(self):
-# 		pass
-	
-# 	@remotefunction
-# 	def set_div_volt(self, channel:int, volt_V:float):
-# 		pass
-	
-# 	@remotefunction
-# 	def get_div_volt(self, channel:int):
-# 		pass
-	
-# 	@remotefunction
-# 	def set_offset_volt(self, channel:int, volt_V:float):
-# 		pass
-	
-# 	@remotefunction
-# 	def get_offset_volt(self, channel:int):
-# 		pass
-	
-# 	@remotefunction
-# 	def set_chan_enable(self, channel:int, enable:bool):
-# 		pass
-	
-# 	@remotefunction
-# 	def get_chan_enable(self, channel:int):
-# 		pass
-	
-# 	@remotefunction
-# 	def get_waveform(self, channel:int):
-# 		pass
-	
-# 	@remotefunction
-# 	def refresh_state(self):
-# 		pass
-	
-# 	@remotefunction
-# 	def apply_state(self, new_state:dict):
-# 		pass
 	
 class StdOscilloscopeCtg(BasicOscilloscopeCtg):
 	

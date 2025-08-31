@@ -28,23 +28,3 @@ dict_summary(in_dict, verbose=1)
 
 ins = from_serial_dict(in_dict)
 print(ins.state_str())
-
-# #================= Basic PyQt App creation things =========================
-# 
-# # Create app object
-# app = QtWidgets.QApplication(sys.argv)
-# app.setStyle(f"Fusion")
-# 
-# main_window = ConstellationWindow(log)
-# osc_widget = BasicOscilloscopeWidget(main_window, osc, log)
-# main_window.setCentralWidget(osc_widget)
-# main_window.setWindowTitle("Oscilloscope")
-# main_window.show()
-# 
-# osc.set_div_time(0.001)
-# osc.set_offset_time(0.002)
-# osc.set_chan_enable(2, False)
-# osc.set_chan_enable(3, False)
-# osc.print_state()
-# 
-# app.exec()
