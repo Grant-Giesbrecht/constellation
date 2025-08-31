@@ -3,6 +3,8 @@ from constellation.networking.net_client import *
 
 class BasicOscilloscopeChannelState(InstrumentState):
 	
+	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "waveform")
+	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)
 		
@@ -13,6 +15,9 @@ class BasicOscilloscopeChannelState(InstrumentState):
 		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
 
 class BasicOscilloscopeState(InstrumentState):
+	
+	__state_fields__ = ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels")
+	
 	def __init__(self, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert, log:plf.LogPile=None):
 		super().__init__(log=log)
 		

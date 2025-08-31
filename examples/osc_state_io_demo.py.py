@@ -30,7 +30,7 @@ dict_summary(sd, verbose=1)
 print("Loaded state into osc2")
 print(f"{Style.RESET_ALL}=============== Osc2: Print State ========================")
 osc2.load_state_dict(sd)
-
+osc2.print_state()
 
 print(f"{Style.RESET_ALL}\n========== Osc2: State -> Dict: Summary ==================")
 sd2 = osc2.state_to_dict()
