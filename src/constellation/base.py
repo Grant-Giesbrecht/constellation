@@ -476,7 +476,7 @@ class InstrumentState(Serializable):
 	""" Used to describe the state of a Driver or instrument.
 	"""
 	
-	__state_fields__ = ("units", "is_data")
+	__state_fields__ = ("units", "is_data", "valid_params")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__()
