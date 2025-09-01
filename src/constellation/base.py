@@ -339,7 +339,7 @@ class IndexedList(Serializable):
 	
 	def get_range(self):
 		return range(self.first_index, self.first_index+self.num_indices)
-	a
+	
 class InstrumentState(Serializable):
 	""" Used to describe the state of a Driver or instrument.
 	"""
@@ -983,6 +983,14 @@ class Driver(ABC):
 		state_dict['metadata'] = meta_dict
 		
 		return state_dict
+	
+	def poll(self) -> dict:
+		''' Combination of refresh_state and state_to_dict() to meet the expectations
+		of the DriverAgent in labmesh.
+		'''
+		
+		self.refresh_state()
+		return self.state_to_dict()
 	
 	def dump_state(self, filename:str, include_data:bool=False):
 		''' Saves the current instrument state to disk. Note that it does NOT
