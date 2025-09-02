@@ -218,10 +218,92 @@ class DirectSCPIRelay(CommandRelay):
 		
 		return True, rv
 
-class RemoteSCPIRelay(CommandRelay):
+class RemoteTextCommandRelayClient(CommandRelay):
 	''' A relay that connects to an instrument via a network and relays
 	SCPI commands indirectly from a driver.
 	'''
+	
+	def __init__(self):
+		super().__init__()
+		
+		self.rm = pv.ResourceManager('@py')
+		self.inst = None
+	
+	def connect(self) -> bool:
+		
+		try:
+			self.inst = self.rm.open_resource(self.address)
+			self.online = True
+			self.log.debug(f"DirectSCPIRelay attempting to open instrument at address >{self.address}<.")
+		except:
+			self.log.debug(f"DirectSCPIRelay failed to open instrument at address >{self.address}<.")
+			return False 
+		return True
+	
+	def close(self) -> None:
+		''' Attempts to close the connection to the physical 
+		instrument.'''
+		
+		self.inst.close()	
+	
+	def write(self, cmd:str) -> bool:
+		''' Sends a SCPI command via PyVISA.
+		
+		Args:
+			cmd (str): Command to write to instrument.
+		
+		Returns:
+			bool: Success status of write.
+		'''
+		
+		try:
+			self.inst.write(cmd)
+			self.log.lowdebug(f"DirectSCPIRelay wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
+		except Exception as e:
+			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			return False
+		
+		return True
+	
+	def read(self) -> tuple:
+		''' Reads data as a string from the instrument.
+		
+		Returns:
+			tuple: Element 0 = success status of read, element 1 = read string.
+		'''
+		
+		try:
+			rv = self.inst.read()
+			self.log.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
+		except Exception as e:
+			self.log.error(f"DirectSCPIRelay failed to read from instrument {self.address}. ({e})")
+			return False, ""
+		
+		return True, ""
+	
+	def query(self, cmd:str) -> tuple:
+		''' Queries data as a string from the instrument.
+		
+		Args:
+			cmd (str): Command to query from instrument.
+		
+		Returns:
+			tuple: Element 0 = success status of read, element 1 = read string.
+		'''
+		
+		try:
+			rv = self.inst.query(cmd)
+			self.log.lowdebug(f"DirectSCPIRelay queried instrument: >@:LOCK{rv}@:UNLOCK<.")
+		except Exception as e:
+			self.log.error(f"DirectSCPIRelay failed to query instrument {self.address}. ({e})")
+			return False, ""
+		
+		return True, rv
+	
+	def __init__(self):
+		pass
+
+class RemoteTextCommandRelayListener:
 	
 	def __init__(self):
 		pass
