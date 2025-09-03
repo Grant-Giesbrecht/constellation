@@ -1,7 +1,7 @@
 
 import asyncio, sys, time, random, os
 from typing import Dict, Any
-from labmesh import DriverAgent
+from labmesh import RelayAgent
 from labmesh.driver import upload_dataset
 
 from constellation.all import *
@@ -52,7 +52,7 @@ async def main():
 		return
 	
 	svc = "osc-1"
-	agent = DriverAgent(svc, osc_1, state_interval=10.0)
+	agent = RelayAgent(svc, osc_1, state_interval=10.0)
 	await asyncio.gather(agent.run(), periodic_upload(svc))
 
 if __name__ == "__main__":

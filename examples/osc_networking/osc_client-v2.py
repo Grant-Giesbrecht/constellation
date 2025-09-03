@@ -1,6 +1,11 @@
 """ Oscilloscope hardware test
 """
 
+import asyncio, os
+from labmesh import LabClient, RelayClient
+from ganymede import dict_summary
+from jarnsaxa import from_serial_dict
+from constellation import *
 from constellation.all import *
 from PyQt6 import QtWidgets
 # from constellation.ui import ConstellationWindow
@@ -12,20 +17,51 @@ log = plf.LogPile()
 log.str_format.show_detail = False
 log.terminal_level = plf.DEBUG
 
-remote_relay = RemoteTextCommandRelayClient()
-osc = RigolDS1000Z("TCPIP0::192.168.1.74::INSTR", log=log, relay=)
-
-if not osc.online:
-	log.critical(f"Failed to connect to oscilloscope. Exiting")
-	sys.exit()
-
 osc.refresh_state()
 osc.refresh_data()
 
-osc.dump_state("rigol_state2.state.hdf")
+async def main():
+	
+	# Create oscilloscope object with remote relay
+	remote_relay = RemoteTextCommandRelayClient()
+	osc = RigolDS1000Z("TCPIP0::192.168.1.74::INSTR", log=log, relay=remote_relay)
 
-in_dict = hdf_to_dict("rigol_state2.state.hdf")
-dict_summary(in_dict, verbose=1)
+	if not osc.online:
+		log.critical(f"Failed to connect to oscilloscope. Exiting")
+		sys.exit()
+	
+	client = LabClient()
+	await client.connect()
 
-ins = from_serial_dict(in_dict)
-print(ins.state_str())
+	print("Services:", await client.list_services())
+	print("Banks:", await client.list_banks())
+	
+	def print_scope_state(svc:str, state:dict):
+		print(f"Received instrument state for svc={svc}:")
+		inst_state = from_serial_dict(state)
+		if isinstance(inst_state , dict):
+			dict_summary(inst_state, verbose=1)
+		else:
+			print(inst_state.state_str(pretty=True))
+	
+	# client.on_state(lambda svc, st: print(f"[state] {svc}: {st}"))
+	client.on_state(print_scope_state)
+	client.on_dataset(lambda info: print(f"[dataset] new {info}"))
+
+	osc_dc = await client.driver("osc-1")
+	await osc_dc.call("set_div_volt", params=[4, 5])
+
+	# auto-pick first bank and download datasets as they appear
+	async def downloader(info):
+		bank = await client.bank(info.get("bank_id"))
+		dest = f"./download_{info['dataset_id']}.bin"
+		meta = await bank.download(info["dataset_id"], dest)
+		print("[downloaded]", meta)
+
+	client.on_dataset(lambda info: asyncio.create_task(downloader(info)))
+
+	while True:
+		await asyncio.sleep(1)
+
+if __name__ == "__main__":
+	asyncio.run(main())

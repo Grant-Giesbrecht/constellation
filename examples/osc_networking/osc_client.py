@@ -1,11 +1,11 @@
 
 import asyncio, os
-from labmesh import LabClient, DriverClient
+from labmesh import LabClient, RelayClient
 from ganymede import dict_summary
 from jarnsaxa import from_serial_dict
 from constellation import *
 
-class PSUClient(DriverClient):
+class PSUClient(RelayClient):
 	async def set_voltage(self, *, value: float):
 		return await super().call("set_voltage", {"value": value})
 	async def set_output(self, *, on: bool):

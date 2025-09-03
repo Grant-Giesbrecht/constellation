@@ -986,7 +986,7 @@ class Driver(ABC):
 	
 	def poll(self) -> dict:
 		''' Combination of refresh_state and state_to_dict() to meet the expectations
-		of the DriverAgent in labmesh.
+		of the RelayAgent in labmesh.
 		'''
 		
 		self.refresh_state()
