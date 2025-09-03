@@ -11,15 +11,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument('address', help="VISA address of instrument to connect to.")
 args = parser.parse_args()
 
-async def periodic_upload(global_name: str):
+async def periodic_upload(relay_id: str):
 	# pretend a big result every ~5s
 	ingest = os.environ.get("LMH_BANK_INGEST_CONNECT", "tcp://127.0.0.1:5761")
 	n = 0
 	while True:
 		await asyncio.sleep(60)
-		payload = ("Result %d from %s\n" % (n, global_name)).encode() * 200000  # ~4MB
-		did = await upload_dataset(ingest, payload, global_name=global_name, meta={"note":"demo"})
-		print(f"[relay:{global_name}] uploaded dataset {did}")
+		payload = ("Result %d from %s\n" % (n, relay_id)).encode() * 200000  # ~4MB
+		did = await upload_dataset(ingest, payload, relay_id=relay_id, meta={"note":"demo"})
+		print(f"[relay:{relay_id}] uploaded dataset {did}")
 		n += 1
 
 async def main():

@@ -1,6 +1,6 @@
 
 import asyncio, os
-from labmesh import LabClient, RelayClient
+from labmesh import DirectorClientAgent, RelayClient
 from ganymede import dict_summary
 from jarnsaxa import from_serial_dict
 from constellation import *
@@ -14,10 +14,10 @@ class PSUClient(RelayClient):
 		return await super().call("get_state", {})
 
 async def main():
-	client = LabClient()
+	client = DirectorClientAgent()
 	await client.connect()
 
-	print("Services:", await client.list_global_names())
+	print("Services:", await client.list_relay_ids())
 	print("Banks:", await client.list_banks())
 	
 	def print_scope_state(gname:str, state:dict):
@@ -32,12 +32,12 @@ async def main():
 	client.on_state(print_scope_state)
 	client.on_dataset(lambda info: print(f"[dataset] new {info}"))
 
-	osc_dc = await client.relay("osc-1")
+	osc_dc = await client.get_relay_agent("osc-1")
 	await osc_dc.call("set_div_volt", params=[4, 5])
 
 	# auto-pick first bank and download datasets as they appear
 	async def downloader(info):
-		bank = await client.bank(info.get("bank_id"))
+		bank = await client.get_databank_agent(info.get("bank_id"))
 		dest = f"./download_{info['dataset_id']}.bin"
 		meta = await bank.download(info["dataset_id"], dest)
 		print("[downloaded]", meta)
