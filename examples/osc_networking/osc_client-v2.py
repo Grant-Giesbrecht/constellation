@@ -33,22 +33,22 @@ async def main():
 	client = LabClient()
 	await client.connect()
 
-	print("Services:", await client.list_services())
+	print("Services:", await client.list_global_names())
 	print("Banks:", await client.list_banks())
 	
-	def print_scope_state(svc:str, state:dict):
-		print(f"Received instrument state for svc={svc}:")
+	def print_scope_state(gname:str, state:dict):
+		print(f"Received instrument state for gname={gname}:")
 		inst_state = from_serial_dict(state)
 		if isinstance(inst_state , dict):
 			dict_summary(inst_state, verbose=1)
 		else:
 			print(inst_state.state_str(pretty=True))
 	
-	# client.on_state(lambda svc, st: print(f"[state] {svc}: {st}"))
+	# client.on_state(lambda gname, st: print(f"[state] {gname}: {st}"))
 	client.on_state(print_scope_state)
 	client.on_dataset(lambda info: print(f"[dataset] new {info}"))
 
-	osc_dc = await client.driver("osc-1")
+	osc_dc = await client.relay("osc-1")
 	await osc_dc.call("set_div_volt", params=[4, 5])
 
 	# auto-pick first bank and download datasets as they appear
