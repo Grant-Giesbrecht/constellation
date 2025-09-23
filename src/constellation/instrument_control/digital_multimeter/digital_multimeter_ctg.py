@@ -77,9 +77,6 @@ class BasicDigitalMultimeterCtg(Driver):
 					rval = return_selected(self)
 				case _:
 					found = False
-					
-					
-				
 			
 			# If function was found, label as recognized, else check match for general getter or setter
 			if found:
