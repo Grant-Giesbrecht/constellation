@@ -11,10 +11,10 @@ import array
 from constellation.base import *
 from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg import *
 
-class SiglentSDM3000X(BasicDigitalMultimeterCtg):
+class Keysight34400(BasicDigitalMultimeterCtg):
 	
 	def __init__(self, address:str, log:plf.LogPile):
-		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Siglent Technologies,SDM30") 
+		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Keysight Technologies,344") 
 		
 		# Unit to make sure is matched by returned string
 		self.check_units = ""
@@ -59,6 +59,13 @@ class SiglentSDM3000X(BasicDigitalMultimeterCtg):
 		
 		self.write(f"ABORT") # Abort any previous wait for trigger events
 		self.write(f"CONFigure:{mstr}")
+	
+	def pop_error_queue(self) -> str:
+		''' Queries the instrument for it's last error 
+		'''
+		#TODO: Force all instrument to provide?
+		
+		return self.query("SYSTEM:ERROR?")
 	
 	@superreturn
 	def get_measurement(self):
