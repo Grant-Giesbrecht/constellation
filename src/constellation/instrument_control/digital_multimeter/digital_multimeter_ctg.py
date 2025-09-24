@@ -122,16 +122,25 @@ class BasicDigitalMultimeterCtg(Driver):
 		pass
 	
 	@abstractmethod
-	def get_value(self):
-		''' Returns the last measured value.'''
+	def get_value(self, check_measurement:bool=True):
+		''' Queries the instrument and returns the last measured value.'''
+		
+		# Save super hint, it will be overridden by get_measurement()
+		local_super_hint = self._super_hint
+		
+		if check_measurement:
+			self.get_measurement()
 		
 		# Check if last value was a current
 		if self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_CURR_AC, BasicDigitalMultimeterCtg.MEAS_CURR_DC):
-			return self.modify_state(None, ["result_I"], self._super_hint)
+			return self.modify_state(None, ["result_I"], local_super_hint)
 		elif self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_VOLT_AC, BasicDigitalMultimeterCtg.MEAS_VOLT_DC):
-			return self.modify_state(None, ["result_V"], self._super_hint)
+			return self.modify_state(None, ["result_V"], local_super_hint)
 		elif self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_RESISTANCE_2WIRE, BasicDigitalMultimeterCtg.MEAS_RESISTANCE_4WIRE):
-			return self.modify_state(None, ["result_R"], self._super_hint)
+			return self.modify_state(None, ["result_R"], local_super_hint)
+		else:
+			self.error(f"Invalid measurement type >{self.state.measurement_type}<.")
+			return None
 	
 	def send_trigger_and_read(self):
 		''' Tells the instrument to read and returns teh measurement result. '''

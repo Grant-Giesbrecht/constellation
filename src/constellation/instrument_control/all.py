@@ -6,3 +6,6 @@ from constellation.instrument_control.oscilloscope.drivers.LeCroy_WaveRunner44Xi
 from constellation.instrument_control.vector_network_analyzer.vector_network_analyzer_ctg import *
 # from constellation.instrument_control.vector_network_analyzer.vector_network_analyzer_gui import *
 from constellation.instrument_control.vector_network_analyzer.drivers.RohdeSchwarz_ZVA_dvr import *
+
+from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg import *
+from constellation.instrument_control.digital_multimeter.drivers.Siglent_SDM3000X_dvr import *
