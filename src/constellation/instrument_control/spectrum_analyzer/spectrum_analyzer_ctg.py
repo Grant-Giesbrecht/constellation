@@ -3,25 +3,34 @@ from constellation.networking.net_client import *
 
 class SpectrumAnalyzerTraceState(InstrumentState):
 	
-	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "waveform")
+	__state_fields__ = ("format")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)
 		
+		self.add_param("format", unit="CONST")
+		
+		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
 
 class SpectrumAnalyzerChannelState(InstrumentState):
 	
-	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "waveform")
+	__state_fields__ = ("freq_start")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)
 		
-		self.add_param("div_volt", unit="V")
-		self.add_param("offset_volt", unit="V")
+		self.add_param("freq_start", unit="Hz")
+		self.add_param("freq_end", unit="Hz")
+		self.add_param("num_points", unit="1")
+		self.add_param("res_bw", unit="Hz")
+		self.add_param("continuous_trig_en", unit="bool")
+		self.add_param("ref_level", unit="dBm")
+		self.add_param("rf_power", unit="dBm")
+		self.add_param("rf_enable", unit="dBm")
+		self.add_param("y_div_scale", unit="dB")
 		
-		self.add_param("traces", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=SpectrumAnalyzerTraceState, log=log))
+		self.add_param("traces", unit="", value=IndexedList(self.first_trace, self.num_traces, validate_type=SpectrumAnalyzerTraceState, log=log))
 		
-		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
 
 class SpectrumAnalyzerState(InstrumentState):
 	
@@ -30,14 +39,14 @@ class SpectrumAnalyzerState(InstrumentState):
 	def __init__(self, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert, log:plf.LogPile=None):
 		super().__init__(log=log)
 		
-		self.add_param("first_channel", unit="1", value=first_channel)
-		self.add_param("num_channels", unit="1", value=num_channels)
+		# self.add_param("first_channel", unit="1", value=first_channel)
+		# self.add_param("num_channels", unit="1", value=num_channels)
 		
 		self.add_param("ndiv_horiz", unit="1", value=ndiv_horiz)
 		self.add_param("ndiv_vert", unit="1", value=ndiv_vert)
 		
-		self.add_param("div_time", unit="s")
-		self.add_param("offset_time", unit="s")
+		# self.add_param("div_time", unit="s")
+		# self.add_param("offset_time", unit="s")
 		
 		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=SpectrumAnalyzerChannelState, log=log))
 		
