@@ -43,3 +43,7 @@ class SiglentSDG2000X(BasicArbitraryWaveformGeneratorCtg):
 		
 		# Send command to instrument
 		self.write(f"C{channel}:BSWV OFST,{offset_V}")
+	
+	def set_enable(self, channel:int, enable:bool):
+		
+		self.write(f"C{channel}:OUTP {bool_to_ONOFF(enable)}")

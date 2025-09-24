@@ -99,7 +99,7 @@ class BasicDigitalMultimeterCtg(Driver):
 			return None
 	
 	@abstractmethod
-	def set_measurement(self, measurement:str):
+	def set_measurement(self, measurement:str, range:float=None):
 		self.modify_state(self.get_measurement, ["measurement_type"], measurement)
 	
 	@abstractmethod
