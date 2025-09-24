@@ -1,6 +1,49 @@
 from constellation.base import *
 from constellation.networking.net_client import *
 
+class SpectrumAnalyzerTraceState(InstrumentState):
+	
+	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "waveform")
+	
+	def __init__(self, log:plf.LogPile=None):
+		super().__init__(log=log)
+		
+
+class SpectrumAnalyzerChannelState(InstrumentState):
+	
+	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "waveform")
+	
+	def __init__(self, log:plf.LogPile=None):
+		super().__init__(log=log)
+		
+		self.add_param("div_volt", unit="V")
+		self.add_param("offset_volt", unit="V")
+		
+		self.add_param("traces", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=SpectrumAnalyzerTraceState, log=log))
+		
+		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
+
+class SpectrumAnalyzerState(InstrumentState):
+	
+	__state_fields__ = ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels")
+	
+	def __init__(self, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert, log:plf.LogPile=None):
+		super().__init__(log=log)
+		
+		self.add_param("first_channel", unit="1", value=first_channel)
+		self.add_param("num_channels", unit="1", value=num_channels)
+		
+		self.add_param("ndiv_horiz", unit="1", value=ndiv_horiz)
+		self.add_param("ndiv_vert", unit="1", value=ndiv_vert)
+		
+		self.add_param("div_time", unit="s")
+		self.add_param("offset_time", unit="s")
+		
+		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=SpectrumAnalyzerChannelState, log=log))
+		
+		for ch_no in self.channels.get_range():
+			self.channels[ch_no] = SpectrumAnalyzerChannelState(log=log)
+
 class SpectrumAnalyzerCtg(Driver):
 	
 	SWEEP_CONTINUOUS = "sweep-continuous"

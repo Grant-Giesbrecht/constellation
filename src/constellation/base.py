@@ -563,6 +563,11 @@ class DataEntry:
 		# worth while. 
 		self.data_hash = None
 
+class FeatureUnavailable(RuntimeError):
+	''' Exception for when features are requested that are not supported on
+	the given driver.'''
+	pass
+
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
