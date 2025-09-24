@@ -9,3 +9,6 @@ from constellation.instrument_control.vector_network_analyzer.drivers.RohdeSchwa
 
 from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg import *
 from constellation.instrument_control.digital_multimeter.drivers.Siglent_SDM3000X_dvr import *
+
+from constellation.instrument_control.arb_waveform_generator.arb_waveform_generator_ctg import *
+from constellation.instrument_control.arb_waveform_generator.drivers.Siglent_SDG2000X_dvr import *

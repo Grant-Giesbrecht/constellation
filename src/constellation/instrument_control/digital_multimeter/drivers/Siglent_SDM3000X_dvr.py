@@ -147,6 +147,7 @@ class SiglentSDM3000X(BasicDigitalMultimeterCtg):
 		
 		#TODO: Check for overload
 		
+		#TODO: Implement check units
 		# # Check units
 		# try:
 		# 	unit_str = str_val[last_space+1:last_space+1+len(self.check_units)]

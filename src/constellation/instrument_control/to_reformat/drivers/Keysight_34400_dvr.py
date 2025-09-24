@@ -117,3 +117,5 @@ class Keysight34400(DigitalMultimeterCtg):
 		self.modify_state(None, DigitalMultimeterCtg.LAST_MEAS_DATA, val)
 		
 		return val
+	
+	
