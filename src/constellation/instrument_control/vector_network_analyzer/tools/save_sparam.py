@@ -35,8 +35,9 @@ td_s12 = zva.get_trace_data(trc_s12)
 td_s21 = zva.get_trace_data(trc_s21)
 
 # Format data into dictionary
+state_data = zva.state_to_dict()
 sp_data = {"S11": td_s11, "S22":td_s22, "S12":td_s12, "S21":td_s21}
-file_info = {"cal_notes":cal_notes, "gen_notes":other_notes, "timestamp":datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')}
+file_info = {"cal_notes":cal_notes, "gen_notes":other_notes, "timestamp":datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), "instrument_state":state_data}
 data_out = {"data":sp_data, "info":file_info}
 
 # Save to disk
