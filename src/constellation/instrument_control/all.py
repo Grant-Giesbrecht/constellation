@@ -14,3 +14,6 @@ from constellation.instrument_control.digital_multimeter.drivers.Keysight_34400_
 from constellation.instrument_control.arb_waveform_generator.arb_waveform_generator_ctg import *
 from constellation.instrument_control.arb_waveform_generator.drivers.Siglent_SDG2000X_dvr import *
 
+from constellation.instrument_control.power_supply.power_supply_ctg import *
+from constellation.instrument_control.power_supply.drivers.Rigol_DP832_dvr import *
+
