@@ -11,7 +11,7 @@ import array
 from constellation.base import *
 from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg import *
 
-class Keysight34400(BasicDigitalMultimeterCtg):
+class Keysight34400(DigitalMultimeter):
 	
 	def __init__(self, address:str, log:plf.LogPile):
 		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Keysight Technologies,344") 
@@ -35,22 +35,22 @@ class Keysight34400(BasicDigitalMultimeterCtg):
 		
 		# Get measurement string
 		match measurement:
-			case BasicDigitalMultimeterCtg.MEAS_RESISTANCE_2WIRE:
+			case DigitalMultimeter.MEAS_RESISTANCE_2WIRE:
 				mstr = f"RES {range_str}"
 				self.check_units = "OHM"
-			case BasicDigitalMultimeterCtg.MEAS_RESISTANCE_4WIRE:
+			case DigitalMultimeter.MEAS_RESISTANCE_4WIRE:
 				mstr = f"FRES {range_str}"
 				self.check_units = "OHM"
-			case BasicDigitalMultimeterCtg.MEAS_CURR_AC:
+			case DigitalMultimeter.MEAS_CURR_AC:
 				mstr = f"CURR:AC {range_str}"
 				self.check_units = "A"
-			case BasicDigitalMultimeterCtg.MEAS_CURR_DC:
+			case DigitalMultimeter.MEAS_CURR_DC:
 				mstr = f"CURR:DC {range_str}"
 				self.check_units = "A"
-			case BasicDigitalMultimeterCtg.MEAS_VOLT_AC:
+			case DigitalMultimeter.MEAS_VOLT_AC:
 				mstr = f"VOLT:AC {range_str}"
 				self.check_units = "V"
-			case BasicDigitalMultimeterCtg.MEAS_VOLT_DC:
+			case DigitalMultimeter.MEAS_VOLT_DC:
 				mstr = f"VOLT:DC {range_str}"
 				self.check_units = "V"
 			case _:
@@ -73,17 +73,17 @@ class Keysight34400(BasicDigitalMultimeterCtg):
 		code = self.query(":FUNC?").strip().upper().replace('"', '')
 		
 		if code == "VOLT" or code =="VOLT:DC":
-			self._super_hint = BasicDigitalMultimeterCtg.MEAS_VOLT_DC
+			self._super_hint = DigitalMultimeter.MEAS_VOLT_DC
 		elif code == "VOLT:AC":
-			self._super_hint = BasicDigitalMultimeterCtg.MEAS_VOLT_AC
+			self._super_hint = DigitalMultimeter.MEAS_VOLT_AC
 		elif code == "CURR" or code == "CURR:DC":
-			self._super_hint = BasicDigitalMultimeterCtg.MEAS_CURR_DC
+			self._super_hint = DigitalMultimeter.MEAS_CURR_DC
 		elif code == "CURR:AC":
-			self._super_hint = BasicDigitalMultimeterCtg.MEAS_CURR_AC
+			self._super_hint = DigitalMultimeter.MEAS_CURR_AC
 		elif code == "RES":
-			self._super_hint = BasicDigitalMultimeterCtg.MEAS_RESISTANCE_2WIRE
+			self._super_hint = DigitalMultimeter.MEAS_RESISTANCE_2WIRE
 		elif code == "FRES":
-			self._super_hint = BasicDigitalMultimeterCtg.MEAS_RESISTANCE_4WIRE
+			self._super_hint = DigitalMultimeter.MEAS_RESISTANCE_4WIRE
 		else:
 			self.error(f"Received unknown measurement type >{code}<.")
 			self._super_hint = "?"
@@ -91,16 +91,16 @@ class Keysight34400(BasicDigitalMultimeterCtg):
 	@superreturn
 	def set_trigger_type(self, trig: str):
 		
-		if trig == BasicDigitalMultimeterCtg.TRIG_CONT:
+		if trig == DigitalMultimeter.TRIG_CONT:
 			self.write(f"ABORT") # Abort any previous wait for trigger events
 			self.write(f"TRIG:SOUR IMM")
 			self.write(f"TRIG:COUN INF") # No limit to num trig
 			self.write(f"INIT:IMM")
-		elif trig == BasicDigitalMultimeterCtg.TRIG_SINGLE:
+		elif trig == DigitalMultimeter.TRIG_SINGLE:
 			self.write(f"ABORT") # Abort any previous wait for trigger events
 			self.write(f"TRIG:SOUR IMM")
 			self.write(f"TRIG:COUN 1") # No limit to num trig
-		elif trig == BasicDigitalMultimeterCtg.TRIG_EXT:
+		elif trig == DigitalMultimeter.TRIG_EXT:
 			self.write(f"ABORT") # Abort any previous wait for trigger events
 			self.write(f"TRIG:SOUR EXT")
 			self.write(f"TRIG:COUN 1") # No limit to num trig
@@ -117,14 +117,14 @@ class Keysight34400(BasicDigitalMultimeterCtg):
 			try:
 				count = float(count) # Will be 9.9e37 for INF
 				if count == 1:
-					self._super_hint = BasicDigitalMultimeterCtg.TRIG_SINGLE
+					self._super_hint = DigitalMultimeter.TRIG_SINGLE
 				else:
-					self._super_hint = BasicDigitalMultimeterCtg.TRIG_CONT
+					self._super_hint = DigitalMultimeter.TRIG_CONT
 			except:
 				self.error(f"Failed to get trigger type. Invalid count string >{count}<.")
 				self._super_hint = "?"
 		elif src == "EXT":
-			self._super_hint = BasicDigitalMultimeterCtg.TRIG_EXT
+			self._super_hint = DigitalMultimeter.TRIG_EXT
 		else:
 			self.error(f"Failed to get trigger type. Invalid trigger type string >{src}<.")
 			self._super_hint = "?"
