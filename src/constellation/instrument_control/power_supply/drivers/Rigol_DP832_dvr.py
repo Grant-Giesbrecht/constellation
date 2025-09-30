@@ -25,15 +25,15 @@ class RigolDP832(PowerSupplyCtg):
 		self._super_hint = float(self.query(f":SOUR{channel}:CURR?").strip())
 	
 	@superreturn
-	def set_enable_output(self, channel:int, enable:bool):
+	def set_output_enable(self, channel:int, enable:bool):
 		self.write(f":OUTP CH{channel},{bool_to_ONOFF(enable)}")
 	
 	@superreturn
-	def get_enable_output(self, channel:int):
+	def get_output_enable(self, channel:int):
 		self._super_hint = str_to_bool(self.query(f":OUTP? CH{channel}"))
 	
 	@superreturn
-	def get_output_measurement(self, channel:int):
+	def get_measured_output(self, channel:int):
 		v_meas = float(self.query(f":MEAS:VOLT? CH{channel}").strip())
 		i_meas = float(self.query(f":MEAS:CURR? CH{channel}").strip())
 		self._super_hint = (v_meas, i_meas)

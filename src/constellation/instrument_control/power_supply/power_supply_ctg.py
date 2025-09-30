@@ -117,17 +117,17 @@ class PowerSupplyCtg(Driver):
 		return self.modify_state(None, ["channels", "current_set"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
-	def set_enable_output(self, channel:int, enable:bool):
+	def set_output_enable(self, channel:int, enable:bool):
 		self.modify_state(lambda: self.get_voltage(channel), ["channels", "enable"], enable, indices=[channel])
 	
 	@abstractmethod
 	@enabledummy
-	def get_enable_output(self, channel:int):
+	def get_output_enable(self, channel:int):
 		return self.modify_state(None, ["channels", "enable"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
 	@enabledummy
-	def get_output_measurement(self, channel:int):
+	def get_measured_output(self, channel:int):
 		
 		try:
 			v_meas = self._super_hint[0]
