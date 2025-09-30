@@ -1,7 +1,7 @@
 from constellation.base import *
 from constellation.networking.net_client import *
 
-class BasicOscilloscopeChannelState(InstrumentState):
+class OscilloscopeChannelState(InstrumentState):
 	
 	# __state_fields__ = (InstrumentState.__state_fields__+("div_volt", "offset_volt", "chan_en", "waveform"))
 	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "waveform")
@@ -15,7 +15,7 @@ class BasicOscilloscopeChannelState(InstrumentState):
 		
 		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
 
-class BasicOscilloscopeState(InstrumentState):
+class OscilloscopeState(InstrumentState):
 	
 	# __state_fields__ = (InstrumentState.__state_fields__ + ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels"))
 	__state_fields__ = ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels")
@@ -32,19 +32,19 @@ class BasicOscilloscopeState(InstrumentState):
 		self.add_param("div_time", unit="s")
 		self.add_param("offset_time", unit="s")
 		
-		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=BasicOscilloscopeChannelState, log=log))
+		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=OscilloscopeChannelState, log=log))
 		
 		for ch_no in self.channels.get_range():
-			self.channels[ch_no] = BasicOscilloscopeChannelState(log=log)
+			self.channels[ch_no] = OscilloscopeChannelState(log=log)
 
-class BasicOscilloscopeCtg(Driver):
+class Oscilloscope(Driver):
 	
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
 		
 		self.max_channels = max_channels
 		
-		self.state = BasicOscilloscopeState(self.first_channel, self.max_channels, num_div_horiz, num_div_vert, log=log)
+		self.state = OscilloscopeState(self.first_channel, self.max_channels, num_div_horiz, num_div_vert, log=log)
 		
 		if self.dummy:
 			self.init_dummy_state()
@@ -225,35 +225,36 @@ class BasicOscilloscopeCtg(Driver):
 		
 		for ch in range(1, self.max_channels):
 			self.get_waveform(ch)
+
+#TODO: replace with mixin	
+# class StdOscilloscopeCtg(Oscilloscope):
 	
-class StdOscilloscopeCtg(BasicOscilloscopeCtg):
+# 	# Measurement options
+# 	MEAS_VMAX = 0
+# 	MEAS_VMIN = 1
+# 	MEAS_VAVG = 2
+# 	MEAS_VPP  = 3
+# 	MEAS_FREQ = 4
 	
-	# Measurement options
-	MEAS_VMAX = 0
-	MEAS_VMIN = 1
-	MEAS_VAVG = 2
-	MEAS_VPP  = 3
-	MEAS_FREQ = 4
+# 	# Statistics options for measurement options
+# 	STAT_NONE = 0
+# 	STAT_AVG = 1
+# 	STAT_MAX = 2
+# 	STAT_MIN = 3
+# 	STAT_CURR = 4
+# 	STAT_STD = 5
 	
-	# Statistics options for measurement options
-	STAT_NONE = 0
-	STAT_AVG = 1
-	STAT_MAX = 2
-	STAT_MIN = 3
-	STAT_CURR = 4
-	STAT_STD = 5
+# 	def __init__(self, address:str, log:plf.LogPile, expected_idn="", dummy:bool=False, **kwargs):
+# 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, **kwargs)
 	
-	def __init__(self, address:str, log:plf.LogPile, expected_idn="", dummy:bool=False, **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, **kwargs)
+# 	@abstractmethod
+# 	def add_measurement(self):
+# 		pass
 	
-	@abstractmethod
-	def add_measurement(self):
-		pass
+# 	@abstractmethod
+# 	def get_measurement(self):
+# 		pass
 	
-	@abstractmethod
-	def get_measurement(self):
-		pass
-	
-	def refresh_state(self):
-		super().refresh_state()
+# 	def refresh_state(self):
+# 		super().refresh_state()
 	

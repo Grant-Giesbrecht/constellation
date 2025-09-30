@@ -58,7 +58,7 @@ class ChannelWidget(QWidget):
 		
 		self.voff_edit.setText(str( self.driver.state.channels[self.channel_num].offset_volt ))
 
-class BasicOscilloscopeWidget(InstrumentWidget):
+class OscilloscopeWidget(InstrumentWidget):
 	
 	def __init__(self, main_window, driver:Driver, log:plf.LogPile):
 		super().__init__(main_window, driver, log)

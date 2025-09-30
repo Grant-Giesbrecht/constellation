@@ -26,7 +26,7 @@ app = QtWidgets.QApplication(sys.argv)
 app.setStyle(f"Fusion")
 
 main_window = ConstellationWindow(log)
-osc_widget = BasicOscilloscopeWidget(main_window, osc, log)
+osc_widget = OscilloscopeWidget(main_window, osc, log)
 main_window.setCentralWidget(osc_widget)
 main_window.setWindowTitle("Oscilloscope")
 main_window.show()
