@@ -1,7 +1,7 @@
 from constellation.base import *
 from constellation.networking.net_client import *
 
-class BasicArbitraryWaveformGeneratorCtg(Driver):
+class ArbitraryWaveformGenerator(Driver):
 	
 	WAVE_SINE = "wave-sine"
 	WAVE_SQUARE = "wave-sine"
