@@ -14,6 +14,8 @@ class PowerSupplyChannelState(InstrumentState):
 		self.add_param("current_meas", unit="A")
 		
 		self.add_param("enable", unit="bool")
+		
+		self.validate()
 
 class PowerSupplyState(InstrumentState):
 	
@@ -29,6 +31,8 @@ class PowerSupplyState(InstrumentState):
 		
 		for ch_no in self.channels.get_range():
 			self.channels[ch_no] = PowerSupplyChannelState(log=log)
+		
+		self.validate()
 
 class PowerSupply(Driver):
 	

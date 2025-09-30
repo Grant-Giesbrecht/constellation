@@ -14,6 +14,8 @@ class DigitalMultimeterState(InstrumentState):
 		self.add_param("result_V", unit="V")
 		self.add_param("result_I", unit="A")
 		self.add_param("result_R", unit="Ohm")
+		
+		self.validate()
 
 class DigitalMultimeter(Driver):
 	

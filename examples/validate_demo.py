@@ -1,5 +1,6 @@
 from constellation.instrument_control.all import *
 
 log = plf.LogPile()
+log.set_terminal_level("LOWDEBUG")
 
-sa = RohdeSchwarzFSE("GPIB::17::INTR", log, dummy=True)
+sa = SiglentSSA3000X("GPIB::17::INTR", log, dummy=True)

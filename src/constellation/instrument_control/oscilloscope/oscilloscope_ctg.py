@@ -14,6 +14,8 @@ class OscilloscopeChannelState(InstrumentState):
 		self.add_param("chan_en", unit="bool")
 		
 		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
+		
+		self.validate()
 
 class OscilloscopeState(InstrumentState):
 	
@@ -36,6 +38,8 @@ class OscilloscopeState(InstrumentState):
 		
 		for ch_no in self.channels.get_range():
 			self.channels[ch_no] = OscilloscopeChannelState(log=log)
+		
+		self.validate()
 
 class Oscilloscope(Driver):
 	

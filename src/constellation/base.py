@@ -15,6 +15,7 @@ from jarnsaxa import hdf_to_dict, dict_to_hdf, Serializable, to_serial_dict, fro
 import datetime
 import numbers
 from ganymede import dict_summary
+from colorama import Fore, Style
 
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
 	# By default, this method only returns non-local IPv4 addresses
@@ -182,6 +183,9 @@ class IndexedList(Serializable):
 	
 	It also supports 'traces' for instruments that have both multiple traces and 
 	multiple indices such as a vector network analyzer.
+	
+	NOTE: Iterating over an IndexedList will only iterate over populated values. Use iteration_idx() to get the actual index for each thing
+	iterated over.
 	'''
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
@@ -202,7 +206,22 @@ class IndexedList(Serializable):
 	
 	def clear(self):
 		self.index_data = {}
+	
+	def get_populated(self):	
+		''' Returns a list of all populated indices that can
+		be iterated over. Easy way to iterate over all populated elements.
 		
+		for t in idx_list.get_populated():
+			# do stuff to t
+		'''
+		
+		populated_list = []
+		
+		for i in self.get_range():
+			if self.idx_is_populated(i):
+				populated_list.append(i)
+		
+		return populated_list
 	
 	def __post_deserialize__(self):
 		self._iter_index = self.first_index
@@ -349,6 +368,7 @@ class InstrumentState(Serializable):
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__()
 		self.log = log
+		self.surpress_warnings = False
 		
 		# Optional dictionary to contain unit information for the parameters.
 		#  - Keys are names of variables
@@ -394,15 +414,48 @@ class InstrumentState(Serializable):
 	def validate(self):
 		''' Checks that everything in __state_fields__ is in add_param and vis versa.'''
 		
+		missing_add_param = []
+		missing_state_field = []
+		
+		# Check for values in __state_fields__ that were not placed in
+		# add_param
 		for sf in self.__state_fields__:
 			if sf in InstrumentState.__state_fields__:
-				print(f"{sf} in InstrumentState __state_fields__")
+				self.log.lowdebug(f"{Fore.BLUE}{sf}{Style.RESET_ALL} in InstrumentState __state_fields__")
 			elif sf in self.valid_params:
-				print(f"{sf} in self.valid_params")
+				self.log.lowdebug(f"{Fore.YELLOW}{sf}{Style.RESET_ALL} in self.valid_params")
 			else:
-				print(f"{sf} not properly started!")
+				missing_add_param.append(sf)
+				self.log.lowdebug(f"{Fore.RED}{sf}{Style.RESET_ALL} missing from add_param!")
+		
+		# Check for values in valid_params (from add_param) not in __state_fields__
+		for vp in self.valid_params:
 			
+			if vp in self.__state_fields__:
+				self.log.lowdebug(f"{Fore.YELLOW}{vp}{Style.RESET_ALL} in self.__state_fields__")
+			else:
+				self.log.lowdebug(f"{Fore.RED}{sf}{Style.RESET_ALL} missing from state_fields!")
+				missing_state_field.append(vp)
+				
+		if len(missing_add_param) > 0 or len(missing_state_field) > 0:
 			
+			# Print warning to console if allowed
+			if not self.surpress_warnings:
+			
+				print(f"{Fore.RED}Errors were detected.{Style.RESET_ALL}")
+				if len(missing_add_param) > 0:
+					print(f"Parameters to place in {Fore.LIGHTBLACK_EX}add_param(...){Style.RESET_ALL}:")
+					for mp in missing_add_param:
+						print(f"\t{Fore.RED}{mp}{Style.RESET_ALL}")
+				if len(missing_state_field) > 0:
+					print(f"Parameters to place in {Fore.LIGHTBLACK_EX}__state_fields__(...){Style.RESET_ALL}:")
+					for mp in missing_state_field:
+						print(f"\t{Fore.RED}{mp}{Style.RESET_ALL}")
+						
+				if len(missing_add_param) > 0:
+					self.log.warning(f"Validation failed in {type(self)}: Must call add_param for >{missing_add_param}<.")
+				if len(missing_add_param) > 0:
+					self.log.warning(f"Validation failed in {type(self)}: Must add to __state_fields__ for >{missing_state_field}<.")
 	
 	def get_unit(self, param:str):
 		''' Attempts to return the unit for the specified param. Returns None

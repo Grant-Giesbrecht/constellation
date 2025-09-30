@@ -32,6 +32,8 @@ class VNATraceState(InstrumentState):
 		self.add_param("format") # For example: BasicVectorNetworkAnalyzerState.FORM_LOG_MAG
 		
 		self.add_param("data", is_data=True, value={"freq_Hz":[], "meas_dB":[]})
+		
+		self.validate()
 
 class VNAChannelState(InstrumentState):
 	""" Describes the state of one VNA channel.
@@ -50,7 +52,7 @@ class VNAChannelState(InstrumentState):
 		self.add_param("num_points", unit="")
 		self.add_param("power", unit="dBm")
 	
-	
+		self.validate()
 
 
 class BasicVectorNetworkAnalyzerState(InstrumentState):

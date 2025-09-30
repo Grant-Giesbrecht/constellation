@@ -13,60 +13,82 @@ from constellation.instrument_control.spectrum_analyzer.spectrum_analyzer_ctg im
 
 class SiglentSSA3000X(SpectrumAnalyzer):
 	
-	def __init__(self, address:str, log:plf.LogPile):
-		super().__init__(address, log, expected_idn="Siglent Technologies,SSA30")
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=DirectSCPIRelay(), **kwargs):
+		super().__init__(address, log, relay=relay, expected_idn="Siglent Technologies,SSA30", **kwargs)
 		
 		self.trace_lookup = {}
 	
+	@superreturn
 	def set_freq_start(self, f_Hz:float):
-		self.modify_state(self.get_freq_start, SpectrumAnalyzer.FREQ_START, f_Hz)
 		self.write(f"SENS:FREQ:STAR {f_Hz} Hz")
+	
+	@superreturn
 	def get_freq_start(self):
-		return self.modify_state(None, SpectrumAnalyzer.FREQ_START, float(self.query(f"SENS:FREQ:STAR?")))
+		self._super_hint = float(self.query(f"SENS:FREQ:STAR?"))
 	
+	@superreturn
 	def set_freq_end(self, f_Hz:float):
-		self.modify_state(self.get_freq_end, SpectrumAnalyzer.FREQ_END, f_Hz)
 		self.write(f"SENS:FREQ:STOP {f_Hz}")
-	def get_freq_end(self):
-		return self.modify_state(None, SpectrumAnalyzer.FREQ_END, float(self.query(f"SENS:FREQ:STOP?")))
 	
+	@superreturn
+	def get_freq_end(self, points:int):
+		self._super_hint = float(self.query(f"SENS:FREQ:STOP?"))
+	
+	# @superreturn
+	# def get_num_points(self, channel: int = 1):
+	# 	pass
+	
+	# @superreturn
+	# def get_num_points(self, channel: int = 1):
+	# 	pass
+	
+	@superreturn
 	def set_ref_level(self, ref_dBm:float):
 		ref_dBm = max(-100, min(ref_dBm, 30))
 		if ref_dBm != ref_dBm:
 			self.log.error(f"Did not apply command. Instrument limits values from -100 to 30 dBm and this range was violated.")
 			return
-		self.modify_state(self.get_ref_level, SpectrumAnalyzer.REF_LEVEL, ref_dBm)
-		self.write(f"DISP:WIND:TRAC:Y:RLEV {ref_dBm} DBM")
-	def get_ref_level(self):
-		return self.modify_state(None, SpectrumAnalyzer.REF_LEVEL, float(self.query("DISP:WIND:TRAC:Y:RLEV?")))
-	
-	def set_y_div(self, step_dB:float):
 		
+		self.write(f"DISP:WIND:TRAC:Y:RLEV {ref_dBm} DBM")
+	
+	@superreturn
+	def get_ref_level(self):
+		self._super_hint = float(self.query("DISP:WIND:TRAC:Y:RLEV?"))
+	
+	@superreturn
+	def set_y_div(self, step_dB:float):
 		step_dB = max(1, min(step_dB, 20))
 		if step_dB != step_dB:
 			self.log.error(f"Did not apply command. Instrument limits values from 1 to 20 dB and this range was violated.")
 			return
 		
-		self.modify_state(self.get_y_div, SpectrumAnalyzer.Y_DIV, step_dB)
 		self.write(f":DISP:WIND:TRAC:Y:SCAL:PDIV {step_dB} DB")
+	
+	@superreturn
 	def get_y_div(self):
-		return self.modify_state(None, SpectrumAnalyzer.Y_DIV, float(self.query(f":DISP:WIND:TRAC:Y:SCAL:PDIV?")))
+		self._super_hint = float(self.query(f":DISP:WIND:TRAC:Y:SCAL:PDIV?"))
 	
+	@superreturn
 	def set_res_bandwidth(self, rbw_Hz:float):
-		self.modify_state(self.get_res_bandwidth, SpectrumAnalyzer.RES_BW, rbw_Hz)
 		self.write(f"SENS:BWID:RES {rbw_Hz}")
+	
+	@superreturn
 	def get_res_bandwidth(self):
-		return self.modify_state(None, SpectrumAnalyzer.RES_BW, float(self.query(f"SENS:BWID:RES?")))
+		self._super_hint =  float(self.query(f"SENS:BWID:RES?"))
 	
+	@superreturn
 	def set_continuous_trigger(self, enable:bool):
-		self.modify_state(self.get_continuous_trigger, SpectrumAnalyzer.CONTINUOUS_TRIG_EN, enable)
 		self.write(f"INIT:CONT {bool_to_ONOFF(enable)}")
-	def get_continuous_trigger(self):
-		return self.modify_state(None, SpectrumAnalyzer.CONTINUOUS_TRIG_EN, str_to_bool(self.query(f"INIT:CONT?")))
 	
+	@superreturn
+	def get_continuous_trigger(self):
+		self._super_hint = str_to_bool(self.query(f"INIT:CONT?"))
+	
+	@superreturn
 	def send_manual_trigger(self):
 		self.write(f"INIT:IMM")
 	
+	@superreturn
 	def get_trace_data(self, trace:int, use_ascii_transfer:bool=False):
 		''' Returns the data of the trace in a standard waveform dict, which
 		
@@ -118,12 +140,10 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 		# Generate time array
 		f_list = list(np.linspace(self.get_freq_start(), self.get_freq_end(), len(float_data)))
 		
-		out_data = {'x':f_list, 'y':float_data, 'x_units':'Hz', 'y_units':'dBm'}
-		
-		self.modify_state(None, SpectrumAnalyzer.TRACE_DATA, out_data, channel=trace)
+		self._super_hint = {'x':f_list, 'y':float_data, 'x_units':'Hz', 'y_units':'dBm'}
 		
 		# Convert Y-unit to dBm
-		return out_data
+		
 		
 		# trace_name = self.trace_lookup[trace]
 		
