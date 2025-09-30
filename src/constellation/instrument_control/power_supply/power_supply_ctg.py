@@ -30,7 +30,7 @@ class PowerSupplyState(InstrumentState):
 		for ch_no in self.channels.get_range():
 			self.channels[ch_no] = PowerSupplyChannelState(log=log)
 
-class PowerSupplyCtg(Driver):
+class PowerSupply(Driver):
 	
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", max_channels:int=1, dummy:bool=False, first_channel:int=1, **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)

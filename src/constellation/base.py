@@ -391,6 +391,19 @@ class InstrumentState(Serializable):
 		# else:
 		# 	self.manifest.append(name)
 	
+	def validate(self):
+		''' Checks that everything in __state_fields__ is in add_param and vis versa.'''
+		
+		for sf in self.__state_fields__:
+			if sf in InstrumentState.__state_fields__:
+				print(f"{sf} in InstrumentState __state_fields__")
+			elif sf in self.valid_params:
+				print(f"{sf} in self.valid_params")
+			else:
+				print(f"{sf} not properly started!")
+			
+			
+	
 	def get_unit(self, param:str):
 		''' Attempts to return the unit for the specified param. Returns None
 		if param invalid or if unit was not specified.'''
