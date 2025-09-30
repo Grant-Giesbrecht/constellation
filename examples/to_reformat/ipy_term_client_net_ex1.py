@@ -40,7 +40,7 @@ ca.register_client_id("terminal_main")
 ca.get_network_instrument_list(print_ids=True)
 
 # Create remote instruments from address
-rem_osc1 = RemoteBasicOscilloscopeCtg(ca, log, remote_id="Scope1")
+rem_osc1 = RemoteOscilloscope(ca, log, remote_id="Scope1")
 
 if rem_osc1.connected:
 	log.info(f"Successfully connected rem_osc1 to remote instrument!")

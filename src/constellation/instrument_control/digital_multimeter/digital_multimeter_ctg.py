@@ -1,7 +1,7 @@
 from constellation.base import *
 from constellation.networking.net_client import *
 
-class BasicDigitalMultimeterState(InstrumentState):
+class DigitalMultimeterState(InstrumentState):
 	
 	__state_fields__ = ("measurement_type", "trigger_type", "result_V", "result_I", "result_R")
 	
@@ -15,7 +15,7 @@ class BasicDigitalMultimeterState(InstrumentState):
 		self.add_param("result_I", unit="A")
 		self.add_param("result_R", unit="Ohm")
 
-class BasicDigitalMultimeterCtg(Driver):
+class DigitalMultimeter(Driver):
 	
 	TRIG_CONT = "trig-continuous"
 	TRIG_SINGLE = "trig-single"
@@ -31,14 +31,14 @@ class BasicDigitalMultimeterCtg(Driver):
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", dummy:bool=False, **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
 		
-		self.state = BasicDigitalMultimeterState(log=log)
+		self.state = DigitalMultimeterState(log=log)
 		
 		if self.dummy:
 			self.init_dummy_state()
 		
 	def init_dummy_state(self) -> None:
-		self.set_measurement(BasicDigitalMultimeterCtg.MEAS_VOLT_DC)
-		self.set_trigger_type(BasicDigitalMultimeterCtg.TRIG_CONT)
+		self.set_measurement(DigitalMultimeter.MEAS_VOLT_DC)
+		self.set_trigger_type(DigitalMultimeter.TRIG_CONT)
 	
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
@@ -49,11 +49,11 @@ class BasicDigitalMultimeterCtg(Driver):
 		
 		def return_selected(self):
 			# Check if last value was a current
-			if self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_CURR_AC, BasicDigitalMultimeterCtg.MEAS_CURR_DC):
+			if self.state.measurement_type in (DigitalMultimeter.MEAS_CURR_AC, DigitalMultimeter.MEAS_CURR_DC):
 				return self.state.result_I
-			elif self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_VOLT_AC, BasicDigitalMultimeterCtg.MEAS_VOLT_DC):
+			elif self.state.measurement_type in (DigitalMultimeter.MEAS_VOLT_AC, DigitalMultimeter.MEAS_VOLT_DC):
 				return self.state.result_V
-			elif self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_RESISTANCE_2WIRE, BasicDigitalMultimeterCtg.MEAS_RESISTANCE_4WIRE):
+			elif self.state.measurement_type in (DigitalMultimeter.MEAS_RESISTANCE_2WIRE, DigitalMultimeter.MEAS_RESISTANCE_4WIRE):
 				return self.state.result_B
 		
 		# Put everything in a try-catch in case arguments are missing or similar
@@ -132,11 +132,11 @@ class BasicDigitalMultimeterCtg(Driver):
 			self.get_measurement()
 		
 		# Check if last value was a current
-		if self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_CURR_AC, BasicDigitalMultimeterCtg.MEAS_CURR_DC):
+		if self.state.measurement_type in (DigitalMultimeter.MEAS_CURR_AC, DigitalMultimeter.MEAS_CURR_DC):
 			return self.modify_state(None, ["result_I"], local_super_hint)
-		elif self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_VOLT_AC, BasicDigitalMultimeterCtg.MEAS_VOLT_DC):
+		elif self.state.measurement_type in (DigitalMultimeter.MEAS_VOLT_AC, DigitalMultimeter.MEAS_VOLT_DC):
 			return self.modify_state(None, ["result_V"], local_super_hint)
-		elif self.state.measurement_type in (BasicDigitalMultimeterCtg.MEAS_RESISTANCE_2WIRE, BasicDigitalMultimeterCtg.MEAS_RESISTANCE_4WIRE):
+		elif self.state.measurement_type in (DigitalMultimeter.MEAS_RESISTANCE_2WIRE, DigitalMultimeter.MEAS_RESISTANCE_4WIRE):
 			return self.modify_state(None, ["result_R"], local_super_hint)
 		else:
 			self.error(f"Invalid measurement type >{self.state.measurement_type}<.")

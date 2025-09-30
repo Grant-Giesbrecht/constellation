@@ -4,7 +4,7 @@ actually work. I think the LeCroy is using unconventional commands.
 
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
 
-class LeCroy44Xi(BasicOscilloscopeCtg):
+class LeCroy44Xi(Oscilloscope):
 
 	def __init__(self, address:str, log:plf.LogPile, dummy:bool=False, **kwargs):
 		super().__init__(address, log, expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=4, num_div_horiz=12, dummy=dummy, num_div_vert=8, relay=VICPDirectSCPIRelay(), **kwargs)
@@ -131,7 +131,7 @@ class LeCroy44Xi(BasicOscilloscopeCtg):
 	def set_measurement_stat_display(self, enable:bool):
 		'''
 		Turns display statistical values on/off for the Rigol DS1000Z series scopes. Not
-		part of the BasicOscilloscopeCtg, but local to this driver.
+		part of the Oscilloscope, but local to this driver.
 		
 		Args:
 			enable (bool): Turns displayed stats on/off

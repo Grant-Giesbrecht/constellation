@@ -6,7 +6,7 @@ https://siglentna.com/wp-content/uploads/dlm_uploads/2024/06/SDG_Programming-Gui
 from constellation.base import *
 from constellation.instrument_control.arb_waveform_generator.arb_waveform_generator_ctg import *
 
-class SiglentSDG2000X(BasicArbitraryWaveformGeneratorCtg):
+class SiglentSDG2000X(ArbitraryWaveformGenerator):
 	
 	
 	
@@ -16,19 +16,19 @@ class SiglentSDG2000X(BasicArbitraryWaveformGeneratorCtg):
 	# @superreturn
 	def set_waveform(self, channel:int, wave:str):
 		
-		if wave == BasicArbitraryWaveformGeneratorCtg.WAVE_DC:
+		if wave == ArbitraryWaveformGenerator.WAVE_DC:
 			code = "DC"
-		elif wave == BasicArbitraryWaveformGeneratorCtg.WAVE_SINE:
+		elif wave == ArbitraryWaveformGenerator.WAVE_SINE:
 			code = "SINE"
-		elif wave == BasicArbitraryWaveformGeneratorCtg.WAVE_SQUARE:
+		elif wave == ArbitraryWaveformGenerator.WAVE_SQUARE:
 			code = "SQUARE"
-		elif wave == BasicArbitraryWaveformGeneratorCtg.WAVE_RAMP:
+		elif wave == ArbitraryWaveformGenerator.WAVE_RAMP:
 			code = "RAMP"
-		elif wave == BasicArbitraryWaveformGeneratorCtg.WAVE_PULSE:
+		elif wave == ArbitraryWaveformGenerator.WAVE_PULSE:
 			code = "PULSE"
-		elif wave == BasicArbitraryWaveformGeneratorCtg.WAVE_NOISE:
+		elif wave == ArbitraryWaveformGenerator.WAVE_NOISE:
 			code = "NOISE"
-		elif wave == BasicArbitraryWaveformGeneratorCtg.WAVE_ARB:
+		elif wave == ArbitraryWaveformGenerator.WAVE_ARB:
 			code = "ARB"
 		else:
 			self.error(f"Failed to recognize code >{wave}<.")

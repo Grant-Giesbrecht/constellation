@@ -3,7 +3,7 @@
 
 from constellation.instrument_control.power_supply.power_supply_ctg import *
 
-class RigolDP832(PowerSupplyCtg):
+class RigolDP832(PowerSupply):
 
 	def __init__(self, address:str, log:plf.LogPile, **kwargs):
 		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn='RIGOL TECHNOLOGIES,DP832', max_channels=3, first_channel=1, **kwargs)
