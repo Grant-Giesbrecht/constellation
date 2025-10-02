@@ -14,7 +14,7 @@ class SpectrumAnalyzerTraceState(InstrumentState):
 		
 class SpectrumAnalyzerState(InstrumentState):
 	
-	__state_fields__ = ("first_trace", "num_traces", "ndiv_horiz", "ndiv_vert", "freq_start", "freq_end", "res_bw", "continuous_trig_en")#, "ref_level", "y_div_scale", "traces")
+	__state_fields__ = ("first_trace", "num_traces", "ndiv_horiz", "ndiv_vert", "freq_start", "freq_end", "res_bw", "continuous_trig_en", "ref_level", "y_div_scale", "traces")
 	
 	def __init__(self, first_trace:int, num_traces:int, ndiv_horiz, ndiv_vert, log:plf.LogPile=None):
 		super().__init__(log=log)
@@ -24,8 +24,8 @@ class SpectrumAnalyzerState(InstrumentState):
 		self.add_param("first_trace", unit="1", value=first_trace)
 		self.add_param("num_traces", unit="1", value=num_traces)
 		
-		# self.add_param("freq_start", unit="Hz")
-		# self.add_param("freq_end", unit="Hz")
+		self.add_param("freq_start", unit="Hz")
+		self.add_param("freq_end", unit="Hz")
 		# self.add_param("num_points", unit="1") # I think this doesnt actually exist
 		self.add_param("res_bw", unit="Hz")
 		self.add_param("continuous_trig_en", unit="bool")

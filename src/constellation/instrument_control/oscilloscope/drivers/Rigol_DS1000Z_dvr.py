@@ -7,12 +7,13 @@ from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
 
 class RigolDS1000Z(Oscilloscope):
 
-	def __init__(self, address:str, log:plf.LogPile, **kwargs):
-		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=4, num_div_horiz=12, num_div_vert=8, **kwargs)
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=DirectSCPIRelay(), **kwargs):
+		super().__init__(address, log, relay=relay, expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=4, num_div_horiz=12, num_div_vert=8, **kwargs)
 		
-		self.meas_table = {StdOscilloscopeCtg.MEAS_VMAX:'VMAX', StdOscilloscopeCtg.MEAS_VMIN:'VMIN', StdOscilloscopeCtg.MEAS_VAVG:'VAVG', StdOscilloscopeCtg.MEAS_VPP:'VPP', StdOscilloscopeCtg.MEAS_FREQ:'FREQ'}
+		#TODO: Turn into Mixin
+		# self.meas_table = {StdOscilloscopeCtg.MEAS_VMAX:'VMAX', StdOscilloscopeCtg.MEAS_VMIN:'VMIN', StdOscilloscopeCtg.MEAS_VAVG:'VAVG', StdOscilloscopeCtg.MEAS_VPP:'VPP', StdOscilloscopeCtg.MEAS_FREQ:'FREQ'}
 		
-		self.stat_table = {StdOscilloscopeCtg.STAT_AVG:'AVER', StdOscilloscopeCtg.STAT_MAX:'MAX', StdOscilloscopeCtg.STAT_MIN:'MIN', StdOscilloscopeCtg.STAT_CURR:'CURR', StdOscilloscopeCtg.STAT_STD:'DEV'}
+		# self.stat_table = {StdOscilloscopeCtg.STAT_AVG:'AVER', StdOscilloscopeCtg.STAT_MAX:'MAX', StdOscilloscopeCtg.STAT_MIN:'MIN', StdOscilloscopeCtg.STAT_CURR:'CURR', StdOscilloscopeCtg.STAT_STD:'DEV'}
 	
 	# def set_div_time(self, time_s:float):
 	# 	self.write(f":TIM:MAIN:SCAL {time_s}")

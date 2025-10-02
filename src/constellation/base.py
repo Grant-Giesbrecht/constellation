@@ -434,7 +434,7 @@ class InstrumentState(Serializable):
 			if vp in self.__state_fields__:
 				self.log.lowdebug(f"{Fore.YELLOW}{vp}{Style.RESET_ALL} in self.__state_fields__")
 			else:
-				self.log.lowdebug(f"{Fore.RED}{sf}{Style.RESET_ALL} missing from state_fields!")
+				self.log.lowdebug(f"{Fore.RED}{vp}{Style.RESET_ALL} missing from state_fields!")
 				missing_state_field.append(vp)
 				
 		if len(missing_add_param) > 0 or len(missing_state_field) > 0:
@@ -442,7 +442,7 @@ class InstrumentState(Serializable):
 			# Print warning to console if allowed
 			if not self.surpress_warnings:
 			
-				print(f"{Fore.RED}Errors were detected.{Style.RESET_ALL}")
+				print(f"{Fore.RED}Validation error:{Style.RESET_ALL}Errors were detected while performing validation on InstrumentState:")
 				if len(missing_add_param) > 0:
 					print(f"Parameters to place in {Fore.LIGHTBLACK_EX}add_param(...){Style.RESET_ALL}:")
 					for mp in missing_add_param:
@@ -850,7 +850,7 @@ class Driver(ABC):
 		try:
 			self.online = self.relay.write(cmd)
 			if self.online:
-				self.lowdebug(f"Wrote to instrument: >{cmd}<.")
+				self.lowdebug(f"Wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
 		except Exception as e:
 			self.error(f"Failed to write to instrument {self.address}. ({e})")
 			self.online = False
