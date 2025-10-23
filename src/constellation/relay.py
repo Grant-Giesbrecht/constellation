@@ -144,7 +144,8 @@ class DirectSCPIRelay(CommandRelay):
 	def __init__(self):
 		super().__init__()
 		
-		self.rm = pv.ResourceManager('@py')
+		# self.rm = pv.ResourceManager('@py')
+		self.rm = pv.ResourceManager()
 		self.inst = None
 	
 	def connect(self) -> bool:
