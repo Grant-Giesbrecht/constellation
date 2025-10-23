@@ -96,6 +96,27 @@ def format_sparam(data:list, format):
 	else:
 		ValueError(f"Unrecognized format type {format}.")
 
+import skrf as rf
+
+def load_touchstone(path):
+	"""
+	Load an .sNp Touchstone file using scikit-rf.
+	Returns a dict with keys:
+	  'freq'  -> frequency array in Hz
+	  'Sij'   -> complex S-parameter arrays (e.g., 'S11', 'S21', ...)
+	"""
+	ntwk = rf.Network(path)
+	data = {'freq': ntwk.f}
+	nports = ntwk.nports
+
+	for i in range(nports):
+		for j in range(nports):
+			key = f"S{i+1}{j+1}"
+			data[key] = ntwk.s[:, i, j]
+
+	return data
+
+
 class SParams:
 	
 	def __init__(self, filename:str=None):
@@ -166,7 +187,24 @@ class SParams:
 			
 			
 		elif has_ext(filename, [".s2p", ".snp", ".s1p"]):
-			pass
+			
+			try:
+				data = load_touchstone(filename)
+				
+				for param in data.keys():
+					
+					# Skip frequency parameter
+					if param == "freq":
+						continue
+					
+					# populate data
+					if param in recognized_parameters:
+						self.s_parameters[param] = data[param]
+						self.frequencies[param] = data['freq']
+					
+				
+			except Exception as e:
+				raise ValueError(f"Failed to load file {filename} with function load_sparam_csv. ({e})")
 	
 	def available_parameters(self):
 		''' Returns a list of the available S-parameter types.'''
