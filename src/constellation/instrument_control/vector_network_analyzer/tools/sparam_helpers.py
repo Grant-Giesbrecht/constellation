@@ -1,6 +1,57 @@
 import numpy as np
 import os
 from jarnsaxa import hdf_to_dict
+import csv
+import re
+
+def load_sparam_csv(path):
+	data = {"freq": None}
+	with open(path, newline='') as f:
+		reader = csv.reader(f)
+		# Skip comment lines
+		for row in reader:
+			if not row or row[0].startswith('#'):
+				continue
+			headers = [h.strip() for h in row]
+			break
+
+		# Identify columns
+		freq_idx = next((i for i, h in enumerate(headers) if "freq" in h.lower()), None)
+		if freq_idx is None:
+			raise ValueError("No frequency column found in file.")
+
+		# Find s-parameter columns
+		sparam_cols = {}
+		for i, h in enumerate(headers):
+			m = re.search(r'(?i)(?:re|im).*?(S\d{2})|(S\d{2}).*?(?:re|im)', h)
+			if m:
+				g1, g2 = m.groups()
+				name = (g1 or g2).upper()
+				comp = "re" if "re" in h.lower() else "im"
+				sparam_cols.setdefault(name, {})[comp] = i
+
+		if not sparam_cols:
+			raise ValueError("No S-parameter columns found in file.")
+
+		# Read numerical data
+		arr = np.genfromtxt(path, delimiter=',', comments='#', skip_header=0)
+		# Skip header line(s) that aren’t numeric
+		if np.isnan(arr[0]).any():
+			arr = arr[1:]
+
+		freqs = arr[:, freq_idx]
+		data["freq"] = freqs
+
+		# Combine re/im into complex arrays
+		for name, idxs in sparam_cols.items():
+			if "re" not in idxs or "im" not in idxs:
+				continue
+			re_vals = arr[:, idxs["re"]]
+			im_vals = arr[:, idxs["im"]]
+			data[name] = re_vals + 1j * im_vals
+
+	return data
+
 
 def lin_to_dB(x_lin:float, use10:bool=False):
 	if use10:
@@ -47,12 +98,15 @@ def format_sparam(data:list, format):
 
 class SParams:
 	
-	def __init__(self):
+	def __init__(self, filename:str=None):
 		self.s_parameters = {} # internally saves data as np.complex128
 		self.metadata = {} # optional metadata
 		
 		# self.universal_freqs = True
 		self.frequencies = {}
+		
+		if filename is not None:
+			self.load(filename)
 	
 	def load(self, filename:str):
 		''' Loads a file into the specified file. '''
@@ -91,9 +145,33 @@ class SParams:
 				
 			
 		elif has_ext(filename, [".csv"]):
-			pass
+			
+			try:
+				data = load_sparam_csv(filename)
+				
+				for param in data.keys():
+					
+					# Skip frequency parameter
+					if param == "freq":
+						continue
+					
+					# populate data
+					if param in recognized_parameters:
+						self.s_parameters[param] = data[param]
+						self.frequencies[param] = data['freq']
+					
+				
+			except Exception as e:
+				raise ValueError(f"Failed to load file {filename} with function load_sparam_csv. ({e})")
+			
+			
 		elif has_ext(filename, [".s2p", ".snp", ".s1p"]):
 			pass
+	
+	def available_parameters(self):
+		''' Returns a list of the available S-parameter types.'''
+		
+		return self.s_parameters.keys()
 	
 	def get_parameter(self, param:str, freq:float=None, format:str="logmag"):
 		''' Returns the specified S-parameter, either in a list at all defined frequnecy points, or at
@@ -111,7 +189,7 @@ class SParams:
 		
 		# Return requested value
 		if freq is None:
-			return format_sparam(self.s_parameters[param], format=format)
+			return np.array(format_sparam(self.s_parameters[param], format=format))
 		else:
 			return format_sparam( bounded_interp(self.get_parameter(param), self.get_freqeuncy(param), freq), format=format)
 		
@@ -128,7 +206,7 @@ class SParams:
 		if param not in self.frequencies:
 			raise AttributeError(f"{param} has not been populated.")
 		
-		return self.frequencies[param]
+		return np.array(self.frequencies[param])
 	
 	def S11(self, freq=None, format:str='logmag'):
 		''' Returns S11, either in a list at all defined frequnecy points, or at

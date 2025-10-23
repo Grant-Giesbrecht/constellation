@@ -17,6 +17,8 @@ from pylogfile.base import mdprint
 from constellation.helpers import lin_to_dB
 from jarnsaxa import hdf_to_dict
 
+from sparam_helpers import *
+
 parser = argparse.ArgumentParser()
 parser.add_argument('filename')
 parser.add_argument('--ymin', help='Zero-crossing analysis plot, minimum Y value', type=float)
@@ -26,27 +28,19 @@ parser.add_argument('--xmax', help='Zero-crossing analysis plot, maximum X value
 args = parser.parse_args()
 
 # Load s-parameter data
-data_full = hdf_to_dict(args.filename)
-
-# Read S-parameter data and check for older file format with no metadata
-skip_print_info = False
-if 'data' in data_full.keys():
-	data = data_full['data']
-else:
-	skip_print_info = True
-	data = data_full
+sp = SParams(args.filename)
 
 # Create figure
 fig1 = plt.figure(1, figsize=(8, 8))
 gs1 = fig1.add_gridspec(1, 1)
 ax1a = fig1.add_subplot(gs1[0, 0])
 
-plot_params = ["S11", "S22", "S12", "S21"]
+plot_params = sp.available_parameters()
 color_definitions = {"S11":"tab:blue", "S22":"tab:orange", "S12":"tab:green", "S21":"tab:red"}
 
 for param in plot_params:
 	# NOTE: plot_vna_mag() can be imported from Constellation and used as a shorthand for plotting S-parameters
-	plt.plot(np.array(data[param]['x'])/1e9, lin_to_dB(np.abs(data[param]['y'])), label=param, color=color_definitions[param])
+	plt.plot(sp.get_frequency(param)/1e9, sp.get_parameter(param), label=param, color=color_definitions[param])
 	
 ax1a.set_xlabel("Frequency (GHz)")
 ax1a.set_ylabel("dB")
@@ -75,14 +69,14 @@ elif (args.xmax is not None):
 
 
 # Print file info if available
-if not skip_print_info:
+if sp.metadata:
 	try:
-		dts = data_full['info']['timestamp']
+		dts = sp.metadata['timestamp']
 	except:
 		dts = None
 	
-	icn = data_full['info']['cal_notes']
-	ign = data_full['info']['gen_notes']
+	icn = sp.metadata['cal_notes']
+	ign = sp.metadata['gen_notes']
 	
 	mdprint(f">:aFile info<:")
 	mdprint(f"\t >Calibration Notes<: @:LOCK{icn}@:UNLOCK")
