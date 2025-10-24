@@ -1,5 +1,5 @@
 from constellation.base import *
-from constellation.helpers import lin_to_dB
+from hallett.core import lin_to_dB
 
 def plot_vna_mag(data:dict, label:str=""):
 	''' Helper function to plot the data output from a VNA get_trace_data() call.
