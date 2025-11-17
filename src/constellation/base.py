@@ -446,11 +446,11 @@ class InstrumentState(Serializable):
 				if len(missing_add_param) > 0:
 					print(f"Parameters to place in {Fore.LIGHTBLACK_EX}add_param(...){Style.RESET_ALL}:")
 					for idx, mp in enumerate(missing_add_param):
-						print(f"\t[{idx}]: {Fore.RED}{mp}{Style.RESET_ALL}")
+						print(f"\t[{idx}]: \"{Fore.RED}{mp}{Style.RESET_ALL}\"")
 				if len(missing_state_field) > 0:
 					print(f"Parameters to place in {Fore.LIGHTBLACK_EX}__state_fields__(...){Style.RESET_ALL}:")
 					for idx, mp in enumerate(missing_state_field):
-						print(f"\t[{idx}]: {Fore.RED}{mp}{Style.RESET_ALL}")
+						print(f"\t[{idx}]: \"{Fore.RED}{mp}{Style.RESET_ALL}\"")
 						
 				if len(missing_add_param) > 0:
 					self.log.warning(f"Validation failed in {type(self)}: Must call add_param for >{missing_add_param}<.")
