@@ -3,7 +3,7 @@ from constellation.networking.net_client import *
 
 class PowerSupplyChannelState(InstrumentState):
 	
-	__state_fields__ = ("voltage_set", "current_set", "voltage_meas", "current_meas", "enabled")
+	__state_fields__ = ("voltage_set", "current_set", "voltage_meas", "current_meas", "enable")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)
