@@ -21,13 +21,14 @@ class VNATraceState(InstrumentState):
 	""" Class used to represent a trace that is active on the VNA.
 	"""
 	
+	__state_fields__ = ("enabled", "id_str", "measurement", "format", "data")
+	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log)
 		
 		self.add_param("enabled", unit="bool", value=False)
 		
-		self.add_param("channel")
-		self.add_param("id_str") # Trace name
+		self.add_param("id_str") # Trace name, per the instrument. This is used in many instruments' SCPI commands to determine which trace is being referred to.
 		self.add_param("measurement") # For example: BasicVectorNetworkAnalyzerState.MEAS_S11
 		self.add_param("format") # For example: BasicVectorNetworkAnalyzerState.FORM_LOG_MAG
 		
@@ -38,6 +39,8 @@ class VNATraceState(InstrumentState):
 class VNAChannelState(InstrumentState):
 	""" Describes the state of one VNA channel.
 	"""
+	
+	__state_fields__ = ("enabled", "freq_start", "freq_end", "res_bw", "cal_enabled", "num_points", "power")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log)
@@ -51,12 +54,14 @@ class VNAChannelState(InstrumentState):
 		
 		self.add_param("num_points", unit="")
 		self.add_param("power", unit="dBm")
-	
+		
 		self.validate()
 
 
 class BasicVectorNetworkAnalyzerState(InstrumentState):
-
+	
+	__state_fields__ = ("first_channel", "num_channels", "first_trace", "num_traces", "rf_enable", "channels", "traces")
+	
 	def __init__(self, first_channel:int, num_channels:int, first_trace:int, num_traces:int, log:plf.LogPile=None):
 		super().__init__(log)
 		
@@ -68,6 +73,8 @@ class BasicVectorNetworkAnalyzerState(InstrumentState):
 		self.add_param("rf_enable", unit="bool")
 		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=VNAChannelState, log=log))
 		self.add_param("traces", unit="", value=IndexedList(self.first_trace, self.num_traces, validate_type=VNATraceState, log=log))
+		
+		
 		
 		#NOTE: Unlike the oscilloscope state object, which immediately creates
 		# all channel objects, this will dynamically create more as needed. This is to prevent the
