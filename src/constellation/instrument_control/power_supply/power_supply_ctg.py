@@ -1,6 +1,8 @@
 from constellation.base import *
 from constellation.networking.net_client import *
 
+import stardust.algorithm as stal
+
 class PowerSupplyChannelState(InstrumentState):
 	
 	__state_fields__ = ("voltage_set", "current_set", "voltage_meas", "current_meas", "enable")
@@ -48,8 +50,19 @@ class PowerSupply(Driver):
 			self.init_dummy_state()
 		
 	def init_dummy_state(self) -> None:
-		pass
+		
+		
+		for ch in range(self.first_channel, self.first_channel+self.max_channels):
+			self.set_voltage(ch, 1)
+			self.set_current(ch, 0.5)
+			self.set_output_enable(ch, False)
 	
+	def remake_dummy_measurements(self):
+		
+		for ch in range(self.first_channel, self.first_channel+self.max_channels):
+			self.state.channels[ch].voltage_meas = self.state.channels[ch].voltage_set + stal.randrange(-0.15, 0.15)
+			self.state.channels[ch].current_meas = self.state.channels[ch].current_set + stal.randrange(-0.05, 0.05)
+		
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
 		need to return anything, reads commands or similar should. What is returned here
@@ -64,7 +77,7 @@ class PowerSupply(Driver):
 			found = True
 			adjective = ""
 			match func_name:
-				case "set_voltage":
+				case "set_voltage":					
 					rval = None
 				case "get_voltage":
 					rval = self.state.channels[args[0]].voltage_set
@@ -74,9 +87,10 @@ class PowerSupply(Driver):
 					rval = self.state.channels[args[0]].current_set
 				case "set_enable":
 					rval = None
-				case "get_enable":
+				case "get_output_enable":
 					rval = self.state.channels[args[0]].enable
-				case "get_output_measurement":
+				case "get_measured_output":
+					self.remake_dummy_measurements()
 					rval = (self.state.channels[args[0]].voltage_meas, self.state.channels[args[0]].current_meas)
 				case _:
 					found = False
@@ -149,8 +163,8 @@ class PowerSupply(Driver):
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
 			self.get_voltage(ch)
 			self.get_current(ch)
-			self.get_enable_output(ch)
-			self.get_output_measurement(ch)
+			self.get_output_enable(ch)
+			self.get_measured_output(ch)
 	
 	def apply_state(self):
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
