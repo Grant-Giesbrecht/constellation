@@ -5,9 +5,9 @@ https://beyondmeasure.rigoltech.com/acton/attachment/1579/f-0386/1/-/-/-/-/DS100
 
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
 
-class RigolDS1000Z(Oscilloscope):
+class RigolDS1000E(Oscilloscope):
 
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=DirectSCPIRelay(), max_channels:int=4, **kwargs):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=DirectSCPIRelay(), max_channels:int=2, **kwargs):
 		super().__init__(address, log, relay=relay, expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=max_channels, num_div_horiz=12, num_div_vert=8, **kwargs)
 		
 		#TODO: Turn into Mixin
@@ -21,19 +21,21 @@ class RigolDS1000Z(Oscilloscope):
 	
 	@superreturn
 	def set_div_time(self, time_s:float):
-		self.write(f":TIM:MAIN:SCAL {time_s}")
+		self.warning(f"DS1000E model does not support setting timebase remotely.")
 		
 	@superreturn
 	def get_div_time(self):
-		self._super_hint = float(self.query(f":TIM:MAIN:SCAL?"))
+		self.warning(f"DS1000E model does not support querying timebase remotely.")
+		self._super_hint = None
 	
 	@superreturn
 	def set_offset_time(self, time_s:float):
-		self.write(f":TIM:MAIN:OFFS {time_s}")
+		self.warning(f"DS1000E model does not support setting timebase remotely.")
 	
 	@superreturn
 	def get_offset_time(self):
-		self._super_hint = float(self.query(f":TIM:MAIN:OFFS?"))
+		self.warning(f"DS1000E model does not support querying timebase remotely.")
+		self._super_hint = None
 	
 	@superreturn
 	def set_div_volt(self, channel:int, volt_V:float):
@@ -62,27 +64,31 @@ class RigolDS1000Z(Oscilloscope):
 	@superreturn
 	def get_waveform(self, channel:int):
 		
-		self.write(f"WAV:SOUR CHAN{channel}")  # Specify channel to read
-		self.write("WAV:MODE NORM")  # Specify to read data displayed on screen
-		self.write("WAV:FORM ASCII")  # Specify data format to ASCII
-		data = self.query("WAV:DATA?")  # Request data
-		
+		self.write(f":WAV:SOUR CHAN{channel}")  # Specify channel to read
+		self.write(":WAV:MODE NORM")  # Specify to read data displayed on screen
+		self.write(":WAV:FORM BYTE")  # Specify data format to ASCII
+		try:
+			data = self.relay.inst.query_binary_values(f":WAV:DATA?", datatype='B')  # Request data
+		except:
+			self.error(f"Failed to query instrument")
+			data = None
+			
 		if data is None:
-			return {"time_s":[], "volt_V":[]}
+			return {"time_index":[], "volt_V":[]}
 		
-		# Split string into ASCII voltage values
-		volts = data[11:].split(",")
+		v_offs = self.get_offset_volt(channel=channel)
+		v_scale = self.get_div_volt(channel=channel)
+		# volt = (np.array(data) - 128) * (v_scale / 25.0) + v_offs # 25 because 25 ADC counts per division, 8 divisions -> 200 points total, 128 to re-center 8-bit int
+		volts = (240.0 - np.array(data)) * (v_scale / 25.0) - (v_offs + v_scale * 4.6)
 		
 		volts = [float(v) for v in volts]
 		
-		# Get timing data
-		xorigin = float(self.query("WAV:XOR?"))
-		xincr = float(self.query("WAV:XINC?"))
+		lv = len(volts)
+		t = np.linspace(0, len(volts)-1, len(volts))
 		
-		# Get time values
-		t = list(xorigin + np.linspace(0, xincr * (len(volts) - 1), len(volts)))
+		self.warning(f"DS1000E model does not support getting timebase; Time points returning >in index format, not seconds!<.")
 		
-		self._super_hint = {"time_s":t, "volt_V":volts}
+		self._super_hint = {"time_index":t, "volt_V":volts}
 	
 	def add_measurement(self, meas_type:int, channel:int=1):
 		

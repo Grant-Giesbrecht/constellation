@@ -16,6 +16,7 @@ import datetime
 import numbers
 from ganymede import dict_summary
 from colorama import Fore, Style
+from enum import Enum
 
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
 	# By default, this method only returns non-local IPv4 addresses
@@ -634,6 +635,23 @@ class FeatureUnavailable(RuntimeError):
 	the given driver.'''
 	pass
 
+class CheckOnline(Enum):
+	''' Contains possible values for the Driver.check_online_on_error parameter.
+	How check_online_on_error is set controls how a driver handles updating online
+	status after an error occurs. 
+	
+	AUTO: Queries the instrument for a simple SCPI command if possible (is_scpi
+		is True), and sets online by if instrument responds.
+	SKIP_CHECK: Skips online check when error occurs and leaves online untouched.
+	DEFAULT_OFFLINE: Skips online check and sets `online` to False.
+	
+	AUTO is the default behavior, and the recommended behavior unless bandwidth
+	is of great concern.
+	'''
+	AUTO = "auto"
+	SKIP_CHECK = "skip"
+	DEFAULT_OFFLINE = "offline"
+
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
@@ -658,6 +676,7 @@ class Driver(ABC):
 		# State tracking parameters
 		self.dummy = False
 		self.blind_state_update = False
+		self.check_online_on_error = CheckOnline.AUTO # Controls how Driver responds to errors during instrument communication
 		self.state = {}
 		self.data = {} # Each value is a DataEntry instance
 		self.state_change_log_level = plf.DEBUG
@@ -726,6 +745,45 @@ class Driver(ABC):
 			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
 		
 		return self.online
+	
+	def check_online(self):
+		''' Runs when an error occurs with insturment communication. This functions
+		behavior regarding how it updates the self.online paramter is controlled
+		by the self.check_online_on_error parameter.'''
+		
+		# Validate that self.check_online_on_error is of CheckOnline type
+		if isinstance(self.check_online_on_error, CheckOnline):
+			self.check_online_on_error = self.check_online_on_error
+		elif self.check_online_on_error in (c.value for c in CheckOnline):
+			# Convert raw string into enum
+			self.check_online_on_error = CheckOnline(self.check_online_on_error)
+		else:
+			self.warning(f"Invalid type set for >self.check_online_on_error<. Defaulting to >CheckOnline.AUTO<.")
+		
+		# Skip check - return early
+		if self.check_online_on_error == CheckOnline.SKIP_CHECK:
+			self.debug(f">Driver.check_online()<: Skipping online status check, leaving self.online unchanged.")
+			return
+		elif self.check_online_on_error == CheckOnline.DEFAULT_OFFLINE:
+			self.debug(f">Driver.check_online()<: Skipping online status check, defaulting to >OFFLINE<.")
+			self.online = False
+		elif self.check_online_on_error == CheckOnline.AUTO:
+			
+			self.debug(f">Driver.check_online()<: Performing automatic online status check.")
+			
+			# Verify is a SCPI instrument
+			if not self.is_scpi:
+				self.warning(f"Cannot use CheckOnline.AUTO for non-SCPI instruments. Defaulting to OFFLINE.")
+				self.online = False
+			
+			# Check if instrument is online
+			_, rv = self.relay.query("*IDN?") # Note we don't call self.relay() to avoid an infinite loop
+			if len(rv) > 0:
+				self.online = True
+			else:
+				self.online = False
+			
+			self.debug(f">Driver.check_online()<: self.online --\> {self.online}")
 	
 	def preset(self) -> None:
 		''' Presets an instrument. Only valid for SCPI instruments.'''
@@ -853,7 +911,7 @@ class Driver(ABC):
 				self.lowdebug(f"Wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
 		except Exception as e:
 			self.error(f"Failed to write to instrument {self.address}. ({e})")
-			self.online = False
+			self.check_online()
 	
 	def read(self) -> str:
 		''' Reads via the relay. Updates self.online with read success/
@@ -888,7 +946,7 @@ class Driver(ABC):
 				return ""
 		except Exception as e:
 			self.error(f"Failed to read from instrument {self.address}. ({e})")
-			self.online = False
+			self.check_online()
 			return ""
 	
 	def query(self, cmd:str) -> str:
@@ -924,10 +982,15 @@ class Driver(ABC):
 				self.lowdebug(f"Read from instrument: >:a{rv}<")
 				return rv
 			else:
+				
+				# If insturment was switched to offline, check if true
+				if not self.online:
+					self.check_online()
+				
 				return ""
 		except Exception as e:
 			self.error(f"Failed to read from instrument {self.address}. ({e})")
-			self.online = False
+			self.check_online()
 			return ""
 	
 	def dummy_responder(self, func_name:str, *args, **kwargs):

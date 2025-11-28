@@ -167,7 +167,6 @@ class Oscilloscope(Driver):
 	def get_div_time(self):
 		return self.modify_state(None, ["div_time"], self._super_hint)
 	
-	
 	@abstractmethod
 	def set_offset_time(self, time_s:float):
 		self.modify_state(self.get_offset_time, ["offset_time"], time_s)
