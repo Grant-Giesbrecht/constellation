@@ -13,8 +13,8 @@ from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg 
 
 class SiglentSDM3000X(DigitalMultimeter):
 	
-	def __init__(self, address:str, log:plf.LogPile):
-		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Siglent Technologies,SDM30") 
+	def __init__(self, address:str, log:plf.LogPile, **kwargs):
+		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Siglent Technologies,SDM30", **kwargs) 
 		
 		# Unit to make sure is matched by returned string
 		self.check_units = ""
