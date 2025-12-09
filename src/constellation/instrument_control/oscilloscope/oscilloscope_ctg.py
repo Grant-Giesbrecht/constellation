@@ -1,6 +1,8 @@
 from constellation.base import *
 from constellation.networking.net_client import *
 
+import matplotlib.pyplot as plt
+
 class OscilloscopeChannelState(InstrumentState):
 	
 	# __state_fields__ = (InstrumentState.__state_fields__+("div_volt", "offset_volt", "chan_en", "waveform"))
@@ -20,13 +22,15 @@ class OscilloscopeChannelState(InstrumentState):
 class OscilloscopeState(InstrumentState):
 	
 	# __state_fields__ = (InstrumentState.__state_fields__ + ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels"))
-	__state_fields__ = ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels")
+	__state_fields__ = ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels", "channel_colors")
 	
 	def __init__(self, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert, log:plf.LogPile=None):
 		super().__init__(log=log)
 		
 		self.add_param("first_channel", unit="1", value=first_channel)
 		self.add_param("num_channels", unit="1", value=num_channels)
+		# self.add_param("channel_colors", unit="", value={1:(1, 1, 0.21), 2:(0, 0.78, 0.91), 3:(1, 0.36, 0.88), 4:(0.09, 0, 0.72)})
+		self.add_param("channel_colors", unit="", value={1:(0.925, 0.84, 0), 2:(0, 159/255, 185/255), 3:(204/255, 0, 175/255), 4:(22/255, 0, 184/255)})
 		
 		self.add_param("ndiv_horiz", unit="1", value=ndiv_horiz)
 		self.add_param("ndiv_vert", unit="1", value=ndiv_vert)
@@ -46,7 +50,7 @@ class Oscilloscope(Driver):
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
 		
-		self.max_channels = max_channels
+		self.max_channels = max_channels #TODO: Replace with state
 		
 		self.state = OscilloscopeState(self.first_channel, self.max_channels, num_div_horiz, num_div_vert, log=log)
 		
@@ -224,10 +228,19 @@ class Oscilloscope(Driver):
 			self.set_offset_volt(ch, self.state.get(["channels", "offset_volt"], indices=[ch]))
 			self.set_chan_enable(ch, self.state.get(["channels", "chan_en"], indices=[ch]))
 	
-	def refresh_data(self):
+	def get_all_waveforms(self):
+		''' Returns a list of returend waveforms, one for each online channel '''
 		
-		for ch in range(1, self.max_channels):
-			self.get_waveform(ch)
+		waveform_list = []
+		for ch in range(self.state.first_channel, self.state.num_channels+self.state.first_channel):
+			if self.get_chan_enable(ch):
+				waveform_list.append(self.get_waveform(ch))
+		
+		return waveform_list
+	
+	def refresh_data(self):
+		_ = self.get_all_waveforms()
+
 
 #TODO: replace with mixin	
 # class StdOscilloscopeCtg(Oscilloscope):
@@ -261,3 +274,64 @@ class Oscilloscope(Driver):
 # 	def refresh_state(self):
 # 		super().refresh_state()
 	
+
+def plot_waveform(waveform, axis=None, figno:int=1, osc:Oscilloscope=None):
+	''' Plots a waveform dictionary. If multiple waveform are provided (list
+	of dicts), each will be plotted on the same axes.'''
+	
+	# Get wavefomr list from dict/list input
+	if isinstance(waveform, dict):
+		waveforms = [waveform]
+	elif isinstance(waveform, list):
+		waveforms = waveform
+	else:
+		raise TypeError
+	
+	# If axis is not provided, create one
+	if axis is None:
+		figN = plt.figure(figno)
+		gsN = figN.add_gridspec(1, 1)
+		axis = figN.add_subplot(gsN[0, 0])
+	
+	# Iterate over all waveforms
+	for wav in waveforms:
+		
+		# Get channel label
+		ch_label = "Unspecified Channel"
+		try:
+			ch = wav['channel']
+			ch_label = f"Chan-{ch}"
+		except:
+			pass
+		
+		# Get channel color if specified by driver object
+		chan_color = None
+		if osc is not None:
+			try:
+				chan_color = osc.state.channel_colors[wav['channel']]
+			except Exception as e:
+				chan_color = None
+		
+		# Get x-parameter from waveform
+		x = None
+		if 'time_s' in wav:
+			x = wav['time_s']
+			x_unit = "s"
+		elif 'time_idx' in wav:
+			x = wav['time_idx']
+			x_unit = "idx"
+		
+		# Plot result
+		if chan_color is None:
+			axis.plot(x, wav['volt_V'], linestyle=':', marker='.', label=ch_label)
+		else:
+			axis.plot(x, wav['volt_V'], linestyle=':', marker='.', color=chan_color, label=ch_label)
+	
+	if len(waveforms) > 1:
+		axis.legend()
+	
+	axis.set_xlabel(x_unit)
+	axis.grid(True)
+	axis.set_ylabel("Voltage (V)")
+	
+	return axis
