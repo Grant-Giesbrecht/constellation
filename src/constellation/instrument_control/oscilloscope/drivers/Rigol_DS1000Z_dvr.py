@@ -82,7 +82,7 @@ class RigolDS1000Z(Oscilloscope):
 		# Get time values
 		t = list(xorigin + np.linspace(0, xincr * (len(volts) - 1), len(volts)))
 		
-		self._super_hint = {"time_s":t, "volt_V":volts}
+		self._super_hint = {"time_s":t, "volt_V":volts, "channel":channel}
 	
 	def add_measurement(self, meas_type:int, channel:int=1):
 		

@@ -88,7 +88,7 @@ class RigolDS1000E(Oscilloscope):
 		
 		self.warning(f"DS1000E model does not support getting timebase; Time points returning >in index format, not seconds!<.")
 		
-		self._super_hint = {"time_index":t, "volt_V":volts}
+		self._super_hint = {"time_index":t, "volt_V":volts, "channel":channel}
 	
 	def add_measurement(self, meas_type:int, channel:int=1):
 		
