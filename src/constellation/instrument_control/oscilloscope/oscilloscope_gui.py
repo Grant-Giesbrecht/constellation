@@ -52,11 +52,12 @@ class ChannelWidget(QWidget):
 		
 		self.log.lowdebug(f"Channel {self.channel_num} updating UI from state.")
 		
-		self.enable_button.setChecked( self.driver.state.channels[self.channel_num].chan_en )
-		
-		self.vdiv_edit.setText(str( self.driver.state.channels[self.channel_num].div_volt ))
-		
-		self.voff_edit.setText(str( self.driver.state.channels[self.channel_num].offset_volt ))
+		try:
+			self.enable_button.setChecked( self.driver.state.channels[self.channel_num].chan_en )
+			self.vdiv_edit.setText(str( self.driver.state.channels[self.channel_num].div_volt ))
+			self.voff_edit.setText(str( self.driver.state.channels[self.channel_num].offset_volt ))
+		except Exception as e:
+			self.log.warning(f"state_to_ui() failed: {e}")
 
 class OscilloscopeWidget(InstrumentWidget):
 	
@@ -124,7 +125,11 @@ class OscilloscopeWidget(InstrumentWidget):
 		
 			wav = self.driver.get_waveform(i)
 			
-			self.plot_widget.ax1a.plot(wav['time_s'], wav['volt_V'])
+			if ('time_s' in wav.keys()) and ('volt_V' in wav.keys()):
+				self.plot_widget.ax1a.plot(wav['time_s'], wav['volt_V'])
+			elif ('time_index' in wav.keys()) and ('volt_V' in wav.keys()):
+				self.log.warning(f"Displaying waveform with time_index for x-axis.")
+				self.plot_widget.ax1a.plot(wav['time_index'], wav['volt_V'])
 		
 		self.plot_widget.ax1a.grid(True)
 		self.plot_widget.ax1a.grid("Time [S]")
