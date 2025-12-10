@@ -1,10 +1,5 @@
-''' Driver for Siglent SDM3000X series digital multimeters:
- - SDM3045X
- - SDM3055X
- - SDM3065X
-Only tested with SDM3045X.
+''' Driver for Keysight 34400 series digital multimeters:
 
-https://int.siglent.com/u_file/document/SDM%20Series%20Digital%20Multimeter_ProgrammingGuide_EN02A.pdf
 '''
 
 import array
@@ -13,8 +8,8 @@ from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg 
 
 class Keysight34400(DigitalMultimeter):
 	
-	def __init__(self, address:str, log:plf.LogPile):
-		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Keysight Technologies,344") 
+	def __init__(self, address:str, log:plf.LogPile, **kwargs):
+		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Keysight Technologies,344", **kwargs) 
 		
 		# Unit to make sure is matched by returned string
 		self.check_units = ""
