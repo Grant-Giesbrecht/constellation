@@ -1,6 +1,7 @@
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
 from constellation.instrument_control.oscilloscope.oscilloscope_gui import *
 from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000Z_dvr import *
+from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000E_dvr import *
 # from constellation.instrument_control.to_extended.LeCroy_WaveRunner44Xi_dvr import *
 
 from constellation.instrument_control.vector_network_analyzer.vector_network_analyzer_ctg import *
@@ -10,6 +11,7 @@ from constellation.instrument_control.vector_network_analyzer.drivers.RohdeSchwa
 from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg import *
 from constellation.instrument_control.digital_multimeter.drivers.Siglent_SDM3000X_dvr import *
 from constellation.instrument_control.digital_multimeter.drivers.Keysight_34400_dvr import *
+from constellation.instrument_control.digital_multimeter.drivers.Keithley_2700_dvr import *
 
 from constellation.instrument_control.arb_waveform_generator.arb_waveform_generator_ctg import *
 from constellation.instrument_control.arb_waveform_generator.drivers.Siglent_SDG2000X_dvr import *
