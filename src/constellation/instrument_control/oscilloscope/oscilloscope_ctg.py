@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 class OscilloscopeChannelState(InstrumentState):
 	
 	# __state_fields__ = (InstrumentState.__state_fields__+("div_volt", "offset_volt", "chan_en", "waveform"))
-	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "waveform")
+	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "attenuation", "bw_limit", "waveform")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)
@@ -14,6 +14,8 @@ class OscilloscopeChannelState(InstrumentState):
 		self.add_param("div_volt", unit="V")
 		self.add_param("offset_volt", unit="V")
 		self.add_param("chan_en", unit="bool")
+		self.add_param("attenuation", unit="")
+		self.add_param("bw_limit", unit="bool")
 		
 		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
 		
@@ -22,7 +24,7 @@ class OscilloscopeChannelState(InstrumentState):
 class OscilloscopeState(InstrumentState):
 	
 	# __state_fields__ = (InstrumentState.__state_fields__ + ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels"))
-	__state_fields__ = ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels", "channel_colors")
+	__state_fields__ = ("first_channel", "num_channels", "ndiv_horiz", "ndiv_vert", "div_time", "offset_time", "channels", "channel_colors", "trigger_source", "trigger_mode", "trigger_level")
 	
 	def __init__(self, first_channel:int, num_channels:int, ndiv_horiz, ndiv_vert, log:plf.LogPile=None):
 		super().__init__(log=log)
@@ -38,6 +40,10 @@ class OscilloscopeState(InstrumentState):
 		self.add_param("div_time", unit="s")
 		self.add_param("offset_time", unit="s")
 		
+		self.add_param("trigger_source", unit="")
+		self.add_param("trigger_mode", unit="")
+		self.add_param("trigger_level", unit="")
+		
 		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=OscilloscopeChannelState, log=log))
 		
 		for ch_no in self.channels.get_range():
@@ -46,6 +52,10 @@ class OscilloscopeState(InstrumentState):
 		self.validate()
 
 class Oscilloscope(Driver):
+	
+	TRIG_NORM = "trig-normal"
+	TRIG_SINGLE = "trig-single"
+	TRIG_AUTO = "trig-auto"
 	
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
 		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
@@ -209,6 +219,90 @@ class Oscilloscope(Driver):
 	
 	@abstractmethod
 	@enabledummy
+	def set_probe_attenuation(self, channel:int, attenuation:float):
+		self.modify_state(lambda: self.get_probe_attenuation(channel), ["channels", "attenuation"], attenuation, indices=[channel])
+	
+	@abstractmethod
+	@enabledummy
+	def get_probe_attenuation(self, channel:int):
+		return self.modify_state(None, ["channels", "attenuation"], self._super_hint, indices=[channel])
+	
+	@abstractmethod
+	@enabledummy
+	def set_bandwidth_limit(self, channel:int, enable:bool):
+		self.modify_state(lambda: self.get_bandwidth_limit(channel), ["channels", "bw_limit"], enable, indices=[channel])
+	
+	@abstractmethod
+	@enabledummy
+	def get_bandwidth_limit(self, channel:int):
+		return self.modify_state(None, ["channels", "bw_limit"], self._super_hint, indices=[channel])
+	
+	@abstractmethod
+	@enabledummy
+	def set_trigger_mode(self, mode:str):
+		self.modify_state(lambda: self.get_trigger_mode(), ["trigger_mode"], mode)
+	
+	@abstractmethod
+	@enabledummy
+	def get_trigger_mode(self):
+		return self.modify_state(None, ["trigger_mode"], self._super_hint)
+	
+	@abstractmethod
+	@enabledummy
+	def set_trigger_level(self, level_V:float):
+		self.modify_state(lambda: self.get_trigger_level(), ["trigger_level"], level_V)
+
+	@abstractmethod
+	@enabledummy
+	def get_trigger_level(self):
+		return self.modify_state(None, ["trigger_level"], self._super_hint)
+	
+	def _format_trigger_source(self, channel:int=None, external:bool=False, line:bool=False):
+		''' Converts the three-input trigger source argument format into an approp.
+		formatted string. Returns None on error
+		'''
+		
+		if channel is not None:
+			if channel < self.state.first_channel:
+				return None
+			if channel >= self.state.first_channel + self.state.num_channels:
+				return None
+			src_str = f"CHAN{channel}"
+		elif external:
+			src_str = "EXT"
+		elif line:
+			src_str = "AC"
+		else: # No valid option was set, abort
+			return None
+		
+		return src_str
+	
+	@abstractmethod
+	@enabledummy
+	def set_trigger_source(self, channel:int=None, external:bool=False, line:bool=False):
+		
+		# Get source string
+		src_str = self._format_trigger_source(channel, external, line)
+		
+		self.modify_state(lambda: self.get_trigger_source(), ["trigger_source"], src_str)
+	
+	@abstractmethod
+	@enabledummy
+	def get_trigger_source(self):
+		return self.modify_state(None, ["trigger_source"], self._super_hint)
+	
+	# @abstractmethod
+	# @enabledummy
+	# def set_bandwidth_limit(self, channel:int, enable:bool):
+	# 	return self.modify_state(lambda: self.get_bandwidth_limit(channel), ["channels", "bw_limit"], enable, indices=[channel])
+	# 
+	# @abstractmethod
+	# @enabledummy
+	# def get_bandwidth_limit(self, channel:int, attenuation:float):
+	# 	return self.modify_state(None, ["channels", "bw_limit"], self._super_hint, indices=[channel])
+		
+	@abstractmethod
+	@enabledummy
 	def get_waveform(self, channel:int):
 		return self.modify_state(None, ["channels", "waveform"], self._super_hint, indices=[channel])
 	
@@ -219,6 +313,11 @@ class Oscilloscope(Driver):
 			self.get_div_volt(ch)
 			self.get_offset_volt(ch)
 			self.get_chan_enable(ch)
+			self.get_bandwidth_limit(ch)
+			self.get_probe_attenuation(ch)
+		self.get_trigger_mode()
+		self.get_trigger_level()
+		self.get_trigger_source()
 	
 	def apply_state(self):
 		self.set_div_time(self.state.get(["div_time"]))
@@ -227,7 +326,12 @@ class Oscilloscope(Driver):
 			self.set_div_volt(ch, self.state.get(["channels", "div_volt"], indices=[ch]))
 			self.set_offset_volt(ch, self.state.get(["channels", "offset_volt"], indices=[ch]))
 			self.set_chan_enable(ch, self.state.get(["channels", "chan_en"], indices=[ch]))
-	
+			self.set_bandwidth_limit(ch, self.state.get(["channels", "bw_limit"], indices=[ch]))
+			self.set_probe_attenuation(ch, self.state.get(["channels", "attenuation"], indices=[ch]))
+		self.set_trigger_mode(self.state.trigger_mode)
+		self.set_trigger_source(self.state.trigger_source)
+		self.set_trigger_level(self.state.trigger_level)
+		
 	def get_all_waveforms(self):
 		''' Returns a list of returend waveforms, one for each online channel '''
 		

@@ -60,6 +60,94 @@ class RigolDS1000Z(Oscilloscope):
 		self._super_hint = str_to_bool(self.query(f":CHAN{channel}:DISP?"))
 	
 	@superreturn
+	def set_probe_attenuation(self, channel:int, attenuation:float):
+		valid_probe_attenuations = {0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}
+		if attenuation not in valid_probe_attenuations:
+			self.error(f"Probe attenuation >{attenuation}< not supported. Valid options: {sorted(valid_probe_attenuations)}")
+			return
+		self.write(f":CHAN{channel}:PROB {attenuation}")
+	
+	@superreturn
+	def get_probe_attenuation(self, channel:int):
+		self._super_hint =  float(self.query(f":CHAN{channel}:PROB?"))
+	
+	@superreturn
+	def set_bandwidth_limit(self, channel:int, enable:bool):
+		enable_code = "OFF"
+		if enable:
+			enable_code = "20M"
+		self.write(f":CHAN{channel}:BWL {enable_code}")
+	
+	@superreturn
+	def get_bandwidth_limit(self, channel:int):
+		resp = self.query(f":CHAN{channel}:BWL?")
+		if resp is None:
+			self._super_hint = None
+			return
+		self._super_hint = resp.strip().upper() in ["1", "ON", "20M"]
+	
+	@superreturn
+	def set_trigger_mode(self, mode:str):
+		
+		mode_table = {Oscilloscope.TRIG_SINGLE:"SING", Oscilloscope.TRIG_AUTO:"AUTO", Oscilloscope.TRIG_NORM:"NORM"}
+		if mode not in mode_table:
+			self.error(f"Cannot set trigger mode >{mode}<. Mode not recognized.")
+			return
+		
+		self.write(f":TRIG:EDGE:SWE {mode_table[mode]}")
+	
+	@superreturn
+	def get_trigger_mode(self):
+		
+		# Get value from scope
+		mode = self.query(":TRIG:EDGE:SWE?").strip()
+		
+		mode_table = {Oscilloscope.TRIG_SINGLE:"SING", Oscilloscope.TRIG_AUTO:"AUTO", Oscilloscope.TRIG_NORM:"NORM"}
+		inverted = {v: k for k, v in mode_table.items()}
+		
+		if mode not in inverted:
+			self.error(f"Cannot set trigger mode >{mode}<. Mode not recognized.")
+			return
+		self._super_hint = inverted[mode]
+	
+	@superreturn
+	def set_trigger_level(self, level_V:float):
+		self.write(f":TRIG:EDGE:LEV {level_V}")
+
+	@superreturn
+	def get_trigger_level(self):
+		self._super_hint = self.query(f":TRIG:EDGE:LEV?")
+	
+	@superreturn
+	def set_trigger_source(self, channel:int=None, external:bool=False, line:bool=False):
+		
+		# Get source string
+		src_str = self._format_trigger_source(channel, external, line)
+		
+		self.write(f":TRIG:EDGE:SOUR {src_str}")
+	
+	@superreturn
+	def get_trigger_source(self):
+		
+		src_str = self.query(f":TRIG:EDGE:SOUR?").strip()
+		
+		if src_str == "CHAN1":
+			self._super_hint = "1"
+		elif src_str == "CHAN2":
+			self._super_hint = "2"
+		elif src_str == "CHAN3":
+			self._super_hint = "3"
+		elif src_str == "CHAN4":
+			self._super_hint = "4"
+		elif src_str == "EXT":
+			self._super_hint = "EXT"
+		elif src_str == "AC":
+			self._super_hint = "LINE"
+		else:
+			self.warning(f"Unrecognized trigger source string. >@LOCK{src_str}@UNLOCK<")
+			self._super_hint = src_str
+	
+	@superreturn
 	def get_waveform(self, channel:int):
 		
 		self.write(f"WAV:SOUR CHAN{channel}")  # Specify channel to read
