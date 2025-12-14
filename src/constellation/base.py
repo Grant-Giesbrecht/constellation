@@ -131,6 +131,11 @@ class Identifier:
 	def __str__(self):
 		
 		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\nremote-addr: {self.remote_addr}"
+	
+	def __repr__(self):
+		
+		#TODO: Make this string a 1-line version. Because right now, if other objects were to also have multi-line reprs, then that would nest poorly.
+		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\nremote-addr: {self.remote_addr} at {hex(id(self))}"
 
 def superreturn(func):
 	''' Calls a function's super after the overriding function finishes
