@@ -12,7 +12,9 @@ log = plf.LogPile()
 log.str_format.show_detail = False
 log.terminal_level = plf.LOWDEBUG
 
-osc = RigolDS1000Z("TCPIP0::192.168.0.70::INSTR", log=log, dummy=True)
+# osc = RigolDS1000Z("TCPIP0::192.168.0.70::INSTR", log=log, dummy=True)
+
+osc = RigolDS1000E('USB0::0x1AB1::0x0588::DS1ET150401934::INSTR', log=log, dummy=False)
 
 
 
@@ -34,7 +36,7 @@ main_window.show()
 osc.set_div_time(0.001)
 osc.set_offset_time(0.002)
 osc.set_chan_enable(2, False)
-osc.set_chan_enable(3, False)
+# osc.set_chan_enable(3, False)
 osc.print_state()
 
 app.exec()

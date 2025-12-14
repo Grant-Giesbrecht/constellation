@@ -1,15 +1,20 @@
-''' Driver for Keysight 34400 series digital multimeters:
+''' Driver for Siglent SDM3000X series digital multimeters:
+ - SDM3045X
+ - SDM3055X
+ - SDM3065X
+Only tested with SDM3045X.
 
+https://int.siglent.com/u_file/document/SDM%20Series%20Digital%20Multimeter_ProgrammingGuide_EN02A.pdf
 '''
 
 import array
 from constellation.base import *
 from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg import *
 
-class Keysight34400(DigitalMultimeter):
+class Keithley2700(DigitalMultimeter):
 	
 	def __init__(self, address:str, log:plf.LogPile, **kwargs):
-		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Keysight Technologies,344", **kwargs) 
+		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Siglent Technologies,SDM30", **kwargs) 
 		
 		# Unit to make sure is matched by returned string
 		self.check_units = ""
@@ -24,7 +29,7 @@ class Keysight34400(DigitalMultimeter):
 		# SDM3045X: {600uA|6mA|60mA|600mA|6A|10A|AUTO}, AC starts at 60 mA
 		# SDM3055 and 3065X: {200uA|2mA|20mA|200mA|2A|10A|AUTO}, AC starts at 
 		if range is None:
-			range_str = "AUTO"
+			range_str = ""
 		else:
 			range_str = f"{range}"
 		
@@ -53,14 +58,7 @@ class Keysight34400(DigitalMultimeter):
 				return False
 		
 		self.write(f"ABORT") # Abort any previous wait for trigger events
-		self.write(f"CONFigure:{mstr}")
-	
-	def pop_error_queue(self) -> str:
-		''' Queries the instrument for it's last error 
-		'''
-		#TODO: Force all instrument to provide?
-		
-		return self.query("SYSTEM:ERROR?")
+		self.write(f"CONF:{mstr}")
 	
 	@superreturn
 	def get_measurement(self):
@@ -135,23 +133,38 @@ class Keysight34400(DigitalMultimeter):
 	def get_value(self, check_measurement:bool=True) -> float:
 		''' Returns the last measured value. Will be in units self.check_units. Will return None on error '''
 		
-		str_val = self.query("DATA:LAST?")
+		str_val = self.query("READ?")
 		
-		# Remove line endings
-		str_val = str_val.strip()
+		# str_val will contain 3 values. Example: 
+		# '-4.87665862E-01VDC,+1318.539SECS,+12129RDNG#\n'
+		#
+		# Parser function:
+		def parse_three_numbers(s: str):
+			"""
+			Extracts three leading float/scientific-notation numbers from a 
+			comma-separated Keithley-style reading string.
+			"""
+			fields = s.strip().split(",")
+
+			numbers = []
+			for f in fields:
+				# match leading number (scientific or normal float)
+				m = re.match(r'([+-]?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)', f)
+				if not m:
+					raise ValueError(f"Could not parse number from field: {f}")
+				numbers.append(float(m.group(1)))
+			
+			if len(numbers) != 3:
+				raise ValueError(f"Expected 3 numbers, found {len(numbers)}")
+			
+			return tuple(numbers)
 		
-		# Remove units from string
-		first_space = str_val.find(' ') # Find first space
-		last_space = str_val.rfind(' ') # Find last space
-		
-		# Get flaot data
+		# Parse return string
 		try:
-			val = float(str_val[:first_space])
+			(val, time_on, meas_count) = parse_three_numbers(str_val)
 		except Exception as e:
-			self.log.error(f"Failed to convert string data to float.", detail=f"({e})")
+			self.warning(f"Failed to parse returned string ({str_val}). {e}.")
 			return None
-		
-		#TODO: Check for overload
 		
 		#TODO: Implement check units
 		# # Check units
