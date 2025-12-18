@@ -291,6 +291,26 @@ class Oscilloscope(Driver):
 	def get_trigger_source(self):
 		return self.modify_state(None, ["trigger_source"], self._super_hint)
 	
+	@abstractmethod
+	@enabledummy
+	def run_acquisition(self):
+		pass
+	
+	@abstractmethod
+	@enabledummy
+	def stop_acquisition(self):
+		pass
+	
+	@abstractmethod
+	@enabledummy
+	def do_single_trigger(self):
+		pass
+	
+	@abstractmethod
+	@enabledummy
+	def do_force_trigger(self):
+		pass
+	
 	# @abstractmethod
 	# @enabledummy
 	# def set_bandwidth_limit(self, channel:int, enable:bool):
