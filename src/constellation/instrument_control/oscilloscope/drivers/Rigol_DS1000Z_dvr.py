@@ -159,6 +159,26 @@ class RigolDS1000Z(Oscilloscope):
 	def force_trigger(self):
 		self.write(":TFORCE")
 	
+	@abstractmethod
+	@enabledummy
+	def run_acquisition(self):
+		self.write(f":RUN")
+	
+	@abstractmethod
+	@enabledummy
+	def stop_acquisition(self):
+		self.write(f":STOP")
+	
+	@abstractmethod
+	@enabledummy
+	def do_single_trigger(self):
+		self.write(f":SING")
+	
+	@abstractmethod
+	@enabledummy
+	def do_force_trigger(self):
+		self.write(f":TFOR")
+	
 	@superreturn
 	def get_waveform(self, channel:int):
 		
