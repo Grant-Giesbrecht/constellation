@@ -146,38 +146,22 @@ class RigolDS1000Z(Oscilloscope):
 		else:
 			self.warning(f"Unrecognized trigger source string. >@LOCK{src_str}@UNLOCK<")
 			self._super_hint = src_str
-
-	def run(self):
-		self.write(":RUN")
 	
-	def stop(self):
-		self.write(":STOP")
-	
-	def single_trigger(self):
-		self.write(":SING")
-	
-	def force_trigger(self):
-		self.write(":TFORCE")
-	
-	@abstractmethod
-	@enabledummy
+	@superreturn
 	def run_acquisition(self):
 		self.write(f":RUN")
 	
-	@abstractmethod
-	@enabledummy
+	@superreturn
 	def stop_acquisition(self):
 		self.write(f":STOP")
 	
-	@abstractmethod
-	@enabledummy
+	@superreturn
 	def do_single_trigger(self):
 		self.write(f":SING")
 	
-	@abstractmethod
-	@enabledummy
+	@superreturn
 	def do_force_trigger(self):
-		self.write(f":TFOR")
+		self.write(f":TFORCE")
 	
 	@superreturn
 	def get_waveform(self, channel:int):
