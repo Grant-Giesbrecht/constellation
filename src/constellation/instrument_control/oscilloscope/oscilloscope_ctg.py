@@ -388,7 +388,7 @@ class OscilloscopeMeasurementMixinState(InstrumentState):
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)
 		
-		self.add_param("active_measurements", unit="", value=[])
+		self.add_param("active_measurements", unit="", value=IndexedList(first_index=0, num_indices=10, validate_type=OscilloscopeMeasurementSetting, log=log))
 		self.add_param("show_stat_table", unit="bool", value=False)
 
 class MeasurementsMixin:
@@ -412,7 +412,8 @@ class MeasurementsMixin:
 	@abstractmethod
 	@enabledummy
 	def clear_measurements(self):
-		self.modify_state(None, ["active_measurements"], [], fragment=self.__state_key__)
+		self.state.state_fragments[self.__state_key__].active_measurements.clear()
+		# self.modify_state(None, ["active_measurements"], [], fragment=self.__state_key__)
 	
 	@abstractmethod
 	@enabledummy

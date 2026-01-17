@@ -260,12 +260,17 @@ class IndexedList(Serializable):
 		
 		out = ""
 		
+		found_none = True
 		for ch in range(self.first_index, self.first_index+self.num_indices):
-			if ch != self.first_index:
-				out = out + "\n"
-			out += f"{indent}index {ch}:\n"
-			out += self.get_idx_val(ch).state_str(indent=indent+"    ")
+			if self.idx_is_populated(ch):
+				found_none = False
+				if ch != self.first_index:
+					out = out + "\n"
+				out += f"{indent}index {ch}:\n"
+				out += self.get_idx_val(ch).state_str(indent=indent+"    ")
 		
+		if found_none:
+			out += f"{indent}[>:qEmpty IndexedList<]"
 		# for ch in range(self.first_index, self.first_index+self.num_indices):
 		# 	if ch != self.first_index:
 		# 		out = out + "\n"
@@ -356,6 +361,21 @@ class IndexedList(Serializable):
 			return result
 		else:
 			raise StopIteration
+	
+	def append(self, value, allow_expand:bool=False) -> bool:
+		''' Adds value to the next non-populated index. Returns False if all 
+		slots are filled.
+		'''
+		
+		#TODO: Implement allow_expand
+		
+		# Scan over all indices, assign to first
+		for ch in range(self.first_index, self.first_index+self.num_indices):
+			if not self.idx_is_populated(ch):
+				self.set_idx_val(ch, value)
+				return True
+		
+		return False
 	
 	def iteration_idx(self):
 		''' Used to access the current IndexedList index while being iterated
@@ -473,10 +493,17 @@ class InstrumentState(Serializable):
 		if param in self.units:
 			return self.units[param]
 	
-	def state_str(self, indent:str=""):
+	def state_str(self, indent:str="") -> str:
 		
 		sout = ""
 		
+		# Add core label if fragments present
+		if len(self.state_fragments) > 0:
+			base_indent = indent
+			sout += f"{base_indent}Core State:\n"
+			indent += "    "
+		
+		# Print all valid params of core state
 		for name in self.valid_params:
 			
 			# Get name and unit strings
@@ -498,6 +525,14 @@ class InstrumentState(Serializable):
 					sout += plf.markdown(f"{indent}>{name}<: >:qNone<")
 				if unit is not None:
 					sout += plf.markdown(f"     >:q[unit: <{protect_str(unit)}>:q]<") + "\n"
+		
+		# Add fragment labels
+		if len(self.state_fragments) > 0:
+			sout += f"{base_indent}State Fragments:\n"
+			for frag, frag_obj in self.state_fragments.items():
+				sout += f"{base_indent}    {frag}:\n"
+				sout += frag_obj.state_str(f"{base_indent}        ")
+			
 		
 		# Trim last newline
 		if sout[-1:] == "\n":
@@ -831,7 +866,7 @@ class Driver(ABC):
 			else:
 				self.online = False
 			
-			self.debug(f">Driver.check_online()<: self.online --\> {self.online}")
+			self.debug(f">Driver.check_online()<: self.online --\\> {self.online}")
 	
 	def preset(self) -> None:
 		''' Presets an instrument. Only valid for SCPI instruments.'''
@@ -1132,6 +1167,7 @@ class Driver(ABC):
 		else:
 			state_dict = self.state_to_dict()
 			dict_summary(state_dict, verbose=1) #TODO: Make this a flag
+
 	
 	def state_to_dict(self, include_data:bool=False):
 		''' Saves the current instrument state to a dictionary. Note that it does NOT
