@@ -486,7 +486,7 @@ class MeasurementsMixin:
 	
 	@abstractmethod
 	@enabledummy
-	def get_measurement_stat_display(self, enable:bool):
+	def get_measurement_stat_display(self):
 		'''
 		Checks if the stats table is on or off.
 		'''
