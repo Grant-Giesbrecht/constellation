@@ -369,7 +369,7 @@ class InstrumentState(Serializable):
 	""" Used to describe the state of a Driver or instrument.
 	"""
 	
-	__state_fields__ = ("units", "is_data", "valid_params")
+	__state_fields__ = ("units", "is_data", "valid_params", "state_fragments")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__()
@@ -394,6 +394,9 @@ class InstrumentState(Serializable):
 		
 		# List of all properly added parameters (helpful for listing state in printout)
 		self.valid_params = []
+		
+		# Dict of state fragments for expanding with mixins
+		self.state_fragments = {}
 	
 	def add_param(self, name:str, unit:str="", is_data:bool=False, value=None ):
 		''' Adds a parameter in the __init__ function.
@@ -520,13 +523,24 @@ class InstrumentState(Serializable):
 		
 		return False
 	
-	def set(self, params:tuple, value, indices:tuple=None) -> bool:
+	def set(self, params:tuple, value, indices:tuple=None, fragment:str=None) -> bool:
 		''' Sets the value. Note that lists of objects MUST be stored
 		in the IndexedList class.
 		
 		
 		
 		'''
+		
+		# If a state_fragment is being modified, handle it
+		if fragment is not None:
+			
+			# Validate fragment exists
+			if fragment not in self.state_fragments:
+				self.log.error(f"Cannot set state. Fragment >{fragment}< not found in object >:q{obj_top}<.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
+				return False
+			
+			# Call set on fragment and return result
+			return self.state_fragments[fragment].set(params, value, indices=indices)
 		
 		obj_under = None # Object one notch lower
 		obj_top = self # Object at top of stack
@@ -660,7 +674,7 @@ class CheckOnline(Enum):
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str="", dummy:bool=False, first_channel_num:int=1, first_trace_num:int=1):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay, state:InstrumentState, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str="", dummy:bool=False, first_channel_num:int=1, first_trace_num:int=1):
 		
 		self.address = address
 		self.log = log
@@ -682,7 +696,7 @@ class Driver(ABC):
 		self.dummy = False
 		self.blind_state_update = False
 		self.check_online_on_error = CheckOnline.AUTO # Controls how Driver responds to errors during instrument communication
-		self.state = {}
+		self.state = state # Should be an InstrumentState instance, created by the child class
 		self.data = {} # Each value is a DataEntry instance
 		self.state_change_log_level = plf.DEBUG
 		self.data_state_change_log_level = plf.DEBUG
@@ -711,6 +725,7 @@ class Driver(ABC):
 		self.first_trace = first_trace_num
 		self.max_traces = None
 		
+		self.discover_mixins()
 		
 		#TODO: Automatically reconnect
 		# Connect instrument
@@ -750,6 +765,34 @@ class Driver(ABC):
 			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
 		
 		return self.online
+	
+	def discover_mixins(self):
+		''' This function discovers all mixin classes and incorporates their
+		state fragments into the state_fragments dictionary.
+		'''
+		
+		# Scan over all classes that are inherited
+		for cls in type(self).__mro__:
+			
+			# Get __state_key__, a parameter defining how to refer to this mixin in the state_fragments dict
+			key = getattr(cls, "__state_key__", None)
+			
+			# Get __state_fragment__, a parameter defining what kind of InstrumentState to assoc. with that mixin
+			frag_cls = getattr(cls, "__state_fragment__", None)
+			
+			# Check if key and frag_cls were found. If not, skip..., not a mixin.
+			if key and frag_cls and key not in self.state.state_fragments:
+				
+				# Add an instance of the class to the state_fragments
+				self.state.state_fragments[key] = frag_cls(log=self.log)
+		
+		# Validate mixins
+		for k, mix_class in self.state.state_fragments.items():
+			
+			try:
+				mix_class.validate()
+			except Exception as e:
+				self.log.warning(f"Validation failed in {type(mix_class)}. ({e})")
 	
 	def check_online(self):
 		''' Runs when an error occurs with insturment communication. This functions
@@ -1040,7 +1083,7 @@ class Driver(ABC):
 	def critical(self, message:str, detail:str=""):
 		self.log.critical(f"(>:q{self.id.short_str()}<) {message}", detail=f"({self.id}) {detail}")
 	
-	def modify_state(self, query_func:callable, params:tuple, value, indices:tuple=None):
+	def modify_state(self, query_func:callable, params:tuple, value, indices:tuple=None, fragment:str=None):
 		"""
 		Updates the internal state tracker.
 		
@@ -1068,10 +1111,8 @@ class Driver(ABC):
 			
 			# prev_val = self.state.get(params, indices=indices)
 			
-			# Record ing log
 			
-			
-			if self.state.set(params, value, indices=indices):
+			if self.state.set(params, value, indices=indices, fragment=fragment):
 				self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State modified: {param_idx_to_str(params, indices=indices)} \\<- >:a{truncate_str(value)}<.") #, detail=f"Previous value was {truncate_str(prev_val)}")
 			else:
 				self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) Failed to modify state: {param_idx_to_str(params, indices=indices)} \\<- >:a{truncate_str(value)}<.") #, detail=f"Previous value
@@ -1195,6 +1236,22 @@ class Driver(ABC):
 		Calls all 'get' functions to fully update the state tracker.
 		"""
 		pass
+	
+	def refresh_mixins(self):
+		''' Passes calls of refresh_state to all mixins as well as the core class.
+		'''
+		
+		# Scan over state fragments
+		for frag in self.state.state_fragments:
+			frag.refresh_state()
+	
+	def apply_mixins(self):
+		''' Passes calls of apply_state to all mixins as well as the core class.
+		'''
+		
+		# Scan over state fragments
+		for frag in self.state.state_fragments:
+			frag.apply_state()
 	
 	@abstractmethod
 	def apply_state(self, new_state:dict):

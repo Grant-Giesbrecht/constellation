@@ -5,15 +5,16 @@ https://beyondmeasure.rigoltech.com/acton/attachment/1579/f-0386/1/-/-/-/-/DS100
 
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
 
-class RigolDS1000Z(Oscilloscope):
+class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=DirectSCPIRelay(), max_channels:int=4, **kwargs):
 		super().__init__(address, log, relay=relay, expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=max_channels, num_div_horiz=12, num_div_vert=8, **kwargs)
 		
-		#TODO: Turn into Mixin
-		# self.meas_table = {StdOscilloscopeCtg.MEAS_VMAX:'VMAX', StdOscilloscopeCtg.MEAS_VMIN:'VMIN', StdOscilloscopeCtg.MEAS_VAVG:'VAVG', StdOscilloscopeCtg.MEAS_VPP:'VPP', StdOscilloscopeCtg.MEAS_FREQ:'FREQ'}
+		# Table to translate mixin constants to SCPI measurement strings
+		self.meas_table = {MeasurementsMixin.MEAS_VMAX:'VMAX', MeasurementsMixin.MEAS_VMIN:'VMIN', MeasurementsMixin.MEAS_VAVG:'VAVG', MeasurementsMixin.MEAS_VPP:'VPP', MeasurementsMixin.MEAS_FREQ:'FREQ'}
 		
-		# self.stat_table = {StdOscilloscopeCtg.STAT_AVG:'AVER', StdOscilloscopeCtg.STAT_MAX:'MAX', StdOscilloscopeCtg.STAT_MIN:'MIN', StdOscilloscopeCtg.STAT_CURR:'CURR', StdOscilloscopeCtg.STAT_STD:'DEV'}
+		# Table to translate mixin constants to SCPI statistics strings
+		self.stat_table = {MeasurementsMixin.STAT_AVG:'AVER', MeasurementsMixin.STAT_MAX:'MAX', MeasurementsMixin.STAT_MIN:'MIN', MeasurementsMixin.STAT_CURR:'CURR', MeasurementsMixin.STAT_STD:'DEV'}
 	
 	# def set_div_time(self, time_s:float):
 	# 	self.write(f":TIM:MAIN:SCAL {time_s}")
@@ -188,13 +189,14 @@ class RigolDS1000Z(Oscilloscope):
 		
 		self._super_hint = {"time_s":t, "volt_V":volts, "channel":channel}
 	
-	def add_measurement(self, meas_type:int, channel:int=1):
+	@superreturn
+	def add_measurement(self, channel:int, measurement:int):
 		
 		# Find measurement string
-		if meas_type not in self.meas_table:
-			self.error(f"Cannot add measurement >{meas_type}<. Measurement not recognized.")
+		if measurement not in self.meas_table:
+			self.error(f"Cannot add measurement >{measurement}<. Measurement not recognized.")
 			return
-		item_str = self.meas_table[meas_type]
+		item_str = self.meas_table[measurement]
 		
 		# Get channel string
 		channel_val = max(1, min(channel, 4))
@@ -206,13 +208,20 @@ class RigolDS1000Z(Oscilloscope):
 		# Send message
 		self.write(f":MEASURE:ITEM {item_str},{src_str}")
 	
-	def get_measurement(self, meas_type:int, channel:int=1, stat_mode:int=0) -> float:
+	@superreturn
+	def get_measurement(self, channel:int, measurement:str, stat_mode:str=MeasurementsMixin.STAT_CURR) -> float:
 		
 		# FInd measurement string
-		if meas_type not in self.meas_table:
-			self.log.error(f"Cannot add measurement >{meas_type}<. Measurement not recognized.")
+		if measurement not in self.meas_table:
+			self.log.error(f"Cannot add measurement >{measurement}<. Measurement not recognized.")
 			return
-		item_str = self.meas_table[meas_type]
+		item_str = self.meas_table[measurement]
+		
+		# FInd stat mode string
+		if stat_mode not in self.stat_table:
+			self.log.error(f"Cannot use stat-mode >{stat_mode}<. Statistic code not recognized.")
+			return
+		stat_str = self.stat_table[stat_mode]
 		
 		# Get channel string
 		channel = max(1, min(channel, 1000))
@@ -220,24 +229,15 @@ class RigolDS1000Z(Oscilloscope):
 			self.log.error("Channel must be between 1 and 4.")
 			return
 		src_str = f"CHAN{channel}"
-		
-		# Query result
-		if stat_mode == 0:
-			return float(self.query(f":MEASURE:ITEM? {item_str},{src_str}"))
-		else:
 			
-			# Get stat string
-			if stat_mode not in self.stat_table:
-				self.log.error(f"Cannot use statistic option >{meas_type}<. Option not recognized.")
-				return
-			stat_str = self.stat_table[stat_mode]
-			
-			return float(self.query(f":MEASURE:STAT:ITEM? {stat_str},{item_str},{src_str}"))
+		self._super_hint = float(self.query(f":MEASURE:STAT:ITEM? {stat_str},{item_str},{src_str}"))
 	
+	@superreturn
 	def clear_measurements(self):
 		
 		self.write(f":MEASURE:CLEAR ALL")
 	
+	@superreturn
 	def set_measurement_stat_display(self, enable:bool):
 		'''
 		Turns display statistical values on/off for the Rigol DS1000Z series scopes. Not
@@ -251,3 +251,11 @@ class RigolDS1000Z(Oscilloscope):
 		'''
 		
 		self.write(f":MEASure:STATistic:DISPlay {bool_to_ONOFF(enable)}")
+	
+	@superreturn
+	def get_measurement_stat_display(self):
+		''' Checks if the measuremnt statistics table is enabled
+		'''
+		
+		self._super_hint = str_to_bool(self.query(f":MEASure:STATistic:DISPlay?"))
+	

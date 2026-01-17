@@ -57,12 +57,12 @@ class Oscilloscope(Driver):
 	TRIG_SINGLE = "trig-single"
 	TRIG_AUTO = "trig-auto"
 	
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", first_channel:int=1, max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
+		
+		_state = OscilloscopeState(first_channel, max_channels, num_div_horiz, num_div_vert, log=log)
+		super().__init__(address, log, relay, _state, expected_idn=expected_idn, dummy=dummy, first_channel_num=first_channel, **kwargs)
 		
 		self.max_channels = max_channels #TODO: Replace with state
-		
-		self.state = OscilloscopeState(self.first_channel, self.max_channels, num_div_horiz, num_div_vert, log=log)
 		
 		if self.dummy:
 			self.init_dummy_state()
@@ -338,6 +338,8 @@ class Oscilloscope(Driver):
 		self.get_trigger_mode()
 		self.get_trigger_level()
 		self.get_trigger_source()
+		
+		self.refresh_mixins()
 	
 	def apply_state(self):
 		self.set_div_time(self.state.get(["div_time"]))
@@ -352,6 +354,8 @@ class Oscilloscope(Driver):
 		self.set_trigger_source(self.state.trigger_source)
 		self.set_trigger_level(self.state.trigger_level)
 		
+		self.apply_mixins()
+		
 	def get_all_waveforms(self):
 		''' Returns a list of returend waveforms, one for each online channel '''
 		
@@ -365,6 +369,135 @@ class Oscilloscope(Driver):
 	def refresh_data(self):
 		_ = self.get_all_waveforms()
 
+class OscilloscopeMeasurementSetting(InstrumentState):
+	
+	__state_fields__ = ("measurement_type", "measurement_source")
+	
+	def __init__(self, log:plf.LogPile=None):
+		super().__init__(log=log)
+		
+		self.add_param("measurement_type", unit="", value="") # Like VPP, etc
+		self.add_param("measurement_source", unit="", value="") # Will save as chan1, chan2, etc
+		
+		self.add_param("last_measured_value", unit="", value="") # Last recorded value
+
+class OscilloscopeMeasurementMixinState(InstrumentState):
+	
+	__state_fields__ = ("active_measurements", "show_stat_table")
+	
+	def __init__(self, log:plf.LogPile=None):
+		super().__init__(log=log)
+		
+		self.add_param("active_measurements", unit="", value=[])
+		self.add_param("show_stat_table", unit="bool", value=False)
+
+class MeasurementsMixin:
+	
+	__state_key__ = "measurements"
+	__state_fragment__ = OscilloscopeMeasurementMixinState
+	
+	MEAS_VMAX = "meas-vmax"
+	MEAS_VMIN = "meas-vmin"
+	MEAS_VAVG = "meas-vavg"
+	MEAS_VPP = "meas-vpp"
+	MEAS_FREQ = "meas-freq"
+	
+	STAT_AVG = "stat-avg"
+	STAT_MAX = "stat-max"
+	STAT_MIN = "stat-min"
+	STAT_CURR = "stat-curr"
+	STAT_STD = "stat-std"
+	
+	# TODO: How to handle enabledummy with mixins?
+	@abstractmethod
+	@enabledummy
+	def clear_measurements(self):
+		self.modify_state(None, ["active_measurements"], [], fragment=self.__state_key__)
+	
+	@abstractmethod
+	@enabledummy
+	def add_measurement(self, channel:int, measurement:str) -> bool:
+		
+		# This is an example where modify_state is too general to handle the situation,
+		# so instead I have to manually perform the state update logic.
+		
+		#TODO: Handle dummy!
+		
+		# Create source string
+		source = f"chan{channel}"
+		
+		# Check if measurement already exists
+		for am in self.state.state_fragments[self.__state_key__].active_measurements:
+			if am.measurement_type == measurement and am.measurement_source == source:
+				self.log.warning(f"Not adding measurement:>{measurement}< to source:>:a{source}<. Measurement already exists.")
+				return False
+		
+		# Add measurement
+		nm = OscilloscopeMeasurementSetting(self.log)
+		nm.measurement_type = measurement
+		nm.measurement_source = source
+		self.state.state_fragments[self.__state_key__].active_measurements.append(nm)
+		
+		return True
+	
+	@abstractmethod
+	@enabledummy
+	def get_measurement(self, channel:int, measurement:str, stat_mode:str=STAT_CURR) -> float:
+		''' Returns measurement result. REturns None if error occurs.
+		'''
+		
+		#TODO: Handle dummy!
+		
+		# Create source string
+		source = f"chan{channel}"
+		
+		# Check if measurement already exists
+		meas_idx = None
+		for idx, am in enumerate(self.state.state_fragments[self.__state_key__].active_measurements):
+			if am.measurement_type == measurement and am.measurement_source == source:
+				meas_idx = idx
+				break
+		
+		# Check if index was found
+		if meas_idx is None:
+			self.log.warning(f"Not adding measurement:>{measurement}< to source:>:a{source}<. Measurement already exists.")
+			return None
+		
+		# Update last measured value
+		self.state.state_fragments[self.__state_key__].active_measurements[meas_idx].last_measured_value = self._super_hint
+		
+		return self._super_hint
+		
+	
+	@abstractmethod
+	@enabledummy
+	def set_measurement_stat_display(self, enable:bool):
+		'''
+		Turns display statistical values on/off for the Rigol DS1000Z series scopes. Not
+		part of the Oscilloscope, but local to this driver.
+		
+		Args:
+			enable (bool): Turns displayed stats on/off
+		
+		Returns:
+			None
+		'''
+		self.modify_state(lambda: self.get_measurement_stat_display(), ["show_stat_table"], enable, fragment=self.__state_key__)
+	
+	@abstractmethod
+	@enabledummy
+	def get_measurement_stat_display(self, enable:bool):
+		'''
+		Checks if the stats table is on or off.
+		'''
+		return self.modify_state(None, ["show_stat_table"], self._super_hint, fragment=self.__state_key__)
+	
+	def refresh_state(self):
+		pass
+		#TODO: How to get list of all active measurements?
+	
+	def apply_state(self):
+		pass
 
 #TODO: replace with mixin	
 # class StdOscilloscopeCtg(Oscilloscope):
