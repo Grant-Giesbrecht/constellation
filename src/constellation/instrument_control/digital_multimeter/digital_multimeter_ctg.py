@@ -31,9 +31,8 @@ class DigitalMultimeter(Driver):
 	MEAS_CURR_DC = "current-dc"
 	
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", dummy:bool=False, **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
-		
-		self.state = DigitalMultimeterState(log=log)
+		_state = DigitalMultimeterState(log=log)
+		super().__init__(address, log, relay, _state, expected_idn=expected_idn, dummy=dummy, **kwargs)
 		
 		if self.dummy:
 			self.init_dummy_state()

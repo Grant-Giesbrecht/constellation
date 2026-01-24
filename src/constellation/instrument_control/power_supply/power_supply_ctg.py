@@ -39,12 +39,10 @@ class PowerSupplyState(InstrumentState):
 class PowerSupply(Driver):
 	
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", max_channels:int=1, dummy:bool=False, first_channel:int=1, **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
+		_state = PowerSupplyState(first_channel, max_channels, log=log)
+		super().__init__(address, log, relay, _state, expected_idn=expected_idn, dummy=dummy, first_channel_num=first_channel, **kwargs)
 		
-		self.first_channel = first_channel
 		self.max_channels = max_channels
-		
-		self.state = PowerSupplyState(self.first_channel, self.max_channels, log=log)
 		
 		if self.dummy:
 			self.init_dummy_state()
