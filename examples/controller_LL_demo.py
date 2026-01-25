@@ -32,6 +32,6 @@ dmm.set_trigger_type(DigitalMultimeter.TRIG_SINGLE)
 # ctrl.set_target_y(1e-3, initial_x=0.6)
 
 # Create a nonlinear controller
-controller = MonotonicNonlinearController(log, max_step=0.05, default_probe_dx=0.01, backup_slope_tests=[], tol=100e-6, set_x_func=lambda x: psu.set_voltage(3, x), meas_y_func=lambda:dmm.send_trigger_and_read())
+controller = MonotonicNonlinearController(log, max_step=0.2, default_probe_dx=0.05, backup_slope_tests=[], tol=25e-6, set_x_func=lambda x: psu.set_voltage(3, x), meas_y_func=lambda:dmm.send_trigger_and_read(), max_iterations=20, min_x=0)
 
-controller.set_setpoint(1e-3, init_x=0.4)
+controller.set_setpoint(1e-3, init_x=0.1)

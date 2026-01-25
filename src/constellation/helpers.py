@@ -5,6 +5,7 @@ import numpy as np
 import pylogfile.base as plf
 
 import stardust.algorithm as staral
+from stardust.cli import rde
 
 HIGHDEBUG = 15
 
@@ -29,11 +30,19 @@ class MonotonicNonlinearIterationPoint:
 		self.x0 = x0
 		
 
+#TODO: Record all points and avoid initial slope measurement if it's been measured before.
 class MonotonicNonlinearController:
 	
 	def __init__(self, log:plf.LogPile, max_step:float, default_probe_dx:float, backup_slope_tests:list,
 			  tol:float, set_x_func:callable, meas_y_func:callable, min_x:float=None, max_x:float=None, min_y:float=None, max_y:float=None, 
-			  t_stabilize:float=1):
+			  t_stabilize:float=1, max_iterations:int=10):
+		'''
+		The probe_dx will follow these rules:
+		 - With no prior knowledge, default_probe_dx will be used
+		 - The probe_dx will scale with measured slope and remaining y-error. 
+		 - THe probe_dx will never be larger than max_step (just as the new x0 will never change more than max_step).
+		 
+		'''
 		
 		self.log = log
 		self.log.log_levels.append(plf.LogLevelDefinition(HIGHDEBUG, "HIGHDEBUG", label_color=Fore.LIGHTGREEN_EX))
@@ -42,7 +51,7 @@ class MonotonicNonlinearController:
 		self.max_step = max_step
 		
 		# Maximum number of iterations allowed per point
-		self.max_iterations = 10
+		self.max_iterations = max_iterations
 		
 		# Size of dX to estimate slope
 		self.default_probe_dx = default_probe_dx
@@ -115,6 +124,7 @@ class MonotonicNonlinearController:
 		self.log.debug(f"Controller setting x value to >{x}<.")
 		
 		self.set_x_func(x)
+		self.current_x = x
 		
 		time.sleep(self.t_stabilize)
 	
@@ -216,18 +226,31 @@ class MonotonicNonlinearController:
 		
 		
 	
-	def set_setpoint(self, set_point:float, init_x:float=0):
+	def set_setpoint(self, set_point:float, init_x:float=None):
 		
+		# Initialize prove_dx with default
 		probe_dx = self.default_probe_dx
+		
+		# Relationship between dx_update and dx_probe. Bigger -> bigger dx_probe.
+		probe_dx_scaling = 1
+		
 		tol = self.target_tolerance
-		x0 = init_x
+		
+		# Select starting point
+		if init_x is not None:
+			x0 = init_x
+		else:
+			if self.current_x is not None:
+				x0 = self.current_x
+			else:
+				x0 = 0
 		
 		for iter_num in range(self.max_iterations):
 			
 			# # Run an iteration
 			# self._run_iteration(set_point, dx=self.default_probe_dx, x0=init_x)
 			
-			self.log.add_log(HIGHDEBUG, f"Beginning iteration {iter_num+1}/{self.max_iterations} with conditions: set_point:>:a{set_point}<, x0:>{x0}<,  probe_dx:>:q{probe_dx}<, tol:>:q{tol}<.")
+			self.log.add_log(HIGHDEBUG, f"Beginning iteration {iter_num+1}/{self.max_iterations} with conditions: set_point:>:q{set_point}<, x0:>:a{rde(x0)}<,  probe_dx:>:q{rde(probe_dx)}<, tol:>:q{rde(tol)}<.")
 		
 			# Measure y value for given x0, see if error is good.
 			x0 = self._clip_x(x0)
@@ -236,7 +259,7 @@ class MonotonicNonlinearController:
 			
 			# Check for conditions complete
 			if is_within_tol(y0, set_point, tol):
-				self.log.info(f"Set point >{set_point}< reached. x=>:a{x0}< -> y=>{y0}< (tol={tol}, error={np.abs(y0-set_point)}).")
+				self.log.info(f"Set point >:q{rde(set_point)}< reached. x=>:a{rde(x0)}< -\\> y=>:a{rde(y0)}< (tol={rde(tol)}, error={rde(np.abs(y0-set_point))}).")
 				
 				# Record result
 				mnip = MonotonicNonlinearIterationPoint(set_point, None, None, tol, y0, None, None, None, None, None, None, None)
@@ -286,15 +309,17 @@ class MonotonicNonlinearController:
 			x_new = x0 + dx_update
 			x_new = self._clip_x(x_new)
 			
-			# For now, hard code probe and tol as fixed
-			probe_dx_new = probe_dx
+			# Update probe dx
+			probe_dx_new = dx_update*probe_dx_scaling
+			
+			# For now, hard code tol as fixed
 			tol_new = tol
 			
 			# Record result
 			mnip = MonotonicNonlinearIterationPoint(set_point, slope, x0, tol, y0, x_low, x_high, y_low, y_high, x_new, probe_dx_new, tol_new)
 			
 			# Record point
-			self.log.add_log(HIGHDEBUG, f"Finished iteration for set_point:>:a{set_point}<, x0:>{x0}<. Measured slope:>{slope}<, y0:{y0}, dx-update:{dx_update}, new-x0:>{x_new}<(wanted:>:q{x_new_pt}<), new-probe-dx:{probe_dx_new}, new-tol:{tol_new}.")
+			self.log.add_log(HIGHDEBUG, f"Finished iteration for set_point:>:q{rde(set_point)}<, x0:>:a{rde(x0)}<. Measured slope:>:a{rde(slope)}<, y0:>:a{rde(y0)}<, dx-update:>:q{rde(dx_update)}<, new-x0:>:q{rde(x_new)}<(wanted:>:q{rde(x_new_pt)}<), new-probe-dx:>:a{rde(probe_dx_new)}<, new-tol:>:q{rde(tol_new)}<.")
 			self._add_to_history(mnip)
 			
 			# Update variables for next iteration
