@@ -1436,7 +1436,7 @@ def interpret_range(rd:dict, print_err=False):
 		if print_err:
 			print(f"    {Fore.RED}Key 'unit' wrong type.{Style.RESET_ALL}")
 		return None
-	elif rd['unit'] not in ("dBm", "V", "Hz", "mA", "K"):
+	elif rd['unit'] not in ("dBm", "V", "Hz", "mA", "K", "uA"):
 		if print_err:
 			print(f"    {Fore.RED}Key 'unit' corrupt.{Style.RESET_ALL}")
 		return None
