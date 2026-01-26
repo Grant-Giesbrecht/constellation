@@ -393,7 +393,12 @@ class InstrumentState(Serializable):
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__()
-		self.log = log
+		
+		if log is not None:
+			self.log = log
+		else:
+			self.log = plf.LogPile()
+		
 		self.surpress_warnings = False
 		
 		# Optional dictionary to contain unit information for the parameters.
