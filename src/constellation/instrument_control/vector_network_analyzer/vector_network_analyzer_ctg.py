@@ -120,13 +120,14 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	RF_ENABLE = "rf-enable[bool]"
 	TRACES = "traces"
 	
-	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", first_channel:int=1, first_trace:int=1, **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, first_channel_num=first_channel, first_trace_num=first_trace, **kwargs)
+	def __init__(self, address:str, log:plf.LogPile, max_channels:int=24, max_traces:int=16, expected_idn:str="", first_channel:int=1, first_trace:int=1, relay:CommandRelay=None, **kwargs):
+		_state = BasicVectorNetworkAnalyzerState(first_channel, max_channels, first_trace, max_traces, log=log)
+		super().__init__(address, log, relay=relay, state=_state, expected_idn=expected_idn, first_channel_num=first_channel, first_trace_num=first_trace, **kwargs)
 		
 		self.max_channels = max_channels
 		self.max_traces = max_traces # This is per-channel
 		
-		self.state = BasicVectorNetworkAnalyzerState(self.first_channel, self.max_channels, self.first_trace, self.max_traces, log=log)
+		
 	
 	def find_trace(self, meas:str, format:str=FORM_LOG_MAG) -> str:
 		''' Looks for a trace with the specified measurement and format, and if found,
