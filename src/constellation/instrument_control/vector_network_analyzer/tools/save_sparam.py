@@ -13,6 +13,8 @@ FILENAME = input("Filename:")
 cal_notes = input("Calibration notes:")
 other_notes = input("Other notes?:")
 
+log = plf.LogPile()
+
 zva = RohdeSchwarzZVA("TCPIP0::169.254.131.24::INSTR", log)
 
 zva.refresh_channels_and_traces()
