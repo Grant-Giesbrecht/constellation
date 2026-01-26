@@ -17,6 +17,22 @@ def plot_vna_mag(data:dict, label:str=""):
 	plt.xlabel("Frequency [GHz]")
 	plt.ylabel("S-Parameters [dB]")
 
+def plot_vna_phase(data:dict, label:str=""):
+	''' Helper function to plot the data output from a VNA get_trace_data() call.
+	
+	Args:
+		data (dict): VNA trace data to plot
+		label (str): Optional label for data
+	
+	Returns:
+		None
+	'''
+	plt.plot(np.array(data['x'])/1e9, (np.angle(data['y'], deg=True)), label=label)
+	
+	plt.grid(True)
+	plt.xlabel("Frequency [GHz]")
+	plt.ylabel("Angle (def)")
+
 class VNATraceState(InstrumentState):
 	""" Class used to represent a trace that is active on the VNA.
 	"""
