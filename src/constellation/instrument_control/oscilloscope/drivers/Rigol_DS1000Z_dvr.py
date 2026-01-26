@@ -15,10 +15,36 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 		
 		# Table to translate mixin constants to SCPI statistics strings
 		self.stat_table = {MeasurementsMixin.STAT_AVG:'AVER', MeasurementsMixin.STAT_MAX:'MAX', MeasurementsMixin.STAT_MIN:'MIN', MeasurementsMixin.STAT_CURR:'CURR', MeasurementsMixin.STAT_STD:'DEV'}
-	
+		
+		# Table to translate coupling constants to SCPI strings
+		self.coupling_table = {Oscilloscope.COUPLING_AC:"AC", Oscilloscope.COUPLING_DC:"DC", Oscilloscope.COUPLING_GND:"GND"}
+		
 	# def set_div_time(self, time_s:float):
 	# 	self.write(f":TIM:MAIN:SCAL {time_s}")
 	# 	super().set_div_time(time_s)
+	
+	@superreturn
+	def set_coupling(self, channel:int, coupling:str):
+		
+		# Validate input
+		if coupling not in self.coupling_table.keys():
+			self.warning(f"Cannot set coupling to unrecognized value '{coupling}'.")
+			return
+		
+		coupling_code = self.coupling_table[coupling]
+		
+		self.write(f":CHAN{channel}:COUP {coupling_code}")
+	
+	@superreturn
+	def get_coupling(self, channel:int):
+		rval =  self.query(f":CHAN{channel}:COUP?").strip()
+		
+		inverted = {v: k for k, v in self.coupling_table.items()}
+		if rval not in inverted:
+			self.error(f"Received unrecognized coupling mode >@:LOCK'{rval}'@:UNLOCK< from instrument.", detail=f"Coupling options include: {inverted}.")
+			return
+		self._super_hint = inverted[rval]
+		
 	
 	@superreturn
 	def set_div_time(self, time_s:float):

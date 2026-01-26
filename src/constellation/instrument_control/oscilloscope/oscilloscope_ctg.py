@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 class OscilloscopeChannelState(InstrumentState):
 	
 	# __state_fields__ = (InstrumentState.__state_fields__+("div_volt", "offset_volt", "chan_en", "waveform"))
-	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "attenuation", "bw_limit", "waveform")
+	__state_fields__ = ("div_volt", "offset_volt", "chan_en", "attenuation", "bw_limit", "waveform", "coupling")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)
@@ -16,6 +16,7 @@ class OscilloscopeChannelState(InstrumentState):
 		self.add_param("chan_en", unit="bool")
 		self.add_param("attenuation", unit="")
 		self.add_param("bw_limit", unit="bool")
+		self.add_param("coupling", unit="")
 		
 		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
 		
@@ -57,6 +58,10 @@ class Oscilloscope(Driver):
 	TRIG_SINGLE = "trig-single"
 	TRIG_AUTO = "trig-auto"
 	
+	COUPLING_AC = "coup-ac"
+	COUPLING_DC = "coup-dc"
+	COUPLING_GND = "coup-gnd"
+	
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn="", first_channel:int=1, max_channels:int=1, num_div_horiz:int=10, num_div_vert:int=8, dummy:bool=False, **kwargs):
 		
 		_state = OscilloscopeState(first_channel, max_channels, num_div_horiz, num_div_vert, log=log)
@@ -74,6 +79,7 @@ class Oscilloscope(Driver):
 			self.set_div_volt(ch, 1)
 			self.set_offset_volt(ch, 0)
 			self.set_chan_enable(ch, True)
+			self.set_coupling(ch, self.COUPLING_DC)
 		
 		self.remake_dummy_waves()
 	
@@ -86,6 +92,8 @@ class Oscilloscope(Driver):
 		Returns:
 			None
 		'''
+		
+		#TODO: Consider coupliing AC vs DC
 		
 		# Loop over all channels
 		for channel in range(self.first_channel, self.first_channel+self.max_channels):
@@ -137,6 +145,10 @@ class Oscilloscope(Driver):
 					rval = None
 				case "get_div_volt":
 					rval = self.state.get(["channels", "div_volt"], indices=[args[0]])
+				case "set_coupling":
+					rval = None
+				case "get_coupling":
+					rval = self.state.get(["channels", "coupling"], indices=[args[0]])
 				case "set_offset_volt":
 					rval = None
 				case "get_offset_volt":
@@ -172,6 +184,15 @@ class Oscilloscope(Driver):
 			self.error(f"Failed to respond to dummy instruction. ({e})")
 			return None
 	
+	@abstractmethod
+	def set_coupling(self, channel:int, coupling:str):
+		self.modify_state(lambda: self.get_coupling(channel), ["channels", "coupling"], coupling, indices=[channel])
+	
+	@abstractmethod
+	@enabledummy
+	def get_coupling(self, channel:int):
+		return self.modify_state(None, ["channels", "coupling"], self._super_hint, indices=[channel])
+
 	@abstractmethod
 	def set_div_time(self, time_s:float):
 		self.modify_state(self.get_div_time, ["div_time"], time_s)
