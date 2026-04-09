@@ -47,8 +47,6 @@ class StatusPushButton(QWidget):
 	def set_status(self, status:bool):
 		
 		if status:
-			print(f"1")
 			self.status_indicator.setPixmap(self.indicator_1)
 		else:
-			print(f"0")
 			self.status_indicator.setPixmap(self.indicator_0)
