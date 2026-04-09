@@ -5,7 +5,7 @@ Saves S-parameters from a VNA to disk.
 
 from constellation.all import *
 import matplotlib.pyplot as plt
-from jarnsaxa import hdf_to_dict, dict_to_hdf
+from stardust.io import hdf_to_dict, dict_to_hdf
 from constellation.instrument_control.vector_network_analyzer.drivers.RohdeSchwarz_ZVA_dvr import *
 import sys
 

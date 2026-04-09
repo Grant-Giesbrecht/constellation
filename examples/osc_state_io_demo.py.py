@@ -6,7 +6,7 @@ hardware.
 
 from constellation.all import *
 import matplotlib.pyplot as plt
-from ganymede import dict_summary
+from stardust.io import dict_summary
 from colorama import Fore, Style
 
 log = plf.LogPile()

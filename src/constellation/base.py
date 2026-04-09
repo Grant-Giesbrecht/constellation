@@ -11,10 +11,11 @@ from socket import getaddrinfo, gethostname
 import ipaddress
 import fnmatch
 import matplotlib.pyplot as plt
-from jarnsaxa import hdf_to_dict, dict_to_hdf, Serializable, to_serial_dict, from_serial_dict
+from stardust.serializer import Serializable, to_serial_dict, from_serial_dict
+from stardust.io import hdf_to_dict, dict_to_hdf
 import datetime
 import numbers
-from ganymede import dict_summary
+from stardust.io import dict_summary
 from colorama import Fore, Style
 from enum import Enum
 

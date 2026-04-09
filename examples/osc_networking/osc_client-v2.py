@@ -3,8 +3,8 @@
 
 import asyncio, os
 from labmesh import DirectorClientAgent, RelayClient
-from ganymede import dict_summary
-from jarnsaxa import from_serial_dict
+from stardust.io import dict_summary
+from stardust.serializer import from_serial_dict
 from constellation import *
 from constellation.all import *
 from PyQt6 import QtWidgets
