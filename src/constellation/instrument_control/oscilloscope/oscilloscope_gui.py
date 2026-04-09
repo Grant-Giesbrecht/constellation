@@ -4,6 +4,7 @@ from constellation.ui import *
 
 from PyQt6.QtWidgets import QWidget, QGridLayout, QLabel, QTextEdit, QPushButton, QLineEdit, QGroupBox
 from PyQt6.QtGui import QDoubleValidator
+from constellation.widgets import StatusPushButton
 
 class ChannelWidget(QWidget):
 	
@@ -19,8 +20,8 @@ class ChannelWidget(QWidget):
 		
 		self.chan_label = QLabel(f"Channel {channel_num}")
 		
-		self.enable_button = QPushButton("Enable", parent=self)
-		self.enable_button.setCheckable(True)
+		self.enable_button = StatusPushButton("Enable", parent=self)
+		# self.enable_button.setCheckable(True)
 		
 		self.vdiv_label = QLabel("Volts/div [V]:")
 		self.vdiv_edit = QLineEdit()
@@ -53,7 +54,7 @@ class ChannelWidget(QWidget):
 		self.log.lowdebug(f"Channel {self.channel_num} updating UI from state.")
 		
 		try:
-			self.enable_button.setChecked( self.driver.state.channels[self.channel_num].chan_en )
+			self.enable_button.set_status( self.driver.state.channels[self.channel_num].chan_en )
 			self.vdiv_edit.setText(str( self.driver.state.channels[self.channel_num].div_volt ))
 			self.voff_edit.setText(str( self.driver.state.channels[self.channel_num].offset_volt ))
 		except Exception as e:

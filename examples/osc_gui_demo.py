@@ -14,7 +14,7 @@ log.terminal_level = plf.LOWDEBUG
 
 # osc = RigolDS1000Z("TCPIP0::192.168.0.70::INSTR", log=log, dummy=True)
 
-osc = RigolDS1000Z('USB0::0x1AB1::0x0588::DS1ET150401934::INSTR', log=log, dummy=False)
+osc = RigolDS1000Z('USB0::0x1AB1::0x0588::DS1ET150401934::INSTR', log=log, dummy=True)
 
 
 
