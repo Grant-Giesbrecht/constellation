@@ -554,44 +554,77 @@ class MeasurementsMixin:
 # 		super().refresh_state()
 	
 
-def plot_waveform(waveform, axis=None, figno:int=1, osc:Oscilloscope=None):
-	''' Plots a waveform dictionary. If multiple waveform are provided (list
-	of dicts), each will be plotted on the same axes.'''
-	
-	# Get wavefomr list from dict/list input
+_DEFAULT_CHAN_COLORS = {
+	1: (0.925, 0.84, 0),
+	2: (0, 159/255, 185/255),
+	3: (204/255, 0, 175/255),
+	4: (22/255, 0, 184/255),
+}
+
+def plot_waveform(waveform, axis=None, fig=None, osc:Oscilloscope=None, label=None, **kwargs):
+	''' Plots a waveform dictionary. If multiple waveforms are provided (list
+	of dicts), each will be plotted on the same axes.
+
+	Args:
+		waveform: dict with keys 'time_s', 'volt_V', and optionally 'channel',
+		          or a list of such dicts.
+		axis:     matplotlib Axes to plot on. If None, one is created.
+		fig:      matplotlib Figure to use when axis is None. If None, a new figure is created.
+		osc:      Oscilloscope driver; used to look up per-channel colors from its state.
+		label:    Label string forwarded to plot(). Overrides the auto-generated channel label.
+		**kwargs: Forwarded to matplotlib plot() (color, marker, linestyle, alpha, etc.).
+		          Providing 'color' here overrides any channel color lookup.
+	'''
+
+	# Normalize input to list
 	if isinstance(waveform, dict):
 		waveforms = [waveform]
 	elif isinstance(waveform, list):
 		waveforms = waveform
 	else:
-		raise TypeError
-	
-	# If axis is not provided, create one
+		raise TypeError(f"waveform must be a dict or list of dicts, got {type(waveform)}")
+
+	# Get or create axes
 	if axis is None:
-		figN = plt.figure(figno)
-		gsN = figN.add_gridspec(1, 1)
-		axis = figN.add_subplot(gsN[0, 0])
-	
-	# Iterate over all waveforms
+		if fig is None:
+			fig = plt.figure()
+		if not fig.get_axes():
+			axis = fig.add_subplot(1, 1, 1)
+		else:
+			axis = fig.gca()
+
+	x_unit = ""
+
 	for wav in waveforms:
-		
-		# Get channel label
-		ch_label = "Unspecified Channel"
-		try:
-			ch = wav['channel']
-			ch_label = f"Chan-{ch}"
-		except:
-			pass
-		
-		# Get channel color if specified by driver object
-		chan_color = None
-		if osc is not None:
+
+		# Determine label
+		if label is not None:
+			plot_label = label
+		else:
 			try:
-				chan_color = osc.state.channel_colors[wav['channel']]
-			except Exception as e:
-				chan_color = None
-		
-		# Get x-parameter from waveform
+				plot_label = f"Chan-{wav['channel']}"
+			except (KeyError, TypeError):
+				plot_label = "Unspecified Channel"
+
+		# Determine color — osc state takes priority over defaults; user 'color' kwarg overrides both
+		plot_kwargs = {'linestyle': ':', 'marker': '.'}
+		plot_kwargs.update(kwargs)
+		if 'color' not in plot_kwargs:
+			chan_color = None
+			if osc is not None:
+				try:
+					chan_color = osc.state.channel_colors[wav['channel']]
+				except Exception:
+					pass
+			if chan_color is None:
+				try:
+					chan_color = _DEFAULT_CHAN_COLORS.get(wav['channel'])
+				except Exception:
+					pass
+			if chan_color is not None:
+				plot_kwargs['color'] = chan_color
+
+		# Determine x data
 		x = None
 		if 'time_s' in wav:
 			x = wav['time_s']
@@ -599,18 +632,14 @@ def plot_waveform(waveform, axis=None, figno:int=1, osc:Oscilloscope=None):
 		elif 'time_idx' in wav:
 			x = wav['time_idx']
 			x_unit = "idx"
-		
-		# Plot result
-		if chan_color is None:
-			axis.plot(x, wav['volt_V'], linestyle=':', marker='.', label=ch_label)
-		else:
-			axis.plot(x, wav['volt_V'], linestyle=':', marker='.', color=chan_color, label=ch_label)
-	
+
+		axis.plot(x, wav['volt_V'], label=plot_label, **plot_kwargs)
+
 	if len(waveforms) > 1:
 		axis.legend()
-	
+
 	axis.set_xlabel(x_unit)
 	axis.grid(True)
 	axis.set_ylabel("Voltage (V)")
-	
+
 	return axis
