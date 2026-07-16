@@ -1,5 +1,4 @@
 from constellation.base import *
-from constellation.networking.net_client import *
 
 import stardust.algorithm as stal
 

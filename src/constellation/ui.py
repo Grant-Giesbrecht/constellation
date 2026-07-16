@@ -1,5 +1,4 @@
 from constellation.base import *
-from constellation.networking.net_client import *
 import sys
 from PyQt6 import QtCore, QtGui
 from PyQt6.QtWidgets import QMainWindow, QGridLayout, QPushButton, QSlider, QGroupBox, QWidget, QTabWidget
@@ -119,10 +118,7 @@ class InstrumentWidget(QWidget):
 		self.main_layout = QGridLayout()
 		
 		self.main_window.instrument_widgets.append(self)
-		
-		# # Automatically check if a local driver or remoteinstrument was provided
-		# self.is_remote = issubclass(type(self), RemoteInstrument)
-	
+
 	@abstractmethod
 	def state_to_ui(self):
 		pass
