@@ -1,7 +1,7 @@
 from constellation.base import *
-from constellation.networking.net_client import *
 
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 
 class OscilloscopeChannelState(InstrumentState):
 	
@@ -344,7 +344,11 @@ class Oscilloscope(Driver):
 		
 	@abstractmethod
 	@enabledummy
-	def get_waveform(self, channel:int):
+	def get_waveform(self, channel:int, **kwargs):
+		''' **kwargs absorbs driver-specific capture options (e.g. binary/full_memory/max_points
+		on RigolDS1000Z) so drivers can extend get_waveform()'s options without requiring a
+		matching category-level signature change - superreturn's wrapper calls this with
+		whatever args/kwargs the driver-level call received. '''
 		return self.modify_state(None, ["channels", "waveform"], self._super_hint, indices=[channel])
 	
 	def refresh_state(self):
@@ -377,15 +381,35 @@ class Oscilloscope(Driver):
 		
 		self.apply_mixins()
 		
-	def get_all_waveforms(self):
-		''' Returns a list of returend waveforms, one for each online channel '''
-		
-		waveform_list = []
-		for ch in range(self.state.first_channel, self.state.num_channels+self.state.first_channel):
-			if self.get_chan_enable(ch):
-				waveform_list.append(self.get_waveform(ch))
-		
-		return waveform_list
+	def _begin_waveform_batch(self, **kwargs):
+		''' Optional hook: called once by get_all_waveforms() before reading any channel, so a
+		driver that needs to do something expensive/disruptive per full-record read (e.g.
+		stopping acquisition) can do it ONCE for the whole batch instead of once per channel.
+		Default no-op. Returns arbitrary state to pass to _end_waveform_batch(). '''
+		return None
+
+	def _end_waveform_batch(self, batch_state, **kwargs):
+		''' Optional hook: called once by get_all_waveforms() after every channel has been read,
+		undoing whatever _begin_waveform_batch() did (e.g. resuming acquisition). Default no-op. '''
+		pass
+
+	def get_all_waveforms(self, **kwargs):
+		''' Returns a list of returend waveforms, one for each online channel.
+
+		**kwargs is forwarded to get_waveform() as-is (e.g. binary=/full_memory=/max_points= on
+		RigolDS1000Z), so callers can request e.g. get_all_waveforms(binary=False) the same way
+		they'd call get_waveform(ch, binary=False). '''
+
+		batch_state = self._begin_waveform_batch(**kwargs)
+		try:
+			waveform_list = []
+			for ch in range(self.state.first_channel, self.state.num_channels+self.state.first_channel):
+				if self.get_chan_enable(ch):
+					waveform_list.append(self.get_waveform(ch, _skip_run_management=True, **kwargs))
+
+			return waveform_list
+		finally:
+			self._end_waveform_batch(batch_state, **kwargs)
 	
 	def refresh_data(self):
 		_ = self.get_all_waveforms()
@@ -561,19 +585,72 @@ _DEFAULT_CHAN_COLORS = {
 	4: (22/255, 0, 184/255),
 }
 
-def plot_waveform(waveform, axis=None, fig=None, osc:Oscilloscope=None, label=None, **kwargs):
+def _waveform_label(wav, label):
+	''' Determines the legend/title label for a single waveform dict, applying the same
+	fallback rule plot_waveform() has always used. '''
+
+	if label is not None:
+		return label
+	try:
+		return f"Chan-{wav['channel']}"
+	except (KeyError, TypeError):
+		return "Unspecified Channel"
+
+def _waveform_style(wav, osc, kwargs):
+	''' Resolves the plot() kwargs for a single waveform dict: user-provided kwargs take
+	priority, then the driver's own per-channel color (if osc is given), then the module
+	default per-channel colors. '''
+
+	plot_kwargs = {'linestyle': ':', 'marker': '.'}
+	plot_kwargs.update(kwargs)
+	if 'color' not in plot_kwargs:
+		chan_color = None
+		if osc is not None:
+			try:
+				chan_color = osc.state.channel_colors[wav['channel']]
+			except Exception:
+				pass
+		if chan_color is None:
+			try:
+				chan_color = _DEFAULT_CHAN_COLORS.get(wav['channel'])
+			except Exception:
+				pass
+		if chan_color is not None:
+			plot_kwargs['color'] = chan_color
+	return plot_kwargs
+
+def _waveform_xdata(wav):
+	''' Returns (x_data, x_unit) for a single waveform dict. '''
+
+	if 'time_s' in wav:
+		return wav['time_s'], "s"
+	elif 'time_idx' in wav:
+		return wav['time_idx'], "idx"
+	return None, ""
+
+def plot_waveform(waveform, axis=None, fig=None, osc:Oscilloscope=None, label=None, separateaxes=False, **kwargs):
 	''' Plots a waveform dictionary. If multiple waveforms are provided (list
-	of dicts), each will be plotted on the same axes.
+	of dicts), each will by default be plotted on the same axes.
 
 	Args:
-		waveform: dict with keys 'time_s', 'volt_V', and optionally 'channel',
-		          or a list of such dicts.
-		axis:     matplotlib Axes to plot on. If None, one is created.
-		fig:      matplotlib Figure to use when axis is None. If None, a new figure is created.
-		osc:      Oscilloscope driver; used to look up per-channel colors from its state.
-		label:    Label string forwarded to plot(). Overrides the auto-generated channel label.
-		**kwargs: Forwarded to matplotlib plot() (color, marker, linestyle, alpha, etc.).
-		          Providing 'color' here overrides any channel color lookup.
+		waveform:     dict with keys 'time_s', 'volt_V', and optionally 'channel',
+		              or a list of such dicts.
+		axis:         matplotlib Axes to plot on. If None, one is created. Must not be given
+		              when separateaxes=True - there is no single axis to plot onto in that mode.
+		fig:          matplotlib Figure to use when axis is None. If None, a new figure is created.
+		osc:          Oscilloscope driver; used to look up per-channel colors from its state.
+		label:        Label string forwarded to plot(). Overrides the auto-generated channel
+		              label for every waveform, so it's only useful with a single waveform.
+		separateaxes: If True, each waveform gets its own stacked subplot (one row per waveform)
+		              with a shared, synced X axis (panning/zooming one moves all of them)
+		              instead of being layered on one set of axes. Returns a list of Axes (one
+		              per waveform, same order as the input) instead of a single Axes.
+		**kwargs:     Forwarded to matplotlib plot() (color, marker, linestyle, alpha, etc.).
+		              Providing 'color' here overrides any channel color lookup.
+
+	Returns:
+		A single matplotlib Axes (separateaxes=False, the default), or a list of Axes, one per
+		waveform (separateaxes=True).
 	'''
 
 	# Normalize input to list
@@ -583,6 +660,39 @@ def plot_waveform(waveform, axis=None, fig=None, osc:Oscilloscope=None, label=No
 		waveforms = waveform
 	else:
 		raise TypeError(f"waveform must be a dict or list of dicts, got {type(waveform)}")
+
+	if separateaxes:
+
+		if axis is not None:
+			raise ValueError("Cannot pass both axis and separateaxes=True - there is no single axis to plot onto in that mode.")
+
+		if fig is None:
+			fig = plt.figure()
+
+		# Explicit grid-based layout (GridSpec + add_subplot per cell) rather than
+		# Figure.subplots(), for compatibility with downstream plotting tooling.
+		gs = GridSpec(len(waveforms), 1, figure=fig)
+		axes = []
+		for i in range(len(waveforms)):
+			ax = fig.add_subplot(gs[i, 0], sharex=axes[0] if axes else None)
+			axes.append(ax)
+
+		x_unit = ""
+		for wav, ax in zip(waveforms, axes):
+
+			plot_label = _waveform_label(wav, label)
+			plot_kwargs = _waveform_style(wav, osc, kwargs)
+			x, x_unit = _waveform_xdata(wav)
+
+			ax.plot(x, wav['volt_V'], label=plot_label, **plot_kwargs)
+			ax.set_title(plot_label)
+			ax.grid(True)
+			ax.set_ylabel("Voltage (V)")
+			ax.label_outer()  # hide redundant x tick labels on all but the bottom axis
+
+		axes[-1].set_xlabel(f"Time ({x_unit})")
+
+		return axes
 
 	# Get or create axes
 	if axis is None:
@@ -597,48 +707,16 @@ def plot_waveform(waveform, axis=None, fig=None, osc:Oscilloscope=None, label=No
 
 	for wav in waveforms:
 
-		# Determine label
-		if label is not None:
-			plot_label = label
-		else:
-			try:
-				plot_label = f"Chan-{wav['channel']}"
-			except (KeyError, TypeError):
-				plot_label = "Unspecified Channel"
-
-		# Determine color — osc state takes priority over defaults; user 'color' kwarg overrides both
-		plot_kwargs = {'linestyle': ':', 'marker': '.'}
-		plot_kwargs.update(kwargs)
-		if 'color' not in plot_kwargs:
-			chan_color = None
-			if osc is not None:
-				try:
-					chan_color = osc.state.channel_colors[wav['channel']]
-				except Exception:
-					pass
-			if chan_color is None:
-				try:
-					chan_color = _DEFAULT_CHAN_COLORS.get(wav['channel'])
-				except Exception:
-					pass
-			if chan_color is not None:
-				plot_kwargs['color'] = chan_color
-
-		# Determine x data
-		x = None
-		if 'time_s' in wav:
-			x = wav['time_s']
-			x_unit = "s"
-		elif 'time_idx' in wav:
-			x = wav['time_idx']
-			x_unit = "idx"
+		plot_label = _waveform_label(wav, label)
+		plot_kwargs = _waveform_style(wav, osc, kwargs)
+		x, x_unit = _waveform_xdata(wav)
 
 		axis.plot(x, wav['volt_V'], label=plot_label, **plot_kwargs)
 
 	if len(waveforms) > 1:
 		axis.legend()
 
-	axis.set_xlabel(x_unit)
+	axis.set_xlabel(f"Time ({x_unit})")
 	axis.grid(True)
 	axis.set_ylabel("Voltage (V)")
 
