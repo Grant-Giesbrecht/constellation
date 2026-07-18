@@ -136,30 +136,35 @@ To add a GUI for a new category (say, a signal generator):
 4. That's it - `window.add_instrument(any_driver_in_that_category)` works, locally or networked,
    for every current and future driver in the category.
 
-A `docs/gui_authoring_guide.md` walking through exactly this, plus the `TrackedControl` states
-table above, is proposed as part of the implementation (not written yet).
+See `docs/gui_authoring_guide.md` for the step-by-step walkthrough of exactly this, plus the
+`TrackedControl` states table above.
 
-## Open decisions (need your input before implementation starts)
+## Decisions (settled)
 
-1. **Threads vs. processes for isolation.** I'm recommending per-instrument threads (simpler,
-   sufficient for I/O-bound work, no cross-process Qt complications). If you want a badly-behaved
-   driver to be *structurally unable* to affect the GUI process at all (not just "won't freeze the
-   event loop"), that needs separate processes instead, which is a bigger change - worth deciding
-   now rather than retrofitting later.
-2. **`QDockWidget` vs. `QMdiArea`** for paneling. I'm recommending dock widgets (tabbing, floating,
-   saved layouts come free); `QMdiArea` gives a more "floating windows within a window" feel if
-   that's closer to what you pictured for "paneled into a larger window."
-3. **Does setpoint-vs-actual belong in `InstrumentState` itself, or stay GUI-layer-only?** I'm
-   proposing GUI-layer-only for now (faster, lower-risk, doesn't touch the save/load/serialization
-   code every category already depends on). A deeper `InstrumentState` change to track this for
-   every field would also benefit scripting (not just GUIs) but is a much larger, riskier change -
-   see `docs/dummy_and_state_review.md`'s architectural notes, this would be a natural follow-up
-   there rather than a prerequisite here.
-4. **Visual language specifics.** The pending/mismatch/stale color scheme above is a starting
-   point, not a final answer - and you mentioned mimicking real front panels, which is more of a
-   per-category layout/visual design call for each widget author than something the framework can
-   enforce. Worth a quick gut-check before it becomes the convention every future widget copies.
-5. **Naming.** `InstrumentBridge`/`TrackedControl`/`register_gui` are placeholders - happy to match
-   whatever fits the project's existing voice better.
-6. **Packaging**: add `PyQt6`/`matplotlib` as a `[project.optional-dependencies] gui = [...]` extra
-   (so scripting-only users don't need Qt installed), or make them hard dependencies?
+1. **Threads, not processes.** Per-instrument `threading.Thread`, owned entirely by
+   `InstrumentBridge`. Hard requirement: **category widget authors never see the threading layer**.
+   `InstrumentWidget.__init__` receives an already-constructed, already-running `bridge` - no
+   widget author ever imports `threading`, touches a queue, or starts a bridge themselves. From
+   their side it's plain single-threaded Qt: build layout, wire `TrackedControl`s to `bridge`,
+   handle signals. `ConstellationWindow.add_instrument(...)` is the one and only place a bridge
+   gets created and started.
+2. **`QDockWidget`**, not `QMdiArea`.
+3. **Setpoint-vs-actual stays GUI-layer-only** for now (lives entirely in `TrackedControl`, not in
+   `InstrumentState`). Revisit as a `docs/dummy_and_state_review.md` follow-up if scripting ever
+   wants the same tracking.
+4. **Visual language and layout**, now concrete:
+   - Front-panel mimicry means *logical grouping*, not a literal replica: e.g. for an oscilloscope,
+     channel controls grouped together (one sub-group per channel), trigger controls in their own
+     frame, run/stop/single-trigger acquisition controls set apart along the top or a side edge -
+     matching how a real instrument's front panel separates these concerns, not any specific
+     model's exact layout. Each category widget author makes this call for their instrument; the
+     framework doesn't (can't) enforce a specific arrangement, only that groups are visually
+     distinct (`QGroupBox`/`QFrame` per logical group is the expected pattern).
+   - The indicator convention is a custom button class - `IndicatorButton` - used for every
+     toggle/enum-style control. It shows the normal button content plus two small indicator lights
+     (on the button face or immediately beside/above it): one reflecting the **setpoint** (what was
+     last requested) and one reflecting **pending/mismatch/stale** status (see table below). Value
+     entries (e.g. a volts/div field) use the same two-indicator convention via small colored
+     markers next to the field rather than a button.
+5. **Naming stays as proposed**: `InstrumentBridge`, `TrackedControl`, `register_gui`.
+6. **`PyQt6`/`matplotlib` become hard dependencies** in `pyproject.toml` (not an optional extra).
