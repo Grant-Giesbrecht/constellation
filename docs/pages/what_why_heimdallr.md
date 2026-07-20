@@ -11,7 +11,7 @@ Key features of Constellation:
   * __Instrument Drivers:__ Constellation includes a selection of instrument driver classes. For example, a class is provided to interact with Rohde and Schwarz ZVA series vector network analyzers.
   * __Instrument Categories:__ All instrument drivers fall under some category definition. This allows users to know drivers meet some minimum standard. For example, you know all drivers meeting a hypothetical Oscilloscope category will implement a function to set the trigger level. This allows scripts to be designed instruments of a general category, then swapping out the actual physical hardware is relatively painless. Similarly, GUI widgets know exactly what they can expect from a corresponding driver.
 * __Networking and Thread Management:__ (In Progress)
-  * __TCP Server:__ Constellation makes it easy to setup a server accepting multiple client connections, with account configurable permissions, and AES encrypted communications. 
+  * __Mesh Networking:__ Constellation uses [labmesh](https://github.com/Grant-Giesbrecht/labmesh), a small ZeroMQ mesh built specifically for it, to make an instrument reachable from more than one process: a broker tracks what's on the network, a relay runs next to each physical instrument connection, and any number of clients can connect. There are no per-user accounts - the whole mesh shares one password.
   * __Remote Access:__ Using a Constellation network, your instruments can be controlled and monitored from anywhere (with the right password!). 
   * __Thread Management:__ The _ToDo_ class automates the creation of new threads for each instrument, protecting your script or driver-node from freezing if a driver or instrument locks up. 
 * __GUI Widgets:__ (ToDo)

@@ -33,10 +33,12 @@ a collection of driver classes. Some of its key features include:
 that all instruments of the same category (ie. all oscilloscopes) will share a common
 API.
 - **Networking:** In addition to directly connecting to and interfacing with your
-instruments, you can optionally use Constellation's networking classes to remotely access
-your instruments. This works by connecting multiple clients to a single server program
-over an AES-encrypted network. Typically one client would interface with the instrument 
-drivers, while the other clients can be used to monitor or adjust experiments remotely.
+instruments, you can optionally use Constellation's [labmesh](https://github.com/Grant-Giesbrecht/labmesh)
+integration to remotely access your instruments over a small ZeroMQ mesh (a broker, one relay per
+physical instrument connection, and any number of clients), gated by a shared network password.
+The same driver classes and API are used whether you're working locally or over the network -
+typically one client "owns" an instrument and drives it, while other clients can monitor its state
+remotely without needing a direct connection of their own.
 - **Autmoatic Rich Logging:** Because Constellation's core use-case concerns scientific experiments,
 robust and thorough logging is crucial. Constellation automates this via the [pylogfile](https://pypi.org/project/pylogfile/)
 library and records every command sent to the instruments. Logs can be saved in the binary and open-source HDF format, which can be viewed and analyzed usign the `lumberjack` command line tool.

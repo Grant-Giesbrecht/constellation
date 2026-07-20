@@ -100,43 +100,42 @@ class HostID:
 
 class Identifier:
 	''' Data to identify a specific instrument driver instance. Contains
-	its location on a network (if applicable), rich-name, class type, and
+	its optional network nickname, rich-name, class type, and
 	identification string provided by the instrument.'''
-	
+
 	def __init__(self):
 		self.idn_model = "" # Identifier provided by instrument itself (*IDN?)
 		self.ctg = "" # Category class of driver
 		self.dvr = "" # Driver class
-		
-		self.remote_id = "" # Rich name authenticated by the server and used to lookup the remote address
-		self.remote_addr = "" # String IP address of driver host, pipe, then instrument VISA address.
-		
-		self.address = "" # Instrument address to connect to, if local connection.
-	
+
+		self.remote_id = "" # Optional human-friendly nickname for this instrument on the network (distinct from its labmesh relay_id/address).
+
+		self.address = "" # Instrument address to connect to (VISA resource string, or a labmesh relay_id if this Driver is behind a RemoteTextCommandRelayClient).
+
 	def to_dict(self):
 		''' Returns the instrument Identifier as a dictionary.
-		
+
 		Returns:
 			Dictionary representing the identifier.
 		'''
-		
-		return {"idn_model":self.idn_model, "ctg":self.ctg, "dvr":self.dvr, "remote_id":self.remote_id, "remote_addr":self.remote_addr, "address":self.address}
-	
+
+		return {"idn_model":self.idn_model, "ctg":self.ctg, "dvr":self.dvr, "remote_id":self.remote_id, "address":self.address}
+
 	def short_str(self):
 		dvr_short = self.dvr[self.dvr.rfind('.')+1:]
 		if len(self.remote_id) > 0:
 			return f"driver-class: {dvr_short}, remote-id: {self.remote_id}"
 		else:
 			return f"driver-class: {dvr_short}"
-	
+
 	def __str__(self):
-		
-		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\nremote-addr: {self.remote_addr}"
-	
+
+		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\naddress: {self.address}"
+
 	def __repr__(self):
-		
+
 		#TODO: Make this string a 1-line version. Because right now, if other objects were to also have multi-line reprs, then that would nest poorly.
-		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\nremote-addr: {self.remote_addr} at {hex(id(self))}"
+		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\naddress: {self.address} at {hex(id(self))}"
 
 def superreturn(func):
 	''' Calls a function's super after the overriding function finishes
@@ -191,8 +190,8 @@ class IndexedList(Serializable):
 	It also supports 'traces' for instruments that have both multiple traces and 
 	multiple indices such as a vector network analyzer.
 	
-	NOTE: Iterating over an IndexedList will only iterate over populated values. Use iteration_idx() to get the actual index for each thing
-	iterated over.
+	NOTE: Iterating over an IndexedList will only iterate over populated values. Use populated_items() to
+	iterate over (index, value) pairs instead, if the index of each thing iterated over is also needed.
 	'''
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
@@ -205,9 +204,7 @@ class IndexedList(Serializable):
 		self.first_index = first_index
 		self.num_indices = num_indices
 		self.index_data = {}
-		
-		self._iter_index = self.first_index
-		
+
 		#TODO: Save this as a string and add it to __stat_fields__
 		self.validate_type = validate_type
 	
@@ -229,9 +226,6 @@ class IndexedList(Serializable):
 				populated_list.append(i)
 		
 		return populated_list
-	
-	def __post_deserialize__(self):
-		self._iter_index = self.first_index
 	
 	def __getitem__(self, key:int):
 		
@@ -345,23 +339,21 @@ class IndexedList(Serializable):
 		return (f"idx-{index}" in self.index_data.keys())
 	
 	def __iter__(self):
-		self._iter_index = self.first_index  # Reset iteration
-		return self
+		''' Yields each populated value, in index order. This is a generator, so each
+		call returns an independent iterator with its own position - safe to nest or
+		use concurrently over the same IndexedList (unlike a hand-rolled __next__ that
+		tracks position on self, which two overlapping iterations would corrupt).'''
+		for idx in self.get_range():
+			if self.idx_is_populated(idx):
+				yield self.index_data[f"idx-{idx}"]
 
-	def __next__(self):
-		if self._iter_index < self.first_index+self.num_indices:
-			
-			# Advance until a populated index is found
-			while not self.idx_is_populated(self._iter_index):
-				self._iter_index += 1
-				if self._iter_index >= self.first_index+self.num_indices:
-					raise StopIteration
-			
-			result = self.get_idx_val(self._iter_index)
-			self._iter_index += 1
-			return result
-		else:
-			raise StopIteration
+	def populated_items(self):
+		''' Like __iter__, but yields (index, value) pairs so callers that need the
+		index of each item (e.g. to find which index matches some condition) don't need
+		separate iteration-position tracking. '''
+		for idx in self.get_range():
+			if self.idx_is_populated(idx):
+				yield idx, self.index_data[f"idx-{idx}"]
 	
 	def append(self, value, allow_expand:bool=False) -> bool:
 		''' Adds value to the next non-populated index. Returns False if all 
@@ -377,11 +369,6 @@ class IndexedList(Serializable):
 				return True
 		
 		return False
-	
-	def iteration_idx(self):
-		''' Used to access the current IndexedList index while being iterated
-		over, similar to enumerate.'''
-		return self._iter_index-1
 	
 	def get_range(self):
 		return range(self.first_index, self.first_index+self.num_indices)
@@ -715,7 +702,7 @@ class CheckOnline(Enum):
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay, state:InstrumentState, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, client_id:str="", dummy:bool=False, first_channel_num:int=1, first_trace_num:int=1):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay, state:InstrumentState, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, dummy:bool=False, first_channel_num:int=1, first_trace_num:int=1):
 		
 		self.address = address
 		self.log = log
@@ -744,7 +731,6 @@ class Driver(ABC):
 		self._super_hint = None # Last measured value 
 		
 		# Setup ID
-		self.id.remote_addr = client_id + "|" + self.address
 		if remote_id is not None:
 			self.id.remote_id = remote_id
 			
@@ -1081,7 +1067,50 @@ class Driver(ABC):
 			self.error(f"Failed to read from instrument {self.address}. ({e})")
 			self.check_online()
 			return ""
-	
+
+	def query_binary(self, cmd:str, datatype:str='B') -> list:
+		''' Queries a binary block via the relay (see CommandRelay.query_binary). Only relays
+		that implement it (typically a local DirectSCPIRelay, not a text-based network relay)
+		can actually return data here - others raise NotImplementedError, which is caught and
+		logged like any other relay failure. Updates self.online with success/failure.
+
+		Args:
+			cmd (str): SCPI query command (e.g. ":WAV:DATA?").
+			datatype (str): struct format character for each data point (PyVISA convention).
+
+		Returns:
+			list: Decoded values, or [] on failure/offline/dummy/unsupported relay.
+		'''
+
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default query_binary() function, instrument does recognize SCPI commands.")
+			return []
+
+		# Abort if offline
+		if not self.online:
+			self.warning(f"Cannot query_binary when offline.")
+			return []
+
+		# Spoof if dummy
+		if self.dummy:
+			self.lowdebug(f"Reading binary from dummy")
+			return []
+
+		# Attempt to read
+		try:
+			self.online, rv = self.relay.query_binary(cmd, datatype=datatype)
+			if self.online:
+				self.lowdebug(f"Read binary block from instrument: >:a{len(rv)} values<")
+				return rv
+			else:
+				self.check_online()
+				return []
+		except Exception as e:
+			self.error(f"Failed to query binary block from instrument {self.address}. ({e})")
+			self.check_online()
+			return []
+
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
 		need to return anything, reads commands or similar should. What is returned here
@@ -1281,19 +1310,25 @@ class Driver(ABC):
 	
 	def refresh_mixins(self):
 		''' Passes calls of refresh_state to all mixins as well as the core class.
+
+		refresh_state/apply_state are optional hooks a mixin's state fragment may implement -
+		none currently do, so fragments without one are silently skipped rather than treated as
+		an error.
 		'''
-		
-		# Scan over state fragments
-		for frag in self.state.state_fragments:
-			frag.refresh_state()
-	
+
+		# Scan over state fragment objects (state_fragments is a dict keyed by mixin name)
+		for frag in self.state.state_fragments.values():
+			if hasattr(frag, "refresh_state"):
+				frag.refresh_state()
+
 	def apply_mixins(self):
 		''' Passes calls of apply_state to all mixins as well as the core class.
 		'''
-		
-		# Scan over state fragments
-		for frag in self.state.state_fragments:
-			frag.apply_state()
+
+		# Scan over state fragment objects (state_fragments is a dict keyed by mixin name)
+		for frag in self.state.state_fragments.values():
+			if hasattr(frag, "apply_state"):
+				frag.apply_state()
 	
 	@abstractmethod
 	def apply_state(self, new_state:dict):
@@ -1442,7 +1477,7 @@ def interpret_range(rd:dict, print_err=False):
 		if print_err:
 			print(f"    {Fore.RED}Key 'unit' wrong type.{Style.RESET_ALL}")
 		return None
-	elif rd['unit'] not in ("dBm", "V", "Hz", "mA", "K", "uA"):
+	elif rd['unit'] not in ("dBm", "V", "Hz", "mA", "K", "uA", "dBV"):
 		if print_err:
 			print(f"    {Fore.RED}Key 'unit' corrupt.{Style.RESET_ALL}")
 		return None

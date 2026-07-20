@@ -21,11 +21,14 @@ dependencies = [
 	'pylogfile >= 0.3.0',
 	'h5py >= 3.11.0',
 	'colorama >= 0.4.0',
-	'pyfrost-network >= 0.0.0.dev0',
+	'labmesh >= 0.0.0',
+	'pyzmq >= 25',
 	'tabulate >= 0.9.0',
 	'zhinst >= 24.0.0',
 	'stardust-tools >= 0.0.0',
-	'pyvicp >= 1.0.0'
+	'pyvicp >= 1.0.0',
+	'PyQt6 >= 6.4.0',
+	'matplotlib >= 3.5.0'
 ]
 license = "BSD-2-Clause"
 license-files = ["LICENSE"]

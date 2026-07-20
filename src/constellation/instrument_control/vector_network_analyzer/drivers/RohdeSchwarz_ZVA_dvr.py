@@ -36,10 +36,10 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 		''' Returns the index for the requested trace. Returns NOne if not found.
 		'''
 		
-		for tr in self.state.traces:
+		for idx, tr in self.state.traces.populated_items():
 			if tr.id_str == trace_name:
-				return self.state.traces.iteration_idx()
-		
+				return idx
+
 		return None
 	
 	def valid_trace_name(self, name:str) -> bool:

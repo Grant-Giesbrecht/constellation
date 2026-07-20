@@ -1,5 +1,5 @@
-""" Data bank node - stores waveforms uploaded by a driver script, serves them back out to
-anyone that asks. """
+""" Data bank node - stores waveforms uploaded by controller_client.py, serves them back out to
+anyone (e.g. monitor_client.py) that asks. """
 
 import asyncio
 import argparse

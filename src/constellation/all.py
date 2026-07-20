@@ -3,7 +3,5 @@ from constellation.relay import *
 from constellation.helpers import *
 from constellation.instrument_control.instrument_control import *
 from constellation.instrument_control.all import *
-from constellation.networking.network import *
-from constellation.networking.net_client import *
-from constellation.networking.net_server import *
+from constellation.networking.labmesh_net import *
 from constellation.ui import *
