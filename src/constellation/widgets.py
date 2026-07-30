@@ -1,12 +1,14 @@
 from constellation.base import *
-from constellation.networking.net_client import *
 import sys
+import os
 from PyQt6 import QtCore, QtGui
 from PyQt6.QtWidgets import QMainWindow, QGridLayout, QPushButton, QSlider, QGroupBox, QWidget, QTabWidget, QLabel, QSizePolicy, QSpacerItem
 from PyQt6.QtGui import QAction, QPixmap
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
+
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 class StatusPushButton(QWidget):
 	
@@ -24,8 +26,8 @@ class StatusPushButton(QWidget):
 		self.main_button.clicked.connect(lambda: self.set_status(self.main_button.isChecked()))
 		
 		# Get indicator sprites
-		self.indicator_0 = QPixmap("/Users/grantgiesbrecht/Documents/GitHub/constellation/src/constellation/assets/indicator_0.png").scaledToWidth(40)
-		self.indicator_1 = QPixmap("/Users/grantgiesbrecht/Documents/GitHub/constellation/src/constellation/assets/indicator_1.png").scaledToWidth(40)
+		self.indicator_0 = QPixmap(os.path.join(ASSETS_DIR, "indicator_0.png")).scaledToWidth(40)
+		self.indicator_1 = QPixmap(os.path.join(ASSETS_DIR, "indicator_1.png")).scaledToWidth(40)
 		
 		
 		# Create indicator

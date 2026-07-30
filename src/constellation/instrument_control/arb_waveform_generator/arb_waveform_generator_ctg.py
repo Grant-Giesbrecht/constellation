@@ -54,7 +54,7 @@ class ArbitraryWaveformGenerator(Driver):
 	
 	def init_dummy_state(self):
 		
-		for ch_no in self.channels.get_range():
+		for ch_no in self.state.channels.get_range():
 			self.set_waveform(ch_no, self.WAVE_SINE)
 			self.set_frequency(ch_no, 1e3)
 			self.set_amplitude(ch_no, 1)
@@ -166,16 +166,16 @@ class ArbitraryWaveformGenerator(Driver):
 	
 	def apply_state(self):
 		
-		for ch_no in self.channels.get_range():
-			self.set_waveform(ch_no, self.state.get(["channels", "waveform_type"], indices=[ch]))
-			self.set_frequency(ch_no, self.state.get(["channels", "frequency"], indices=[ch]))
-			self.set_amplitude(ch_no, self.state.get(["channels", "amplitude"], indices=[ch]))
-			self.set_offset(ch_no, self.state.get(["channels", "offset"], indices=[ch]))
-			self.set_output_enable(ch_no, self.state.get(["channels", "output_enable"], indices=[ch]))
+		for ch_no in self.state.channels.get_range():
+			self.set_waveform(ch_no, self.state.get(["channels", "waveform_type"], indices=[ch_no]))
+			self.set_frequency(ch_no, self.state.get(["channels", "frequency"], indices=[ch_no]))
+			self.set_amplitude(ch_no, self.state.get(["channels", "amplitude"], indices=[ch_no]))
+			self.set_offset(ch_no, self.state.get(["channels", "offset"], indices=[ch_no]))
+			self.set_output_enable(ch_no, self.state.get(["channels", "output_enable"], indices=[ch_no]))
 	
 	def refresh_state(self):
 		
-		for ch_no in self.channels.get_range():
+		for ch_no in self.state.channels.get_range():
 			self.get_waveform(ch_no)
 			self.get_frequency(ch_no)
 			self.get_amplitude(ch_no)

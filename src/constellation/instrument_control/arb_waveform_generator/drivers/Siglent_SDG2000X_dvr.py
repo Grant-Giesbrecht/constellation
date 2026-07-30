@@ -132,5 +132,5 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 		is overridden.
 		'''
 		
-		for ch_no in self.channels.get_range():
+		for ch_no in self.state.channels.get_range():
 			self._refresh_wave_parameters(ch_no)
