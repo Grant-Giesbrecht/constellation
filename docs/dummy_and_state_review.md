@@ -75,18 +75,18 @@ direct cause of three of the bugs below.
    well"). Test: `test_state_to_dict_include_data_flag_has_effect`.
 
 7. **`OscilloscopeState.channel_colors` (a plain dict keyed by integer channel numbers) silently
-   loses all its data when saved via `dump_state()`.** `jarnsaxa.dict_to_hdf`'s `write_level()`
+   loses all its data when saved via `dump_state()`.** `stardust.dict_to_hdf`'s `write_level()`
    turns every dict into an HDF group; `h5py.Group.create_group()`/`create_dataset()` raise
    `TypeError` for non-string names. Confirmed directly (`h5py.create_group(1)` →
    `TypeError: A name should be string or bytes, not <class 'int'>`). The failure never surfaces to
-   the caller because of two compounding issues in `jarnsaxa.dict_to_hdf` itself: `write_level()`
+   the caller because of two compounding issues in `stardust.dict_to_hdf` itself: `write_level()`
    never checks/propagates the return value of its own recursive calls for nested dicts, and the
    top-level function's explicit "failure" branch still does `return True`. Net effect: `dump_state()`
    reports `True` while `channel_colors`'s HDF group is silently written completely empty (confirmed
    by inspecting the file directly). This is the exact class of problem `IndexedList` was built to
    avoid (it stringifies its integer indices to `"idx-N"` for exactly this reason) — that
    convention just wasn't applied to `channel_colors`. Test: `test_dump_state_preserves_channel_colors`.
-   *(The two `dict_to_hdf`/`write_level` issues live in the `jarnsaxa` sibling repo, not here — see
+   *(The two `dict_to_hdf`/`write_level` issues live in the `stardust` sibling repo, not here — see
    architectural notes below.)*
 
 8. **Values round-tripped through `dump_state()`/`restore_state()` come back as numpy scalar types,
@@ -109,7 +109,7 @@ direct cause of three of the bugs below.
 - Dummy-mode waveforms (`remake_dummy_waves`) omit the `"channel"` key that real (non-dummy)
   `get_waveform()` includes, and mix `numpy.ndarray`/`numpy.float64` values into what's otherwise a
   plain dict — inconsistent shape between dummy and real waveform dicts. Not verified to break
-  anything downstream (jarnsaxa's serializer handles numpy scalars/arrays generically), so treated
+  anything downstream (stardust's serializer handles numpy scalars/arrays generically), so treated
   as a low-priority consistency note rather than a full bug entry.
 
 ## Suggested architectural updates
@@ -160,9 +160,9 @@ direct cause of three of the bugs below.
    or should large datasets go through something more like the labmesh databank from the networking
    work?) rather than a one-line fix.
 
-7. **`jarnsaxa.dict_to_hdf`'s success/failure contract is unreliable** (bug #7's root cause): nested
+7. **`stardust.dict_to_hdf`'s success/failure contract is unreliable** (bug #7's root cause): nested
    `write_level()` calls' return values are discarded, and the top-level function returns `True`
-   even on its own explicit failure branch. This lives in the `jarnsaxa` sibling repo, not here, so
+   even on its own explicit failure branch. This lives in the `stardust` sibling repo, not here, so
    worth flagging there directly rather than working around it inside Constellation - but until
    it's fixed, `Driver.dump_state()`'s docstring promise ("Returns: bool: True if successfully saved
    file") is not actually reliable, and callers relying on it to detect a failed save are trusting a

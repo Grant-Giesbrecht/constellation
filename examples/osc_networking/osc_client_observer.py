@@ -17,7 +17,7 @@ import asyncio
 import argparse
 from labmesh import DirectorClientAgent
 from labmesh.util import read_toml_config
-from jarnsaxa import from_serial_dict
+from stardust.serializer import from_serial_dict
 from ganymede import dict_summary
 
 parser = argparse.ArgumentParser()

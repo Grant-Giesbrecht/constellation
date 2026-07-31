@@ -116,7 +116,7 @@ enforcement) — see "Open questions" below, this is deliberately deferred, not 
 - [x] Implemented `DriverStateBroadcaster` (`src/constellation/networking/labmesh_net.py`): runs a
       `labmesh.RelayAgent` wrapping an already-connected `Driver` in a background thread. Verified
       `Driver.state_to_dict()`-shaped output (with the `metadata` key added) still round-trips correctly
-      through `jarnsaxa.from_serial_dict` and is JSON-safe.
+      through `stardust.from_serial_dict` and is JSON-safe.
 - [x] Decided: observer clients also get RPC write-access through the same `RelayAgent` (nothing
       technical prevents it) — concurrent writers are allowed for now, see "Open questions" below.
 

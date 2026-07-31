@@ -278,7 +278,7 @@ def test_dump_restore_preserves_native_python_types():
 
 @pytest.mark.xfail(strict=True, reason=(
 	"BUG: OscilloscopeState.channel_colors is a plain dict keyed by integer channel numbers. "
-	"jarnsaxa.dict_to_hdf's write_level() creates an HDF group per dict, then h5py.Group."
+	"stardust.dict_to_hdf's write_level() creates an HDF group per dict, then h5py.Group."
 	"create_group()/create_dataset() raise TypeError for non-string names - so every entry in "
 	"channel_colors silently fails to write. The failure is swallowed: write_level() doesn't "
 	"propagate nested calls' return values, and dict_to_hdf() returns True even on its own "

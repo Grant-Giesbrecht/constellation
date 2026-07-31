@@ -13,7 +13,11 @@ from PyQt6.QtGui import QAction
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
 
-from jarnsaxa import from_serial_dict
+# Must match the serializer base.py uses in state_to_dict()/to_serial_dict() - stardust, not the
+# legacy jarnsaxa. Using jarnsaxa here silently returns the raw dict (it can't parse stardust's
+# __serializer_format__ envelope), so bridge.state_changed would hand widgets a plain dict instead
+# of a reconstructed InstrumentState, breaking every category GUI's on_state_changed / Tracked*.
+from stardust.serializer import from_serial_dict
 from labmesh import DirectorClientAgent
 
 # ============================================================================

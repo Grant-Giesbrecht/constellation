@@ -48,7 +48,7 @@ New drivers should only need to translate SCPI commands in the driver file — t
 
 ### State tracking (`src/constellation/base.py`)
 
-- `InstrumentState` (Serializable, from `jarnsaxa`) holds all tracked parameters for a driver/category.
+- `InstrumentState` (Serializable, from `stardust`) holds all tracked parameters for a driver/category.
   Subclasses call `self.add_param(name, unit=..., value=...)` in `__init__` and list every param name in
   `__state_fields__`; `validate()` cross-checks the two stay in sync and warns (via `self.log`) if not.
 - `IndexedList` represents per-channel/per-trace state (e.g. one `OscilloscopeChannelState` per channel),
