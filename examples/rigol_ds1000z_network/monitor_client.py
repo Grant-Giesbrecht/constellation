@@ -22,7 +22,7 @@ import pathlib
 from labmesh import DirectorClientAgent
 from labmesh.util import read_toml_config, prompt_network_password
 from stardust.serializer import from_serial_dict
-from ganymede import dict_summary
+from stardust.io import dict_summary
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--relay_id", help="relay_id of the DriverStateBroadcaster to observe (controller_client.py's --relay_id, with '-state' appended).", default="rigol-1-state")
