@@ -13,7 +13,9 @@ import pytest
 import pylogfile.base as plf
 
 from constellation.base import InstrumentState, IndexedList, Driver, CheckOnline
-from constellation.relay import DirectSCPIRelay
+from constellation.relay import DirectSCPIRelay, VICPDirectSCPIRelay
+from constellation.all import (RigolDS1000Z as _RZ, SiglentSSA3000X, RigolDP832, SiglentSDM3000X,
+	Keysight34400, Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE)
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import Oscilloscope
 from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000Z_dvr import RigolDS1000Z
 
@@ -190,14 +192,9 @@ def test_dummy_waveform_reflects_channel_settings():
 # Mutable default argument bug
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-	"BUG: RigolDS1000Z.__init__ (and Rigol_DS1000E, Siglent_SSA3000X) declares "
-	"`relay:CommandRelay=DirectSCPIRelay()` as a default parameter value. Python evaluates "
-	"default values once, at function-definition time, so every instance constructed without "
-	"an explicit relay= kwarg shares the exact same DirectSCPIRelay object - including its "
-	"`address`, meaning constructing a second instrument silently clobbers the first "
-	"instrument's relay address (confirmed: osc1.relay.address changes after osc2 is built)."
-))
+# FIXED: no driver declares a relay instance as a signature default any more. Every driver now
+# takes `relay:CommandRelay=None` and Driver.__init__ constructs a fresh DirectSCPIRelay() when
+# none is supplied, so instances can't share one.
 def test_relay_default_argument_is_not_shared_between_instances():
 	log = make_log()
 	osc1 = RigolDS1000Z("TCPIP0::10.0.0.1::INSTR", log=log, dummy=True)
@@ -310,3 +307,101 @@ def test_state_to_dict_include_data_flag_has_effect():
 
 	assert "data" not in without_data
 	assert with_data.get("data") == {"some_measurement": "placeholder-value"}
+
+# ---------------------------------------------------------------------------
+# CommandRelay read/query return values
+# ---------------------------------------------------------------------------
+
+class _FakeVisaInstrument:
+	""" Stands in for a pyvisa Resource / pyvicp Client so the relays can be exercised with no
+	hardware. Records writes and replays a canned reply for reads. """
+
+	def __init__(self, reply="CANNED-REPLY"):
+		self.reply = reply
+		self.written = []
+		self.timeout = None
+		self.read_termination = None
+		self.write_termination = None
+
+	# DirectSCPIRelay (pyvisa) surface
+	def write(self, cmd): self.written.append(cmd)
+	def read(self): return self.reply
+	def query(self, cmd): self.written.append(cmd); return self.reply
+
+	# VICPDirectSCPIRelay (pyvicp) surface
+	def send(self, data): self.written.append(data.decode())
+	def receive(self): return self.reply.encode()
+
+def _wire_relay(relay, reply="CANNED-REPLY"):
+	""" Attaches a fake instrument to an already-constructed relay, bypassing connect(). """
+	relay.configure("FAKE::ADDR", make_log())
+	relay.inst = _FakeVisaInstrument(reply)
+	return relay
+
+def test_direct_relay_read_returns_the_value_it_read():
+	""" Regression: DirectSCPIRelay.read() read into `rv` then returned a hardcoded empty
+	string, so every Driver.read() got "" no matter what the instrument sent. """
+
+	relay = _wire_relay(DirectSCPIRelay(), reply="3.14")
+	assert relay.read() == (True, "3.14")
+
+def test_direct_relay_query_returns_the_value_it_read():
+	relay = _wire_relay(DirectSCPIRelay(), reply="3.14")
+	assert relay.query("*IDN?") == (True, "3.14")
+	assert relay.inst.written == ["*IDN?"]
+
+def test_vicp_relay_read_returns_the_value_it_read():
+	""" Regression: VICPDirectSCPIRelay.read() had the same discard-the-value bug. """
+
+	relay = _wire_relay(VICPDirectSCPIRelay(), reply="2.71")
+	assert relay.read() == (True, "2.71")
+
+def test_vicp_relay_query_returns_the_value_it_read():
+	""" Regression: VICPDirectSCPIRelay.query() discarded its value too. Since query() is how
+	every category getter reads hardware, this meant the entire LeCroy/VICP path returned empty
+	strings for every parameter. """
+
+	relay = _wire_relay(VICPDirectSCPIRelay(), reply="LECROY,WR44XI")
+	assert relay.query("*IDN?") == (True, "LECROY,WR44XI")
+	assert relay.inst.written == ["*IDN?"]
+
+def test_vicp_relay_init_names_the_attribute_its_methods_use():
+	""" Regression: __init__ set self.instr while every method used self.inst. """
+
+	relay = VICPDirectSCPIRelay()
+	assert hasattr(relay, "inst")
+	assert not hasattr(relay, "instr")
+
+# ---------------------------------------------------------------------------
+# relay= plumbing across every migrated driver
+# ---------------------------------------------------------------------------
+
+# RigolDS1000E is excluded: it doesn't implement several Oscilloscope abstract methods yet, so it
+# can't be instantiated at all. That's a separate, pre-existing gap (see todo_list.md).
+ALL_DRIVERS = [
+	RigolDS1000Z, SiglentSSA3000X, RigolDP832, SiglentSDM3000X, Keysight34400,
+	Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE,
+]
+
+@pytest.mark.parametrize("driver_cls", ALL_DRIVERS, ids=lambda c: c.__name__)
+def test_driver_does_not_share_a_default_relay(driver_cls):
+	""" Two instruments built without an explicit relay= must not share one relay object, or the
+	second one's address silently clobbers the first's. """
+
+	a = driver_cls("ADDR-A", make_log(), dummy=True)
+	b = driver_cls("ADDR-B", make_log(), dummy=True)
+
+	assert a.relay is not b.relay
+	assert a.relay.address == "ADDR-A"
+	assert b.relay.address == "ADDR-B"
+
+@pytest.mark.parametrize("driver_cls", ALL_DRIVERS, ids=lambda c: c.__name__)
+def test_driver_accepts_an_injected_relay(driver_cls):
+	""" Every driver must accept relay=, or it can never be driven over labmesh - that swap is
+	the entire point of the CommandRelay abstraction. Several drivers used to hard-code
+	relay=DirectSCPIRelay() inside super().__init__(), which raised TypeError (multiple values
+	for 'relay') if a caller tried. """
+
+	injected = DirectSCPIRelay()
+	dvr = driver_cls("ADDR", make_log(), relay=injected, dummy=True)
+	assert dvr.relay is injected
