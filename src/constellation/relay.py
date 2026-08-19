@@ -82,7 +82,7 @@ class VICPDirectSCPIRelay(CommandRelay):
 	def __init__(self):
 		super().__init__()
 		
-		self.instr = None
+		self.inst = None
 	
 	def connect(self) -> bool:
 		
@@ -131,10 +131,10 @@ class VICPDirectSCPIRelay(CommandRelay):
 			rv = self.inst.receive().decode()
 			self.log.lowdebug(f"VICPDirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
-			self.log.error(f"VICPDirectSCPIRelay failed to write to instrument {self.address}. ({e})")
+			self.log.error(f"VICPDirectSCPIRelay failed to read from instrument {self.address}. ({e})")
 			return False, ""
 		
-		return True, ""
+		return True, rv
 	
 	def query(self, cmd:str) -> tuple:
 		''' Queries data as a string from the instrument.
@@ -149,12 +149,12 @@ class VICPDirectSCPIRelay(CommandRelay):
 		try:
 			self.inst.send(cmd.encode())
 			rv = self.inst.receive().decode()
-			self.log.lowdebug(f"DirectSCPIRelay queried from instrument: >@:LOCK{rv}@:UNLOCK<.")
+			self.log.lowdebug(f"VICPDirectSCPIRelay queried from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
-			self.log.error(f"DirectSCPIRelay failed to query instrument {self.address}. ({e})")
+			self.log.error(f"VICPDirectSCPIRelay failed to query instrument {self.address}. ({e})")
 			return False, ""
 		
-		return True, ""
+		return True, rv
 	
 class DirectSCPIRelay(CommandRelay):
 	''' A relay that directly connects to instruments via PyVisa and relays
@@ -237,7 +237,7 @@ class DirectSCPIRelay(CommandRelay):
 			self.log.error(f"DirectSCPIRelay failed to read from instrument {self.address}. ({e})")
 			return False, ""
 		
-		return True, ""
+		return True, rv
 	
 	def query(self, cmd:str) -> tuple:
 		''' Queries data as a string from the instrument.
