@@ -6,6 +6,8 @@ from constellation.relay import *
 import numpy as np
 import time
 import inspect
+import functools
+from types import MethodType
 from abc import ABC, abstractmethod
 from socket import getaddrinfo, gethostname
 import ipaddress
@@ -137,25 +139,59 @@ class Identifier:
 		#TODO: Make this string a 1-line version. Because right now, if other objects were to also have multi-line reprs, then that would nest poorly.
 		return f"idn_model: {self.idn_model}\ncategory: {self.ctg}\ndriver-class: {self.dvr}\nremote-id: {self.remote_id}\naddress: {self.address} at {hex(id(self))}"
 
-def superreturn(func):
-	''' Calls a function's super after the overriding function finishes
-	execution, passing identical arguments and returning the super's
-	return value.'''
-	
-	def wrapper(self, *args, **kwargs):
-		
-		# Call the source function (but only if not in dummy mode)
-		if not self.dummy:
+class superreturn:
+	''' Decorator for driver-level set_*/get_* methods. Runs the driver's own body (which talks
+	to the instrument), then calls the same-named method on the category class above it, passing
+	identical arguments and returning the category's return value. That is what lets state
+	tracking in the category class run uniformly for every driver.
+
+	A driver getter communicates its parsed value by simply RETURNING it - this decorator
+	captures the return value into `self._super_hint`, which the category method reads. Drivers
+	should not assign `self._super_hint` themselves.
+
+	Implemented as a descriptor rather than a plain function decorator for one specific reason:
+	the super() call needs the class the method was DEFINED on, and `__set_name__` is the only
+	hook that provides it. The previous implementation used `super(type(self), self)`, where
+	`type(self)` is the *runtime* class. That is the same class only while no driver is
+	subclassed - the moment someone writes `class MyScope(RigolDS1000Z)`, `type(self)` stays
+	`MyScope` on every hop, super() keeps re-finding `RigolDS1000Z`'s method, and each decorated
+	call recurses until the stack blows.
+	'''
+
+	def __init__(self, func):
+		self.func = func
+		self.owner = None
+		functools.update_wrapper(self, func)
+
+	def __set_name__(self, owner, name):
+		# Called by the interpreter right after the class body executes, with the defining class.
+		self.owner = owner
+
+	def __get__(self, obj, objtype=None):
+		if obj is None:
+			return self
+		# Bind like a normal method: calling the result passes `obj` as the first argument.
+		return MethodType(self.__call__, obj)
+
+	def __call__(self, obj, *args, **kwargs):
+
+		# Clear the hint every call. Without this, a driver getter that returns early (e.g.
+		# RigolDS1000Z.get_coupling on an unrecognized reply) would leave the PREVIOUS call's
+		# value in place for the category method to write into state.
+		obj._super_hint = None
+
+		# Call the driver's own body (but only if not in dummy mode), capturing whatever it
+		# returns as the hint for the category method.
+		if not obj.dummy:
 			try:
-				func(self, *args, **kwargs)
+				obj._super_hint = self.func(obj, *args, **kwargs)
 			except Exception as e:
-				self.log.error(f"Failed to call driver function: >:a{func}< ({e}).")
+				obj.log.error(f"Failed to call driver function: >:a{self.func}< ({e}).")
 				return None
-		
+
 		# Call super after, pass original arugments
-		super_method = getattr(super(type(self), self), func.__name__)
+		super_method = getattr(super(self.owner, obj), self.func.__name__)
 		return super_method(*args, **kwargs)
-	return wrapper
 
 def param_idx_to_str(params:list, indices:list=None) -> str:
 	''' Creates a nicely formated plf-markdown string from a set of params

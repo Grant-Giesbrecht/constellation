@@ -233,7 +233,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	@ superreturn
 	def _get_active_trace(self, trace:int, channel:int=1):
 		''' Sets the active trace on the display.'''
-		self._super_hint = self._from_trace_code(self.query(f"CALC{channel}:PAR:SEL?"))
+		return self._from_trace_code(self.query(f"CALC{channel}:PAR:SEL?"))
 	
 	@superreturn
 	def set_freq_start(self, f_Hz:float, channel:int=1):
@@ -241,7 +241,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
 	@superreturn
 	def get_freq_start(self, channel:int=1):
-		self._super_hint = float(self.query(f"SENS{channel}:FREQ:STAR?"))
+		return float(self.query(f"SENS{channel}:FREQ:STAR?"))
 	
 	@superreturn
 	def set_freq_end(self, f_Hz:float, channel:int=1):
@@ -249,7 +249,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
 	@superreturn
 	def get_freq_end(self, channel:int=1):
-		self._super_hint = float(self.query(f"SENS{channel}:FREQ:STOP?"))
+		return float(self.query(f"SENS{channel}:FREQ:STOP?"))
 	
 	@superreturn
 	def set_power(self, p_dBm:float, channel:int=1, port:int=1):
@@ -257,7 +257,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
 	@superreturn
 	def get_power(self, channel:int=1, port:int=1):
-		self._super_hint = float(self.query(f"SOUR{channel}:POW{port}:LEV:IMM:AMPL?"))
+		return float(self.query(f"SOUR{channel}:POW{port}:LEV:IMM:AMPL?"))
 		# TODO: How to handle ports?
 	
 	@superreturn
@@ -266,7 +266,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
 	@superreturn
 	def get_num_points(self, channel:int=1):
-		self._super_hint = int(self.query(f"SENS{channel}:SWEEP:POIN?") )
+		return int(self.query(f"SENS{channel}:SWEEP:POIN?") )
 	
 	@superreturn
 	def set_res_bandwidth(self, rbw_Hz:float, channel:int=1):
@@ -274,7 +274,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
 	@superreturn
 	def get_res_bandwidth(self, channel:int=1):
-		self._super_hint = float(self.query(f"SENS{channel}:BAND:RES?"))
+		return float(self.query(f"SENS{channel}:BAND:RES?"))
 	
 	@superreturn
 	def set_cal_enabled(self, enable:bool, channel:int=1):
@@ -282,7 +282,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
 	@superreturn
 	def get_cal_enabled(self, channel:int=1):
-		self._super_hint = str_to_bool(self.query(f"SENS{channel}:CORR:STAT?"))
+		return str_to_bool(self.query(f"SENS{channel}:CORR:STAT?"))
 	
 	@superreturn
 	def set_rf_enable(self, enable:bool):
@@ -290,7 +290,7 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
 	@superreturn
 	def get_rf_enable(self):
-		self._super_hint = str_to_bool(self.query(f"OUTP:STAT?"))
+		return str_to_bool(self.query(f"OUTP:STAT?"))
 	
 	@superreturn
 	def set_rf_power(self, power_dBm:float, channel:int=1):
@@ -298,11 +298,11 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
 	@superreturn
 	def get_rf_power(self, channel:int=1):
-		self._super_hint = float(self.query(f"SOUR{channel}:POW?"))
+		return float(self.query(f"SOUR{channel}:POW?"))
 	
 	@superreturn
 	def get_rf_power(self):
-		self._super_hint = str_to_bool(self.query(f"OUTP:STAT?"))
+		return str_to_bool(self.query(f"OUTP:STAT?"))
 	
 	def clear_traces(self):
 		self.write(f"CALC:PAR:DEL:ALL")

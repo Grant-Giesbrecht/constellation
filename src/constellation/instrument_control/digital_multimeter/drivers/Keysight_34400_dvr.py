@@ -68,20 +68,20 @@ class Keysight34400(DigitalMultimeter):
 		code = self.query(":FUNC?").strip().upper().replace('"', '')
 		
 		if code == "VOLT" or code =="VOLT:DC":
-			self._super_hint = DigitalMultimeter.MEAS_VOLT_DC
+			return DigitalMultimeter.MEAS_VOLT_DC
 		elif code == "VOLT:AC":
-			self._super_hint = DigitalMultimeter.MEAS_VOLT_AC
+			return DigitalMultimeter.MEAS_VOLT_AC
 		elif code == "CURR" or code == "CURR:DC":
-			self._super_hint = DigitalMultimeter.MEAS_CURR_DC
+			return DigitalMultimeter.MEAS_CURR_DC
 		elif code == "CURR:AC":
-			self._super_hint = DigitalMultimeter.MEAS_CURR_AC
+			return DigitalMultimeter.MEAS_CURR_AC
 		elif code == "RES":
-			self._super_hint = DigitalMultimeter.MEAS_RESISTANCE_2WIRE
+			return DigitalMultimeter.MEAS_RESISTANCE_2WIRE
 		elif code == "FRES":
-			self._super_hint = DigitalMultimeter.MEAS_RESISTANCE_4WIRE
+			return DigitalMultimeter.MEAS_RESISTANCE_4WIRE
 		else:
 			self.error(f"Received unknown measurement type >{code}<.")
-			self._super_hint = "?"
+			return "?"
 	
 	@superreturn
 	def set_trigger_type(self, trig: str):
@@ -112,17 +112,17 @@ class Keysight34400(DigitalMultimeter):
 			try:
 				count = float(count) # Will be 9.9e37 for INF
 				if count == 1:
-					self._super_hint = DigitalMultimeter.TRIG_SINGLE
+					return DigitalMultimeter.TRIG_SINGLE
 				else:
-					self._super_hint = DigitalMultimeter.TRIG_CONT
+					return DigitalMultimeter.TRIG_CONT
 			except:
 				self.error(f"Failed to get trigger type. Invalid count string >{count}<.")
-				self._super_hint = "?"
+				return "?"
 		elif src == "EXT":
-			self._super_hint = DigitalMultimeter.TRIG_EXT
+			return DigitalMultimeter.TRIG_EXT
 		else:
 			self.error(f"Failed to get trigger type. Invalid trigger type string >{src}<.")
-			self._super_hint = "?"
+			return "?"
 	
 	def send_manual_trigger(self, send_cls:bool=True):
 		''' Tells the instrument to begin measuring the selected parameter.'''
@@ -169,4 +169,4 @@ class Keysight34400(DigitalMultimeter):
 		# 	self.log.error(f"Received wrong type of units. Aborting.", detail=f"Received '{unit_str}', expected '{self.check_units}' ({e}).")
 		# 	return None
 		
-		self._super_hint = val
+		return val

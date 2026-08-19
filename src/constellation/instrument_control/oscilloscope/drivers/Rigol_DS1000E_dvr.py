@@ -27,7 +27,7 @@ class RigolDS1000E(Oscilloscope):
 	@superreturn
 	def get_div_time(self):
 		self.warning(f"DS1000E model does not support querying timebase remotely.")
-		self._super_hint = None
+		return None
 	
 	@superreturn
 	def set_offset_time(self, time_s:float):
@@ -36,7 +36,7 @@ class RigolDS1000E(Oscilloscope):
 	@superreturn
 	def get_offset_time(self):
 		self.warning(f"DS1000E model does not support querying timebase remotely.")
-		self._super_hint = None
+		return None
 	
 	@superreturn
 	def set_div_volt(self, channel:int, volt_V:float):
@@ -44,7 +44,7 @@ class RigolDS1000E(Oscilloscope):
 	
 	@superreturn
 	def get_div_volt(self, channel:int):
-		self._super_hint = float(self.query(f":CHAN{channel}:SCAL?"))
+		return float(self.query(f":CHAN{channel}:SCAL?"))
 	
 	@superreturn
 	def set_offset_volt(self, channel:int, volt_V:float):
@@ -52,7 +52,7 @@ class RigolDS1000E(Oscilloscope):
 	
 	@superreturn
 	def get_offset_volt(self, channel:int):
-		self._super_hint = float(self.query(f":CHAN{channel}:OFFS?"))
+		return float(self.query(f":CHAN{channel}:OFFS?"))
 	
 	@superreturn
 	def set_chan_enable(self, channel:int, enable:bool):
@@ -60,7 +60,7 @@ class RigolDS1000E(Oscilloscope):
 	
 	@superreturn
 	def get_chan_enable(self, channel:int):
-		self._super_hint = str_to_bool(self.query(f":CHAN{channel}:DISP?"))
+		return str_to_bool(self.query(f":CHAN{channel}:DISP?"))
 	
 	@superreturn
 	def get_waveform(self, channel:int):
@@ -89,7 +89,7 @@ class RigolDS1000E(Oscilloscope):
 		
 		self.warning(f"DS1000E model does not support getting timebase; Time points returning >in index format, not seconds!<.")
 		
-		self._super_hint = {"time_index":t, "volt_V":volts, "channel":channel}
+		return {"time_index":t, "volt_V":volts, "channel":channel}
 	
 	def add_measurement(self, meas_type:int, channel:int=1):
 		

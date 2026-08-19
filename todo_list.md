@@ -14,7 +14,8 @@ Test env note: the repo's deps (`pylogfile`, `stardust`, `labmesh`) are installe
 `/Library/Frameworks/Python.framework/Versions/3.14/bin/python3`, NOT under `~/Venv/.ve_main`.
 Run tests with that interpreter: `.../3.14/bin/python3 -m pytest tests/ -q`
 (baseline when this list was written: 34 passed, 10 xfailed; after the P1/P2 pass: 58 passed, 9 xfailed;
-after the P3 pass: **87 passed, 5 xfailed**).
+after the P3 pass: 87 passed, 5 xfailed;
+after the P4 pass: **95 passed, 5 xfailed**).
 
 ---
 
@@ -153,9 +154,9 @@ setter again, which is the mistake that caused the original bug. `osc_dummy_demo
       state starts entirely `None` and getters read `None` back. Now that read-back is the generic
       path, populating a sensible default state matters more than it did. *static*
 
-## Priority 4 — `_super_hint` and `superreturn`
+## Priority 4 — `_super_hint` and `superreturn` — **DONE**
 
-- [ ] **`superreturn` uses `super(type(self), self)`** — `type(self)` is the runtime class, not the
+- [x] **`superreturn` uses `super(type(self), self)`** — `type(self)` is the runtime class, not the
       defining class. Works today only because no concrete driver is subclassed; the first
       `class MyScope(RigolDS1000Z)` infinite-recurses on every decorated method.
       Fix: make `superreturn` a descriptor class and capture the owner in `__set_name__` — that
@@ -185,18 +186,50 @@ setter again, which is the mistake that caused the original bug. `osc_dummy_demo
       `self.owner` is fixed at class-creation time regardless of `type(obj)`, so the MRO walk
       always advances and terminates. This single rewrite folds in all four P4 items at once.
       *static (well-known Python failure mode)*
-- [ ] **`_super_hint` is never cleared between calls.** A driver getter that early-`return`s
+- [x] **`_super_hint` is never cleared between calls.** A driver getter that early-`return`s
       (e.g. `RigolDS1000Z.get_coupling` on an unrecognized coupling string) leaves the *previous*
       call's value in the slot, which the category then writes into state. Fix: clear at the top
       of `superreturn`'s wrapper.
       *static*
-- [ ] **`_super_hint` is not re-entrancy safe** — a getter that calls another getter clobbers it.
+- [x] **`_super_hint` is not re-entrancy safe** — a getter that calls another getter clobbers it.
       `digital_multimeter_ctg.py:129` already hand-works-around this
       (`local_super_hint = self._super_hint`), which is the tell.
       *static*
-- [ ] **Have drivers `return` their parsed value** and let `superreturn` capture it into
+- [x] **Have drivers `return` their parsed value** and let `superreturn` capture it into
       `_super_hint`, instead of each driver assigning the slot directly. Mechanical edit of
       ~147 sites (`self._super_hint = X` -> `return X`); category classes need no change.
+
+### Outcome
+
+`superreturn` is now a descriptor class. `__set_name__` captures the **defining** class once at
+class-creation time, so the `super()` walk always advances. It also owns `_super_hint` end to end:
+it clears the slot at the top of every call, and captures the driver's **return value** into it.
+
+- **92 driver assignments converted** across 9 migrated drivers (`self._super_hint = X` ->
+  `return X`), plus 6 more in the unmigrated `to_extended/LeCroy_WaveRunner44Xi_dvr.py` — left
+  alone it would have been silently broken by the new capture, since the decorator now overwrites
+  the slot with the function's return value.
+- Category classes were **not** touched: they still read `self._super_hint`. Only the write side moved.
+- All 92 sites were checked for tail position by AST before converting; 7 needed review and all 7
+  were safe. One dead bare `return` in `RigolDS1000Z.get_bandwidth_limit` removed.
+
+**Correction to the original bug description.** The recursion bug is real but its failure mode is
+*not* a visible `RecursionError`. Measured on the pre-fix code with a subclassed driver: the call
+recursed ~993 frames deep, then `superreturn`'s own `except Exception` **swallowed** the
+`RecursionError` and returned `None`. So a subclassed driver silently returned `None` from every
+decorated method and logged one error line, rather than crashing. After the fix the same call
+makes exactly **1** query and returns the right value.
+
+`DigitalMultimeter.get_value`'s `local_super_hint` workaround is still required and still correct —
+it calls `get_measurement()` mid-body, which is itself `@superreturn`-wrapped and so clears and
+rewrites the slot. Re-entrancy is now *safe* (each call gets a clean slot) but not *transparent*
+(an inner call still overwrites the outer one's value), so saving it first remains necessary.
+
+Tests: **95 passed, 5 xfailed** (from 87/5). New coverage exercises the real, non-dummy driver
+bodies for the first time, via a `_CannedRelay` that replays canned SCPI: return-value capture,
+value translation, the stale-hint regression, subclass-no-recursion (asserting a query count of 1,
+which would have been ~1000), subclass state tracking, SCPI still being emitted, metadata
+preservation, and a guard rail asserting no driver assigns `_super_hint` directly.
 
 ## Priority 5 — `InstrumentState.set()` / `get()`
 

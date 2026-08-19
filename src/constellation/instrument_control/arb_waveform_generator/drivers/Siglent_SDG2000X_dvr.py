@@ -83,7 +83,7 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 	@superreturn
 	def get_waveform(self, channel):
 		self._refresh_wave_parameters(channel)
-		self._super_hint = self.state.channels[channel].waveform_type
+		return self.state.channels[channel].waveform_type
 	
 	@superreturn
 	def set_frequency(self, channel:int, freq_hz:float):
@@ -92,7 +92,7 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 	@superreturn
 	def get_frequency(self, channel:int):
 		self._refresh_wave_parameters(channel)
-		self._super_hint = self.state.channels[channel].frequency
+		return self.state.channels[channel].frequency
 	
 	@superreturn
 	def set_amplitude(self, channel:int, amplitude_Vpp:float):
@@ -101,7 +101,7 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 	@superreturn
 	def get_amplitude(self, channel:int):
 		self._refresh_wave_parameters(channel)
-		self._super_hint = self.state.channels[channel].amplitude
+		return self.state.channels[channel].amplitude
 	
 	@superreturn
 	def set_offset(self, channel:int, offset_V:float):
@@ -112,7 +112,7 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 	@superreturn
 	def get_offset(self, channel:int):
 		self._refresh_wave_parameters(channel)
-		self._super_hint = self.state.channels[channel].offset
+		return self.state.channels[channel].offset
 	
 	@superreturn
 	def set_output_enable(self, channel:int, enable:bool):
@@ -125,7 +125,7 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 		
 		tokens = response_str.split(',')
 		bool_words = tokens[0].split(' ')
-		self._super_hint = str_to_bool(bool_words[1])
+		return str_to_bool(bool_words[1])
 	
 	def refresh_state(self):
 		''' Because this model queries all parameters at once, refresh_state 

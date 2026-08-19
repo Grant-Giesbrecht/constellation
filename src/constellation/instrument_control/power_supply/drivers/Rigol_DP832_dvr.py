@@ -14,7 +14,7 @@ class RigolDP832(PowerSupply):
 	
 	@superreturn
 	def get_voltage(self, channel:int):
-		self._super_hint = float(self.query(f":SOUR{channel}:VOLT?").strip())
+		return float(self.query(f":SOUR{channel}:VOLT?").strip())
 		
 	@superreturn
 	def set_current(self, channel:int, current:float):
@@ -22,7 +22,7 @@ class RigolDP832(PowerSupply):
 	
 	@superreturn
 	def get_current(self, channel:int):
-		self._super_hint = float(self.query(f":SOUR{channel}:CURR?").strip())
+		return float(self.query(f":SOUR{channel}:CURR?").strip())
 	
 	@superreturn
 	def set_output_enable(self, channel:int, enable:bool):
@@ -30,11 +30,11 @@ class RigolDP832(PowerSupply):
 	
 	@superreturn
 	def get_output_enable(self, channel:int):
-		self._super_hint = str_to_bool(self.query(f":OUTP? CH{channel}"))
+		return str_to_bool(self.query(f":OUTP? CH{channel}"))
 	
 	@superreturn
 	def get_measured_output(self, channel:int):
 		v_meas = float(self.query(f":MEAS:VOLT? CH{channel}").strip())
 		i_meas = float(self.query(f":MEAS:CURR? CH{channel}").strip())
-		self._super_hint = (v_meas, i_meas)
+		return (v_meas, i_meas)
 		

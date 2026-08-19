@@ -69,7 +69,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 		if rval not in inverted:
 			self.error(f"Received unrecognized coupling mode >@:LOCK'{rval}'@:UNLOCK< from instrument.", detail=f"Coupling options include: {inverted}.")
 			return
-		self._super_hint = inverted[rval]
+		return inverted[rval]
 		
 	
 	@superreturn
@@ -78,7 +78,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 		
 	@superreturn
 	def get_div_time(self):
-		self._super_hint = float(self.query(f":TIM:MAIN:SCAL?"))
+		return float(self.query(f":TIM:MAIN:SCAL?"))
 	
 	@superreturn
 	def set_offset_time(self, time_s:float):
@@ -86,7 +86,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 	
 	@superreturn
 	def get_offset_time(self):
-		self._super_hint = float(self.query(f":TIM:MAIN:OFFS?"))
+		return float(self.query(f":TIM:MAIN:OFFS?"))
 	
 	@superreturn
 	def set_div_volt(self, channel:int, volt_V:float):
@@ -94,7 +94,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 	
 	@superreturn
 	def get_div_volt(self, channel:int):
-		self._super_hint = float(self.query(f":CHAN{channel}:SCAL?"))
+		return float(self.query(f":CHAN{channel}:SCAL?"))
 	
 	@superreturn
 	def set_offset_volt(self, channel:int, volt_V:float):
@@ -102,7 +102,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 	
 	@superreturn
 	def get_offset_volt(self, channel:int):
-		self._super_hint = float(self.query(f":CHAN{channel}:OFFS?"))
+		return float(self.query(f":CHAN{channel}:OFFS?"))
 	
 	@superreturn
 	def set_chan_enable(self, channel:int, enable:bool):
@@ -110,7 +110,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 	
 	@superreturn
 	def get_chan_enable(self, channel:int):
-		self._super_hint = str_to_bool(self.query(f":CHAN{channel}:DISP?"))
+		return str_to_bool(self.query(f":CHAN{channel}:DISP?"))
 	
 	@superreturn
 	def set_probe_attenuation(self, channel:int, attenuation:float):
@@ -122,7 +122,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 	
 	@superreturn
 	def get_probe_attenuation(self, channel:int):
-		self._super_hint =  float(self.query(f":CHAN{channel}:PROB?"))
+		return float(self.query(f":CHAN{channel}:PROB?"))
 	
 	@superreturn
 	def set_bandwidth_limit(self, channel:int, enable:bool):
@@ -135,9 +135,8 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 	def get_bandwidth_limit(self, channel:int):
 		resp = self.query(f":CHAN{channel}:BWL?")
 		if resp is None:
-			self._super_hint = None
-			return
-		self._super_hint = resp.strip().upper() in ["1", "ON", "20M"]
+			return None
+		return resp.strip().upper() in ["1", "ON", "20M"]
 	
 	@superreturn
 	def set_trigger_mode(self, mode:str):
@@ -161,7 +160,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 		if mode not in inverted:
 			self.error(f"Cannot set trigger mode >{mode}<. Mode not recognized.")
 			return
-		self._super_hint = inverted[mode]
+		return inverted[mode]
 	
 	@superreturn
 	def set_trigger_level(self, level_V:float):
@@ -169,7 +168,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 
 	@superreturn
 	def get_trigger_level(self):
-		self._super_hint = self.query(f":TRIG:EDGE:LEV?")
+		return self.query(f":TRIG:EDGE:LEV?")
 	
 	@superreturn
 	def set_trigger_source(self, channel:int=None, external:bool=False, line:bool=False):
@@ -185,20 +184,20 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 		src_str = self.query(f":TRIG:EDGE:SOUR?").strip()
 		
 		if src_str == "CHAN1":
-			self._super_hint = "1"
+			return "1"
 		elif src_str == "CHAN2":
-			self._super_hint = "2"
+			return "2"
 		elif src_str == "CHAN3":
-			self._super_hint = "3"
+			return "3"
 		elif src_str == "CHAN4":
-			self._super_hint = "4"
+			return "4"
 		elif src_str == "EXT":
-			self._super_hint = "EXT"
+			return "EXT"
 		elif src_str == "AC":
-			self._super_hint = "LINE"
+			return "LINE"
 		else:
 			self.warning(f"Unrecognized trigger source string. >@LOCK{src_str}@UNLOCK<")
-			self._super_hint = src_str
+			return src_str
 	
 	@superreturn
 	def run_acquisition(self):
@@ -316,7 +315,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 
 		t = list(xorigin + np.linspace(0, xincr * (len(volts) - 1), len(volts))) if volts else []
 
-		self._super_hint = {"time_s":t, "volt_V":volts, "channel":channel}
+		return {"time_s":t, "volt_V":volts, "channel":channel}
 
 	def _get_memory_depth(self) -> int:
 		''' Returns the oscilloscope's current memory depth in points (the valid upper bound for
@@ -412,7 +411,7 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 			return
 		src_str = f"CHAN{channel}"
 			
-		self._super_hint = float(self.query(f":MEASURE:STAT:ITEM? {stat_str},{item_str},{src_str}"))
+		return float(self.query(f":MEASURE:STAT:ITEM? {stat_str},{item_str},{src_str}"))
 	
 	@superreturn
 	def clear_measurements(self):
@@ -439,4 +438,4 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 		''' Checks if the measuremnt statistics table is enabled
 		'''
 		
-		self._super_hint = str_to_bool(self.query(f":MEASure:STATistic:DISPlay?"))
+		return str_to_bool(self.query(f":MEASure:STATistic:DISPlay?"))

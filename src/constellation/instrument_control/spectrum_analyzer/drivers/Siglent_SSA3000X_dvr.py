@@ -24,7 +24,7 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 	
 	@superreturn
 	def get_freq_start(self):
-		self._super_hint = float(self.query(f"SENS:FREQ:STAR?"))
+		return float(self.query(f"SENS:FREQ:STAR?"))
 	
 	@superreturn
 	def set_freq_end(self, f_Hz:float):
@@ -32,7 +32,7 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 	
 	@superreturn
 	def get_freq_end(self, points:int):
-		self._super_hint = float(self.query(f"SENS:FREQ:STOP?"))
+		return float(self.query(f"SENS:FREQ:STOP?"))
 	
 	# @superreturn
 	# def get_num_points(self, channel: int = 1):
@@ -53,7 +53,7 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 	
 	@superreturn
 	def get_ref_level(self):
-		self._super_hint = float(self.query("DISP:WIND:TRAC:Y:RLEV?"))
+		return float(self.query("DISP:WIND:TRAC:Y:RLEV?"))
 	
 	@superreturn
 	def set_y_div(self, step_dB:float):
@@ -66,7 +66,7 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 	
 	@superreturn
 	def get_y_div(self):
-		self._super_hint = float(self.query(f":DISP:WIND:TRAC:Y:SCAL:PDIV?"))
+		return float(self.query(f":DISP:WIND:TRAC:Y:SCAL:PDIV?"))
 	
 	@superreturn
 	def set_res_bandwidth(self, rbw_Hz:float):
@@ -74,7 +74,7 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 	
 	@superreturn
 	def get_res_bandwidth(self):
-		self._super_hint =  float(self.query(f"SENS:BWID:RES?"))
+		return float(self.query(f"SENS:BWID:RES?"))
 	
 	@superreturn
 	def set_continuous_trigger(self, enable:bool):
@@ -82,7 +82,7 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 	
 	@superreturn
 	def get_continuous_trigger(self):
-		self._super_hint = str_to_bool(self.query(f"INIT:CONT?"))
+		return str_to_bool(self.query(f"INIT:CONT?"))
 	
 	@superreturn
 	def send_manual_trigger(self):
@@ -140,7 +140,7 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 		# Generate time array
 		f_list = list(np.linspace(self.get_freq_start(), self.get_freq_end(), len(float_data)))
 		
-		self._super_hint = {'x':f_list, 'y':float_data, 'x_units':'Hz', 'y_units':'dBm'}
+		return {'x':f_list, 'y':float_data, 'x_units':'Hz', 'y_units':'dBm'}
 		
 		# Convert Y-unit to dBm
 		

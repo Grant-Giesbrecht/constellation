@@ -32,7 +32,7 @@ flowchart TD
     A["Caller<br/><code>osc.set_div_volt(2, 0.5)</code>"] --> B["<b>@superreturn</b> wrapper<br/>on the driver method"]
 
     B -->|"dummy = True"| C["<b>Skip</b> the driver body<br/>no SCPI is emitted<br/><code>_super_hint</code> stays None"]
-    B -->|"dummy = False"| D["Run the driver body<br/>writes/queries SCPI<br/>sets <code>_super_hint</code>"]
+    B -->|"dummy = False"| D["Run the driver body<br/>writes/queries SCPI<br/><b>returns</b> its parsed value"]
 
     C --> E["Call the <b>category</b> method<br/>e.g. <code>Oscilloscope.set_div_volt</code>"]
     D --> E
@@ -50,6 +50,13 @@ flowchart TD
     style H fill:#6b3a2e,stroke:#c98,color:#fff
     style J fill:#2e4a6b,stroke:#89c,color:#fff
 ```
+
+### How the driver's value reaches the category
+
+A driver getter just **returns** its parsed value. `@superreturn` — a descriptor, so it can capture
+the defining class via `__set_name__` — clears `self._super_hint` at the top of every call, stores
+the driver's return value into it, then calls the category method, which reads it. In dummy mode
+the driver body never runs, so the hint stays `None` and the read-back branch below takes over.
 
 ## `modify_state()` decision table
 
@@ -184,13 +191,14 @@ It's written with ordinary setters — in dummy mode those land straight in stat
 
 1. Write the category method to call `modify_state()` with the state path. **Stop here** — dummy
    mode works.
-2. Write the driver method with `@superreturn`, emitting SCPI. Set `self._super_hint` for getters.
+2. Write the driver method with `@superreturn`, emitting SCPI. A getter simply **returns** its
+   parsed value — `@superreturn` captures that into `self._super_hint` for the category method.
+   Drivers never assign `_super_hint` themselves.
 3. Add the parameter to `init_dummy_state()` so it starts at a realistic value.
 4. Only if the value is fabricated rather than tracked: add `@enabledummy`, a `dummy_responder()`
    case, and an entry in `ALLOWED_ENABLEDUMMY` in `tests/test_dummy_state.py`.
 
 ## Related
 
-- `todo_list.md` — outstanding work, including the `_super_hint`/`superreturn` rewrite that will
-  change how drivers hand values up in step 4.
+- `todo_list.md` — outstanding work.
 - `docs/dummy_and_state_review.md` — the original review that motivated this design.

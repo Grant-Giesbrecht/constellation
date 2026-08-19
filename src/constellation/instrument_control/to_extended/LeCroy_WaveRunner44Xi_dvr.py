@@ -19,7 +19,7 @@ class LeCroy44Xi(Oscilloscope):
 	
 	@superreturn
 	def get_div_time(self):
-		self._super_hint = float(self.query(f":TIM:MAIN:SCAL?"))
+		return float(self.query(f":TIM:MAIN:SCAL?"))
 	
 	@superreturn
 	def set_offset_time(self, time_s:float):
@@ -27,7 +27,7 @@ class LeCroy44Xi(Oscilloscope):
 	
 	@superreturn
 	def get_offset_time(self):
-		self._super_hint = float(self.query(f":TIM:MAIN:OFFS?"))
+		return float(self.query(f":TIM:MAIN:OFFS?"))
 	
 	@superreturn
 	def set_div_volt(self, channel:int, volt_V:float):
@@ -35,7 +35,7 @@ class LeCroy44Xi(Oscilloscope):
 	
 	@superreturn
 	def get_div_volt(self, channel:int):
-		self._super_hint = float(self.query(f":CHAN{channel}:SCAL?"))
+		return float(self.query(f":CHAN{channel}:SCAL?"))
 	
 	@superreturn
 	def set_offset_volt(self, channel:int, volt_V:float):
@@ -43,7 +43,7 @@ class LeCroy44Xi(Oscilloscope):
 	
 	@superreturn
 	def get_offset_volt(self, channel:int):
-		self._super_hint = float(self.query(f":CHAN{channel}:OFFS?"))
+		return float(self.query(f":CHAN{channel}:OFFS?"))
 	
 	@superreturn
 	def set_chan_enable(self, channel:int, enable:bool):
@@ -51,7 +51,7 @@ class LeCroy44Xi(Oscilloscope):
 	
 	@superreturn
 	def get_chan_enable(self, channel:int):
-		self._super_hint = self.query(f":CHAN{channel}:DISP?")
+		return self.query(f":CHAN{channel}:DISP?")
 	
 	@superreturn
 	def get_waveform(self, channel:int):
@@ -76,7 +76,7 @@ class LeCroy44Xi(Oscilloscope):
 		# Get time values
 		t = list(xorigin + np.linspace(0, xincr * (len(volts) - 1), len(volts)))
 		
-		self._super_hint = {"time_s":t, "volt_V":volts}
+		return {"time_s":t, "volt_V":volts}
 	
 	def add_measurement(self, meas_type:int, channel:int=1):
 		

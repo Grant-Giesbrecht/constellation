@@ -13,7 +13,7 @@ import pytest
 import pylogfile.base as plf
 
 from constellation.base import InstrumentState, IndexedList, Driver, CheckOnline
-from constellation.relay import DirectSCPIRelay, VICPDirectSCPIRelay
+from constellation.relay import DirectSCPIRelay, VICPDirectSCPIRelay, CommandRelay
 from constellation.all import (RigolDS1000Z as _RZ, SiglentSSA3000X, RigolDP832, SiglentSDM3000X,
 	Keysight34400, Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE,
 	DigitalMultimeter)
@@ -578,3 +578,115 @@ def test_dummy_spectrum_analyzer_roundtrips_without_a_dummy_responder():
 	assert sa.get_freq_start() == 1e9
 	assert sa.get_freq_end() == 2e9
 	assert sa.get_ref_level() == -10
+
+# ---------------------------------------------------------------------------
+# superreturn: driver return value -> _super_hint -> category state tracking
+# ---------------------------------------------------------------------------
+
+class _CannedRelay(CommandRelay):
+	""" A relay that replays canned SCPI responses, so tests can exercise the REAL (non-dummy)
+	driver bodies - the code path dummy-mode tests never touch. """
+
+	def __init__(self, table=None):
+		super().__init__()
+		self.table = {"*IDN?": "RIGOL TECHNOLOGIES,DS1054Z,X,1.0"}
+		self.table.update(table or {})
+		self.sent = []
+		self.query_count = 0
+
+	def connect(self): return True
+	def close(self): pass
+	def write(self, cmd): self.sent.append(cmd); return True
+	def read(self): return True, ""
+
+	def query(self, cmd):
+		self.sent.append(cmd)
+		self.query_count += 1
+		for prefix, reply in self.table.items():
+			if cmd.startswith(prefix):
+				return True, reply
+		return True, "0"
+
+def make_real_osc(table=None):
+	""" A RigolDS1000Z in NORMAL mode (dummy=False) backed by canned SCPI responses. """
+	return RigolDS1000Z("canned", make_log(), relay=_CannedRelay(table))
+
+def test_driver_return_value_reaches_state():
+	""" Drivers now `return` their parsed value; @superreturn captures it into _super_hint for
+	the category method to write into state. """
+
+	osc = make_real_osc({":TIM:MAIN:SCAL?": "0.002", ":CHAN1:SCAL?": "0.5"})
+	assert osc.get_div_time() == 0.002
+	assert osc.state.div_time == 0.002
+	assert osc.get_div_volt(1) == 0.5
+	assert osc.state.channels[1].div_volt == 0.5
+
+def test_driver_return_value_is_translated_not_raw():
+	""" get_coupling maps the instrument's 'AC' onto the category constant. """
+
+	osc = make_real_osc({":CHAN1:COUP?": "AC"})
+	assert osc.get_coupling(1) == Oscilloscope.COUPLING_AC
+	assert osc.state.channels[1].coupling == Oscilloscope.COUPLING_AC
+
+def test_super_hint_is_cleared_between_calls():
+	""" Regression: _super_hint used to persist across calls, so a getter that returns early
+	(RigolDS1000Z.get_coupling bails on an unrecognized reply) let the PREVIOUS call's value be
+	written into state - silently wrong rather than visibly wrong. """
+
+	osc = make_real_osc({":CHAN1:COUP?": "AC"})
+	assert osc.get_coupling(1) == Oscilloscope.COUPLING_AC
+
+	osc.relay.table[":CHAN1:COUP?"] = "NOT-A-COUPLING"
+	osc.get_coupling(1)
+
+	assert osc.state.channels[1].coupling is None      # not the stale 'coup-ac'
+
+def test_subclassing_a_driver_does_not_recurse():
+	""" Regression: superreturn used `super(type(self), self)`, where type(self) is the RUNTIME
+	class. On a subclassed driver that re-found the same wrapper on every hop and recursed until
+	the stack blew - and because superreturn wraps the driver body in `except Exception`, the
+	RecursionError was SWALLOWED and the call just returned None after ~1000 frames. Fixed by
+	capturing the defining class in __set_name__. """
+
+	class MyScope(RigolDS1000Z):
+		pass
+
+	osc = MyScope("canned", make_log(), relay=_CannedRelay({":TIM:MAIN:SCAL?": "0.002"}))
+	osc.relay.query_count = 0
+
+	assert osc.get_div_time() == 0.002        # would have been None before
+	assert osc.relay.query_count == 1         # would have been ~1000 before
+
+def test_subclassed_driver_still_tracks_state():
+	class MyScope(RigolDS1000Z):
+		pass
+
+	osc = MyScope("canned", make_log(), relay=_CannedRelay({":CHAN2:SCAL?": "0.1"}))
+	assert osc.get_div_volt(2) == 0.1
+	assert osc.state.channels[2].div_volt == 0.1
+
+def test_superreturn_still_emits_scpi_in_normal_mode():
+	""" The dummy-mode work must not have disabled real SCPI output. """
+
+	osc = make_real_osc()
+	osc.relay.sent.clear()
+	osc.set_div_time(1e-3)
+	assert any("TIM:MAIN:SCAL" in c for c in osc.relay.sent)
+
+def test_superreturn_preserves_method_metadata():
+	""" The descriptor must still look like the function it wraps, for introspection/docs. """
+
+	assert RigolDS1000Z.get_div_time.__name__ == "get_div_time"
+	assert callable(RigolDS1000Z.get_div_time.__get__(None, RigolDS1000Z))
+
+def test_no_driver_assigns_super_hint_directly():
+	""" Drivers communicate by returning; only superreturn writes _super_hint. Guard rail. """
+
+	import pathlib, re
+	root = pathlib.Path(__file__).resolve().parent.parent / "src" / "constellation"
+	offenders = []
+	for f in root.rglob("*_dvr.py"):
+		for i, line in enumerate(f.read_text().splitlines(), 1):
+			if re.match(r'\s*self\._super_hint\s*=', line):
+				offenders.append(f"{f.name}:{i}")
+	assert offenders == [], f"drivers must `return` their value, not assign _super_hint: {offenders}"
