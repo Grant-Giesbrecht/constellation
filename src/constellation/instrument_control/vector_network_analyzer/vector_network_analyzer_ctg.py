@@ -169,7 +169,6 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.modify_state(self.get_freq_start, ["channels", "freq_start"], f_Hz, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_freq_start(self, channel:int=1):
 		return self.modify_state(None, ["channels", "freq_start"], self._super_hint, indices=[channel])
 	
@@ -178,7 +177,6 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.modify_state(self.get_freq_start, ["channels", "freq_end"], f_Hz, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_freq_end(self, channel:int=1):
 		return self.modify_state(None, ["channels", "freq_end"], self._super_hint, indices=[channel])
 	
@@ -187,7 +185,6 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.modify_state(self.get_power, ["channels", "power"], p_dBm, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_power(self, channel:int=1):
 		return self.modify_state(None, ["channels", "power"], self._super_hint, indices=[channel])
 	
@@ -196,7 +193,6 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.modify_state(self.get_num_points, ["channels", "num_points"], points, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy 
 	def get_num_points(self, channel:int=1):
 		return self.modify_state(None, ["channels", "num_points"], self._super_hint, indices=[channel])
 	
@@ -205,7 +201,6 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.modify_state(self.get_res_bandwidth, ["channels", "res_bw"], rbw_Hz, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_res_bandwidth(self, channel:int=1):
 		return self.modify_state(None, ["channels", "res_bw"], self._super_hint, indices=[channel])
 	
@@ -214,7 +209,6 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.modify_state(self.get_cal_enabled, ["channels", "cal_enabled"], enable, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_cal_enabled(self, channel:int=1):
 		return self.modify_state(None, ["channels", "cal_enabled"], self._super_hint, indices=[channel])
 	
@@ -238,7 +232,6 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.modify_state(self.get_rf_enable, ["rf_enable"], enable)
 	
 	@abstractmethod
-	@enabledummy
 	def get_rf_enable(self):
 		return self.modify_state(None, ["rf_enable"], self._super_hint)
 	
@@ -247,7 +240,6 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.modify_state(self.get_rf_power, ["channels", "power"], power_dBm, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_rf_power(self, channel:int=1):
 		return self.modify_state(None, ["channels", "power"], self._super_hint, indices=[channel])
 	

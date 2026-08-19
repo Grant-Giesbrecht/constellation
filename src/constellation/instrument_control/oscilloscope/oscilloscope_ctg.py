@@ -125,76 +125,41 @@ class Oscilloscope(Driver):
 			self.state.channels[channel].waveform = {"time_s":t_series, "volt_V":wave_clipped}
 	
 	def dummy_responder(self, func_name:str, *args, **kwargs):
-		''' Function expected to behave as the "real" equivalents. ie. write commands don't
-		need to return anything, reads commands or similar should. What is returned here
-		should mimic what would be returned by the "real" function if it were connected to
-		hardware.
+		''' Supplies SYNTHETIC dummy values - things dummy mode has to invent because they are
+		not already tracked in self.state.
+		
+		Plain set_*/get_* methods are deliberately absent: modify_state() handles those
+		generically in dummy mode (setters store the value, getters read it back), so they need
+		no entry here and no @enabledummy decorator. Only add a case when dummy mode must
+		fabricate data.
 		'''
 		
 		# Put everything in a try-catch in case arguments are missing or similar
 		try:
 			
-			# Check for known functions
-			found = True
-			adjective = ""
 			match func_name:
-				case "set_div_time":
-					rval = None
-				case "get_div_time":
-					rval = self.state.get(["div_time"])
-				case "set_offset_time":
-					rval = None
-				case "get_offset_time":
-					rval = self.state.get(["offset_time"])
-				case "set_div_volt":
-					rval = None
-				case "get_div_volt":
-					rval = self.state.get(["channels", "div_volt"], indices=[args[0]])
-				case "set_coupling":
-					rval = None
-				case "get_coupling":
-					rval = self.state.get(["channels", "coupling"], indices=[args[0]])
-				case "set_offset_volt":
-					rval = None
-				case "get_offset_volt":
-					rval = self.state.get(["channels", "offset_volt"], indices=[args[0]])
-				case "set_chan_enable":
-					rval = None
-				case "get_chan_enable":
-					rval = self.state.get(["channels", "chan_en"], indices=[args[0]])
 				case "get_waveform":
 					self.remake_dummy_waves()
 					rval = self.state.channels[args[0]].waveform
+				case "run_acquisition" | "stop_acquisition" | "do_single_trigger" | "do_force_trigger":
+					# Pure hardware actions with no state to track - nothing to simulate.
+					rval = None
 				case _:
-					found = False
-				
+					# Anything else reaching here means a method is decorated @enabledummy but
+					# has no synthetic behavior defined - almost always it should simply not be
+					# decorated at all. Fall back to the base Driver convention.
+					return super().dummy_responder(func_name, *args, **kwargs)
 			
-			# If function was found, label as recognized, else check match for general getter or setter
-			if found:
-				adjective = "recognized"
-			else:
-				if "set_" == func_name[:4]:
-					rval = -1
-					adjective = "set_"
-				elif "get_" == func_name[:4]:
-					rval = None
-					adjective = "get_"
-				else:
-					rval = None
-					adjective = "unrecognized"
-				
-			self.debug(f"Dummy responder sending >{protect_str(rval)}< to {adjective} function (>{func_name}<).")
+			self.debug(f"Dummy responder sending >{protect_str(rval)}< to synthetic function (>{func_name}<).")
 			return rval
 		except Exception as e:
 			self.error(f"Failed to respond to dummy instruction. ({e})")
 			return None
-	
 	@abstractmethod
 	def set_coupling(self, channel:int, coupling:str):
 		self.modify_state(lambda: self.get_coupling(channel), ["channels", "coupling"], coupling, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_coupling(self, channel:int):
 		return self.modify_state(None, ["channels", "coupling"], self._super_hint, indices=[channel])
 
@@ -203,7 +168,6 @@ class Oscilloscope(Driver):
 		self.modify_state(self.get_div_time, ["div_time"], time_s)
 	
 	@abstractmethod
-	@enabledummy
 	def get_div_time(self):
 		return self.modify_state(None, ["div_time"], self._super_hint)
 	
@@ -212,7 +176,6 @@ class Oscilloscope(Driver):
 		self.modify_state(self.get_offset_time, ["offset_time"], time_s)
 		
 	@abstractmethod
-	@enabledummy
 	def get_offset_time(self):
 		return self.modify_state(None, ["offset_time"], self._super_hint)
 	
@@ -221,7 +184,6 @@ class Oscilloscope(Driver):
 		self.modify_state(lambda: self.get_div_volt(channel), ["channels", "div_volt"], volt_V, indices=[channel])
 		
 	@abstractmethod
-	@enabledummy
 	def get_div_volt(self, channel:int):
 		return self.modify_state(None, ["channels", "div_volt"], self._super_hint, indices=[channel])
 	
@@ -230,7 +192,6 @@ class Oscilloscope(Driver):
 		self.modify_state(lambda: self.get_offset_volt(channel), ["channels", "offset_volt"], volt_V, indices=[channel])
 		
 	@abstractmethod
-	@enabledummy
 	def get_offset_volt(self, channel:int):
 		return self.modify_state(None, ["channels", "offset_volt"], self._super_hint, indices=[channel])
 	
@@ -239,47 +200,38 @@ class Oscilloscope(Driver):
 		self.modify_state(lambda: self.get_chan_enable(channel), ["channels", "chan_en"], enable, indices=[channel])
 		
 	@abstractmethod
-	@enabledummy
 	def get_chan_enable(self, channel:int):
 		return self.modify_state(None, ["channels", "chan_en"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def set_probe_attenuation(self, channel:int, attenuation:float):
 		self.modify_state(lambda: self.get_probe_attenuation(channel), ["channels", "attenuation"], attenuation, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_probe_attenuation(self, channel:int):
 		return self.modify_state(None, ["channels", "attenuation"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def set_bandwidth_limit(self, channel:int, enable:bool):
 		self.modify_state(lambda: self.get_bandwidth_limit(channel), ["channels", "bw_limit"], enable, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_bandwidth_limit(self, channel:int):
 		return self.modify_state(None, ["channels", "bw_limit"], self._super_hint, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def set_trigger_mode(self, mode:str):
 		self.modify_state(lambda: self.get_trigger_mode(), ["trigger_mode"], mode)
 	
 	@abstractmethod
-	@enabledummy
 	def get_trigger_mode(self):
 		return self.modify_state(None, ["trigger_mode"], self._super_hint)
 	
 	@abstractmethod
-	@enabledummy
 	def set_trigger_level(self, level_V:float):
 		self.modify_state(lambda: self.get_trigger_level(), ["trigger_level"], level_V)
 
 	@abstractmethod
-	@enabledummy
 	def get_trigger_level(self):
 		return self.modify_state(None, ["trigger_level"], self._super_hint)
 	
@@ -304,7 +256,6 @@ class Oscilloscope(Driver):
 		return src_str
 	
 	@abstractmethod
-	@enabledummy
 	def set_trigger_source(self, channel:int=None, external:bool=False, line:bool=False):
 		
 		# Get source string
@@ -313,7 +264,6 @@ class Oscilloscope(Driver):
 		self.modify_state(lambda: self.get_trigger_source(), ["trigger_source"], src_str)
 	
 	@abstractmethod
-	@enabledummy
 	def get_trigger_source(self):
 		return self.modify_state(None, ["trigger_source"], self._super_hint)
 	
@@ -460,13 +410,11 @@ class MeasurementsMixin:
 	
 	# TODO: How to handle enabledummy with mixins?
 	@abstractmethod
-	@enabledummy
 	def clear_measurements(self):
 		self.state.state_fragments[self.__state_key__].active_measurements.clear()
 		# self.modify_state(None, ["active_measurements"], [], fragment=self.__state_key__)
 	
 	@abstractmethod
-	@enabledummy
 	def add_measurement(self, channel:int, measurement:str) -> bool:
 		
 		# This is an example where modify_state is too general to handle the situation,
@@ -492,36 +440,85 @@ class MeasurementsMixin:
 		return True
 	
 	@abstractmethod
-	@enabledummy
 	def get_measurement(self, channel:int, measurement:str, stat_mode:str=STAT_CURR) -> float:
 		''' Returns measurement result. REturns None if error occurs.
 		'''
 		
-		#TODO: Handle dummy!
-		
 		# Create source string
 		source = f"chan{channel}"
 		
-		# Check if measurement already exists
+		# Find the matching active measurement. populated_items() is required here rather than
+		# enumerate(): iterating an IndexedList skips unpopulated slots, so enumerate's counter
+		# is a *positional* index, not the IndexedList key needed to write the result back.
 		meas_idx = None
-		for idx, am in enumerate(self.state.state_fragments[self.__state_key__].active_measurements):
+		for idx, am in self.state.state_fragments[self.__state_key__].active_measurements.populated_items():
 			if am.measurement_type == measurement and am.measurement_source == source:
 				meas_idx = idx
 				break
 		
 		# Check if index was found
 		if meas_idx is None:
-			self.log.warning(f"Not adding measurement:>{measurement}< to source:>:a{source}<. Measurement already exists.")
+			self.warning(f"Cannot read measurement:>{measurement}< on source:>:a{source}<. Measurement has not been added.")
 			return None
 		
-		# Update last measured value
-		self.state.state_fragments[self.__state_key__].active_measurements[meas_idx].last_measured_value = self._super_hint
+		# A measurement value is synthetic in dummy mode - there is no state field holding it to
+		# read back, so it has to be invented from the dummy waveform.
+		if self.dummy:
+			value = self._dummy_measurement(channel, measurement)
+		else:
+			value = self._super_hint
 		
-		return self._super_hint
+		# Update last measured value
+		self.state.state_fragments[self.__state_key__].active_measurements[meas_idx].last_measured_value = value
+		
+		return value
+	
+	def _dummy_measurement(self, channel:int, measurement:str):
+		''' Computes a measurement from the driver's own dummy waveform, so dummy mode returns
+		numbers that are actually consistent with the waveform get_waveform() would return
+		(rather than a fixed sentinel). Returns None if the measurement type isn't supported or
+		no dummy waveform is available. '''
+		
+		# Only meaningful on a driver that generates dummy waveforms (i.e. an Oscilloscope)
+		if not hasattr(self, "remake_dummy_waves"):
+			return None
+		
+		self.remake_dummy_waves()
+		
+		try:
+			wave = self.state.channels[channel].waveform
+			volts = list(wave["volt_V"])
+			times = list(wave["time_s"])
+		except Exception as e:
+			self.warning(f"Cannot synthesize dummy measurement, no usable waveform on channel >{channel}<. ({e})")
+			return None
+		
+		if len(volts) == 0:
+			return None
+		
+		match measurement:
+			case MeasurementsMixin.MEAS_VMAX:
+				return float(np.max(volts))
+			case MeasurementsMixin.MEAS_VMIN:
+				return float(np.min(volts))
+			case MeasurementsMixin.MEAS_VPP:
+				return float(np.max(volts) - np.min(volts))
+			case MeasurementsMixin.MEAS_VAVG:
+				return float(np.mean(volts))
+			case MeasurementsMixin.MEAS_FREQ:
+				# Count rising zero-crossings of the mean-subtracted wave over the captured span
+				if len(times) < 2:
+					return None
+				centered = np.array(volts) - np.mean(volts)
+				crossings = np.sum((centered[:-1] < 0) & (centered[1:] >= 0))
+				span = times[-1] - times[0]
+				return float(crossings / span) if span > 0 else None
+			case _:
+				self.warning(f"No dummy synthesis for measurement type >{measurement}<.")
+				return None
 		
 	
 	@abstractmethod
-	@enabledummy
 	def set_measurement_stat_display(self, enable:bool):
 		'''
 		Turns display statistical values on/off for the Rigol DS1000Z series scopes. Not
@@ -536,7 +533,6 @@ class MeasurementsMixin:
 		self.modify_state(lambda: self.get_measurement_stat_display(), ["show_stat_table"], enable, fragment=self.__state_key__)
 	
 	@abstractmethod
-	@enabledummy
 	def get_measurement_stat_display(self):
 		'''
 		Checks if the stats table is on or off.

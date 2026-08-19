@@ -56,15 +56,11 @@ class SpectrumAnalyzer(Driver):
 	def remake_dummy_trace(self) -> None:
 		pass
 	
-	def dummy_responder(self, func_name, *args, **kwargs):
-		pass
-	
 	@abstractmethod
 	def set_freq_start(self, f_Hz:float):
 		self.modify_state(self.get_freq_start, ["freq_start"], f_Hz)
 	
 	@abstractmethod
-	@enabledummy
 	def get_freq_start(self):
 		return self.modify_state(None, ["freq_start"], self._super_hint)
 	
@@ -73,7 +69,6 @@ class SpectrumAnalyzer(Driver):
 		self.modify_state(self.get_freq_end, ["freq_end"], f_Hz)
 	
 	@abstractmethod
-	@enabledummy
 	def get_freq_end(self):
 		return self.modify_state(None, ["freq_end"], self._super_hint)
 	
@@ -91,7 +86,6 @@ class SpectrumAnalyzer(Driver):
 		self.modify_state(self.get_res_bandwidth, ["res_bw"], rbw_Hz)
 	
 	@abstractmethod
-	@enabledummy
 	def get_res_bandwidth(self):
 		return self.modify_state(None, ["res_bw"], self._super_hint)
 	
@@ -117,7 +111,6 @@ class SpectrumAnalyzer(Driver):
 		self.modify_state(self.get_continuous_trigger, ["continuous_trig_en"], enable)
 	
 	@abstractmethod
-	@enabledummy
 	def get_continuous_trigger(self):
 		return self.modify_state(None, ["continuous_trig_en"], self._super_hint)
 	
@@ -130,7 +123,6 @@ class SpectrumAnalyzer(Driver):
 		self.modify_state(self.get_ref_level, ["ref_level"], ref_dBm)
 	
 	@abstractmethod
-	@enabledummy
 	def get_ref_level(self):
 		return self.modify_state(None, ["ref_level"], self._super_hint)
 	
@@ -139,7 +131,6 @@ class SpectrumAnalyzer(Driver):
 		self.modify_state(self.get_y_div, ["y_div_scale"], step_dB)
 	
 	@abstractmethod
-	@enabledummy
 	def get_y_div(self):
 		return self.modify_state(None, ["y_div_scale"], self._super_hint)
 	

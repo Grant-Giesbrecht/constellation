@@ -615,9 +615,21 @@ class InstrumentState(Serializable):
 		
 		return True
 	
-	def get(self, params:tuple, indices:tuple=None):
+	def get(self, params:tuple, indices:tuple=None, fragment:str=None):
+		''' Reads a value out of the state by walking `params` (descending into IndexedLists
+		using the parallel `indices` tuple), mirroring set(). Returns None on any invalid path.
 		'''
-		'''
+		
+		# If a state_fragment is being read, hand off to it (mirrors set()'s fragment handling)
+		if fragment is not None:
+			
+			# Validate fragment exists
+			if fragment not in self.state_fragments:
+				self.log.error(f"Cannot get state. Fragment >{fragment}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)})")
+				return None
+			
+			# Call get on fragment and return result
+			return self.state_fragments[fragment].get(params, indices=indices)
 		
 		obj_under = None # Object one notch lower
 		obj_top = self # Object at top of stack
@@ -1179,6 +1191,19 @@ class Driver(ABC):
 			value, or result of query_func if provided.
 		"""
 		
+		if self.dummy and query_func is None:
+			# Dummy getter. `query_func is None` marks a get_* call, and in dummy mode the
+			# driver's SCPI body never ran, so `value` (normally self._super_hint) is
+			# meaningless - writing it would clobber the tracked state with None. Instead read
+			# the tracked value back, which is what a real instrument would have reported.
+			#
+			# This is what lets get_* methods work in dummy mode WITHOUT a hand-written
+			# dummy_responder case. Only genuinely synthetic getters (get_waveform,
+			# get_measured_output, ...) still need @enabledummy + a dummy_responder entry.
+			val = self.state.get(params, indices=indices, fragment=fragment)
+			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State read (dummy): {param_idx_to_str(params, indices=indices)} -\\> >:a{truncate_str(val)}<.")
+			return val
+		
 		if (query_func is None) or self.dummy or self.blind_state_update:
 			# For these cases, the instrument is not queried (or at least, not again). Instead,
 			# the `value` parameter is saved to the interal state tracker and returned.
@@ -1538,7 +1563,16 @@ def interpret_range(rd:dict, print_err=False):
 def enabledummy(func):
 	'''Decorator to allow functions to trigger their parent Category's
 	dummy_responder() function, with the name of the triggering function
-	and the passed arguments.'''
+	and the passed arguments.
+	
+	RESERVED FOR SYNTHETIC BEHAVIOR ONLY. Any set_*/get_* that maps to a plain state field
+	needs no decorator at all - modify_state() handles dummy mode for those generically
+	(setters store the value, getters read it back). Use this only where dummy mode has to
+	*invent* something that isn't already in the state tracker, e.g. generating a waveform
+	(get_waveform) or noisy meter readings (get_measured_output).
+	
+	Putting it on a plain setter is a bug: it bypasses modify_state() entirely, so the value
+	is silently dropped unless dummy_responder() happens to have a matching case.'''
 	
 	def wrapper(self, *args, **kwargs):
 		

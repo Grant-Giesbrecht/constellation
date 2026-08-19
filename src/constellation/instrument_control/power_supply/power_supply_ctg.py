@@ -61,64 +61,32 @@ class PowerSupply(Driver):
 			self.state.channels[ch].current_meas = self.state.channels[ch].current_set + stal.randrange(-0.05, 0.05)
 		
 	def dummy_responder(self, func_name:str, *args, **kwargs):
-		''' Function expected to behave as the "real" equivalents. ie. write commands don't
-		need to return anything, reads commands or similar should. What is returned here
-		should mimic what would be returned by the "real" function if it were connected to
-		hardware.
+		''' Supplies SYNTHETIC dummy values only - see Oscilloscope.dummy_responder. Plain
+		set_*/get_* methods are handled generically by modify_state() and need no case here.
 		'''
 		
 		# Put everything in a try-catch in case arguments are missing or similar
 		try:
 			
-			# Check for known functions
-			found = True
-			adjective = ""
 			match func_name:
-				case "set_voltage":					
-					rval = None
-				case "get_voltage":
-					rval = self.state.channels[args[0]].voltage_set
-				case "set_current":
-					rval = None
-				case "get_current":
-					rval = self.state.channels[args[0]].current_set
-				case "set_enable":
-					rval = None
-				case "get_output_enable":
-					rval = self.state.channels[args[0]].enable
 				case "get_measured_output":
+					# Measured V/I are readings, not settings - invent them (with noise) from
+					# the configured setpoints.
 					self.remake_dummy_measurements()
 					rval = (self.state.channels[args[0]].voltage_meas, self.state.channels[args[0]].current_meas)
 				case _:
-					found = False
-				
+					return super().dummy_responder(func_name, *args, **kwargs)
 			
-			# If function was found, label as recognized, else check match for general getter or setter
-			if found:
-				adjective = "recognized"
-			else:
-				if "set_" == func_name[:4]:
-					rval = -1
-					adjective = "set_"
-				elif "get_" == func_name[:4]:
-					rval = None
-					adjective = "get_"
-				else:
-					rval = None
-					adjective = "unrecognized"
-				
-			self.debug(f"Dummy responder sending >{protect_str(rval)}< to {adjective} function (>{func_name}<).")
+			self.debug(f"Dummy responder sending >{protect_str(rval)}< to synthetic function (>{func_name}<).")
 			return rval
 		except Exception as e:
 			self.error(f"Failed to respond to dummy instruction. ({e})")
 			return None
-	
 	@abstractmethod
 	def set_voltage(self, channel:int, voltage:float):
 		self.modify_state(lambda: self.get_voltage(channel), ["channels", "voltage_set"], voltage, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_voltage(self, channel:int):
 		return self.modify_state(None, ["channels", "voltage_set"], self._super_hint, indices=[channel])
 		
@@ -127,7 +95,6 @@ class PowerSupply(Driver):
 		self.modify_state(lambda: self.get_voltage(channel), ["channels", "current_set"], current, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_current(self, channel:int):
 		return self.modify_state(None, ["channels", "current_set"], self._super_hint, indices=[channel])
 	
@@ -136,7 +103,6 @@ class PowerSupply(Driver):
 		self.modify_state(lambda: self.get_voltage(channel), ["channels", "enable"], enable, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_output_enable(self, channel:int):
 		return self.modify_state(None, ["channels", "enable"], self._super_hint, indices=[channel])
 	

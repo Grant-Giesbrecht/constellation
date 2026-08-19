@@ -15,7 +15,8 @@ import pylogfile.base as plf
 from constellation.base import InstrumentState, IndexedList, Driver, CheckOnline
 from constellation.relay import DirectSCPIRelay, VICPDirectSCPIRelay
 from constellation.all import (RigolDS1000Z as _RZ, SiglentSSA3000X, RigolDP832, SiglentSDM3000X,
-	Keysight34400, Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE)
+	Keysight34400, Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE,
+	DigitalMultimeter)
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import Oscilloscope
 from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000Z_dvr import RigolDS1000Z
 
@@ -117,11 +118,7 @@ def test_instrumentstate_set_bad_fragment_fails_gracefully():
 	result = s.set(["volt"], 1.0, fragment="no_such_fragment")
 	assert result is False
 
-@pytest.mark.xfail(strict=True, reason=(
-	"BUG: InstrumentState.get() has no `fragment` parameter at all, unlike set() - there is no "
-	"way to read back a value that was written into a state_fragment via set(..., fragment=X) "
-	"through the top-level state.get() API."
-))
+# FIXED: InstrumentState.get() now takes fragment=, mirroring set().
 def test_instrumentstate_get_supports_fragment_like_set_does():
 	s = _DemoState(log=make_log())
 	s.state_fragments["extra"] = _DemoChannelState(log=make_log())
@@ -152,26 +149,20 @@ def test_dummy_set_chan_enable_persists_to_state():
 	osc.set_chan_enable(1, True)
 	assert osc.state.channels[1].chan_en is True
 
-@pytest.mark.xfail(strict=True, reason=(
-	"BUG: set_trigger_mode is decorated with @enabledummy at the category level (unlike "
-	"set_div_volt/set_offset_volt/set_chan_enable/set_coupling/set_div_time/set_offset_time, "
-	"which are not). In dummy mode this routes the call to dummy_responder() instead of the "
-	"normal modify_state() path, and Oscilloscope.dummy_responder() has no case for "
-	"'set_trigger_mode' - so it hits the generic fallback, returns -1, and never touches "
-	"self.state at all. The state silently stays unset."
-))
+# FIXED: @enabledummy removed from the state-mapped setters; they now flow through
+# modify_state(), whose dummy branch stores the value.
 def test_dummy_set_trigger_mode_persists_to_state():
 	osc = make_dummy_osc()
 	osc.set_trigger_mode(Oscilloscope.TRIG_AUTO)
 	assert osc.state.trigger_mode == Oscilloscope.TRIG_AUTO
 
-@pytest.mark.xfail(strict=True, reason="Same root cause as test_dummy_set_trigger_mode_persists_to_state, for set_trigger_level.")
+# FIXED: see test_dummy_set_trigger_mode_persists_to_state.
 def test_dummy_set_trigger_level_persists_to_state():
 	osc = make_dummy_osc()
 	osc.set_trigger_level(1.5)
 	assert osc.state.trigger_level == 1.5
 
-@pytest.mark.xfail(strict=True, reason="Same root cause as test_dummy_set_trigger_mode_persists_to_state, for set_probe_attenuation.")
+# FIXED: see test_dummy_set_trigger_mode_persists_to_state.
 def test_dummy_set_probe_attenuation_persists_to_state():
 	osc = make_dummy_osc()
 	osc.set_probe_attenuation(1, 10)
@@ -405,3 +396,185 @@ def test_driver_accepts_an_injected_relay(driver_cls):
 	injected = DirectSCPIRelay()
 	dvr = driver_cls("ADDR", make_log(), relay=injected, dummy=True)
 	assert dvr.relay is injected
+
+# ---------------------------------------------------------------------------
+# Dummy dispatch: one mechanism (modify_state), @enabledummy for synthetic only
+# ---------------------------------------------------------------------------
+
+import inspect as _inspect
+from constellation.instrument_control.oscilloscope.oscilloscope_ctg import MeasurementsMixin
+
+# The ONLY methods allowed to keep @enabledummy: dummy mode must invent a value that isn't
+# already tracked in state, or the method is a pure hardware action with no state at all.
+# Anything else must go through modify_state(), which handles dummy generically. This test is
+# the guard rail - it fails if someone decorates a plain setter/getter again (the exact mistake
+# that made 5 oscilloscope setters silently no-op in dummy mode).
+ALLOWED_ENABLEDUMMY = {
+	"Oscilloscope": {"get_waveform", "run_acquisition", "stop_acquisition",
+	                 "do_single_trigger", "do_force_trigger"},
+	"PowerSupply": {"get_measured_output"},
+	"BasicVectorNetworkAnalyzerCtg": {"get_trace_data"},
+}
+
+def _enabledummy_methods(cls):
+	""" Names of methods on cls (defined by cls itself) wrapped by @enabledummy. The decorator
+	returns a plain closure named 'wrapper', which is what we detect. """
+	found = set()
+	for name, obj in vars(cls).items():
+		fn = getattr(obj, "__func__", obj)
+		if callable(fn) and getattr(fn, "__name__", None) == "wrapper":
+			found.add(name)
+	return found
+
+@pytest.mark.parametrize("cls_name", sorted(ALLOWED_ENABLEDUMMY))
+def test_enabledummy_only_on_synthetic_methods(cls_name):
+	import constellation.all as ca
+	cls = getattr(ca, cls_name)
+	assert _enabledummy_methods(cls) == ALLOWED_ENABLEDUMMY[cls_name]
+
+def test_no_category_hand_maintains_a_getter_table():
+	""" The AWG/DMM/SpectrumAnalyzer dummy_responder overrides were pure state read-back tables,
+	duplicating what modify_state() now does generically. They should stay deleted. """
+	import constellation.all as ca
+	for cls_name in ("ArbitraryWaveformGenerator", "DigitalMultimeter", "SpectrumAnalyzer"):
+		cls = getattr(ca, cls_name)
+		assert "dummy_responder" not in vars(cls), (
+			f"{cls_name} re-added a dummy_responder override - if it's a plain state read-back, "
+			f"modify_state() already handles it")
+
+@pytest.mark.parametrize("setter,getter,value", [
+	("set_trigger_mode",      "get_trigger_mode",      Oscilloscope.TRIG_SINGLE),
+	("set_trigger_level",     "get_trigger_level",     0.75),
+	("set_div_time",          "get_div_time",          5e-3),
+	("set_offset_time",       "get_offset_time",       1e-3),
+])
+def test_dummy_scalar_setter_roundtrips(setter, getter, value):
+	""" Every scalar set_*/get_* pair must round-trip through state in dummy mode with no
+	dummy_responder case backing it. """
+	osc = make_dummy_osc()
+	getattr(osc, setter)(value)
+	assert getattr(osc, getter)() == value
+
+@pytest.mark.parametrize("setter,getter,value", [
+	("set_div_volt",          "get_div_volt",          0.25),
+	("set_offset_volt",       "get_offset_volt",       -0.1),
+	("set_chan_enable",       "get_chan_enable",       False),
+	("set_coupling",          "get_coupling",          Oscilloscope.COUPLING_AC),
+	("set_probe_attenuation", "get_probe_attenuation", 10),
+	("set_bandwidth_limit",   "get_bandwidth_limit",   True),
+])
+def test_dummy_per_channel_setter_roundtrips(setter, getter, value):
+	osc = make_dummy_osc()
+	getattr(osc, setter)(2, value)
+	assert getattr(osc, getter)(2) == value
+
+def test_dummy_trigger_source_roundtrips():
+	""" set_trigger_source takes (channel/external/line) rather than a plain value, so it needs
+	its own case. It was one of the silently-no-op setters. """
+	osc = make_dummy_osc()
+	osc.set_trigger_source(channel=2)
+	assert osc.state.trigger_source == "CHAN2"
+	assert osc.get_trigger_source() == "CHAN2"
+
+def test_dummy_getter_does_not_clobber_state_with_none():
+	""" The regression the modify_state dummy branch prevents: a get_* in dummy mode used to
+	write self._super_hint (None, since the driver body never ran) straight into state. """
+	osc = make_dummy_osc()
+	osc.set_div_volt(1, 0.5)
+	for _ in range(3):
+		assert osc.get_div_volt(1) == 0.5
+	assert osc.state.channels[1].div_volt == 0.5
+
+# --- mixins, which previously had no dummy support at all ------------------------------
+
+def test_dummy_add_and_clear_measurements():
+	osc = make_dummy_osc()
+	assert osc.add_measurement(1, MeasurementsMixin.MEAS_VPP) is True
+	assert osc.add_measurement(2, MeasurementsMixin.MEAS_VMAX) is True
+	# adding the same measurement twice is rejected
+	assert osc.add_measurement(1, MeasurementsMixin.MEAS_VPP) is False
+
+	frag = osc.state.state_fragments["measurements"]
+	assert len(list(frag.active_measurements)) == 2
+
+	osc.clear_measurements()
+	assert list(frag.active_measurements) == []
+
+def test_dummy_measurement_is_consistent_with_the_dummy_waveform():
+	""" Dummy measurements are synthesized from the same waveform get_waveform() returns, so
+	they have to agree with it rather than being a fixed sentinel. """
+	osc = make_dummy_osc()
+	osc.set_div_volt(1, 1.0)
+	osc.add_measurement(1, MeasurementsMixin.MEAS_VPP)
+	osc.add_measurement(1, MeasurementsMixin.MEAS_VMAX)
+
+	wf = osc.get_waveform(1)
+	expected_vpp = max(wf["volt_V"]) - min(wf["volt_V"])
+
+	assert osc.get_measurement(1, MeasurementsMixin.MEAS_VPP) == pytest.approx(expected_vpp)
+	assert osc.get_measurement(1, MeasurementsMixin.MEAS_VMAX) == pytest.approx(max(wf["volt_V"]))
+
+def test_dummy_measurement_records_last_measured_value():
+	osc = make_dummy_osc()
+	osc.add_measurement(1, MeasurementsMixin.MEAS_VPP)
+	value = osc.get_measurement(1, MeasurementsMixin.MEAS_VPP)
+
+	frag = osc.state.state_fragments["measurements"]
+	stored = [m.last_measured_value for m in frag.active_measurements]
+	assert stored == [value]
+
+def test_dummy_measurement_not_added_returns_none():
+	osc = make_dummy_osc()
+	assert osc.get_measurement(1, MeasurementsMixin.MEAS_FREQ) is None
+
+def test_dummy_stat_display_roundtrips_through_a_state_fragment():
+	""" Exercises modify_state()'s fragment= path in dummy mode, which needed
+	InstrumentState.get(fragment=) to exist. """
+	osc = make_dummy_osc()
+	osc.set_measurement_stat_display(True)
+	assert osc.get_measurement_stat_display() is True
+	osc.set_measurement_stat_display(False)
+	assert osc.get_measurement_stat_display() is False
+
+# --- the other categories, which lost their dummy_responder entirely -------------------
+
+def test_dummy_power_supply_roundtrips_and_synthesizes_measurements():
+	psu = RigolDP832("dummy", make_log(), dummy=True)
+	psu.set_voltage(2, 3.3)
+	psu.set_current(2, 0.25)
+	psu.set_output_enable(2, True)
+
+	assert psu.get_voltage(2) == 3.3
+	assert psu.get_output_enable(2) is True
+
+	# measured V/I are synthetic (setpoint + noise), so they must be near - not equal to - the
+	# setpoint, and must actually vary between reads.
+	v1, i1 = psu.get_measured_output(2)
+	assert abs(v1 - 3.3) < 0.2
+	assert (v1, i1) != psu.get_measured_output(2)
+
+def test_dummy_awg_roundtrips_without_a_dummy_responder():
+	awg = SiglentSDG2000X("dummy", make_log(), dummy=True)
+	awg.set_frequency(1, 2.5e3)
+	awg.set_amplitude(1, 0.8)
+	awg.set_output_enable(1, True)
+
+	assert awg.get_frequency(1) == 2.5e3
+	assert awg.get_amplitude(1) == 0.8
+	assert awg.get_output_enable(1) is True
+
+def test_dummy_dmm_roundtrips_without_a_dummy_responder():
+	dmm = SiglentSDM3000X("dummy", make_log(), dummy=True)
+	dmm.set_measurement(DigitalMultimeter.MEAS_CURR_DC)
+	assert dmm.get_measurement() == DigitalMultimeter.MEAS_CURR_DC
+	dmm.set_trigger_type(DigitalMultimeter.TRIG_SINGLE)
+	assert dmm.get_trigger_type() == DigitalMultimeter.TRIG_SINGLE
+
+def test_dummy_spectrum_analyzer_roundtrips_without_a_dummy_responder():
+	sa = SiglentSSA3000X("dummy", make_log(), dummy=True)
+	sa.set_freq_start(1e9)
+	sa.set_freq_end(2e9)
+	sa.set_ref_level(-10)
+	assert sa.get_freq_start() == 1e9
+	assert sa.get_freq_end() == 2e9
+	assert sa.get_ref_level() == -10

@@ -4,7 +4,7 @@ Working list from the state-tracking / dummy-mode / networking review (see also
 `docs/dummy_and_state_review.md`, which covers the dummy+state bugs in more depth, and
 `docs/labmesh_migration_plan.md`).
 
-Status key: `[ ]` open, `[x]` done, `[~]` in progress.
+Status key: `[ ]` open, `[x]` done, `[~]` in progress, `[-]` considered and rejected.
 
 Confidence key:
 - **confirmed** — reproduced by running the code.
@@ -13,7 +13,8 @@ Confidence key:
 Test env note: the repo's deps (`pylogfile`, `stardust`, `labmesh`) are installed under
 `/Library/Frameworks/Python.framework/Versions/3.14/bin/python3`, NOT under `~/Venv/.ve_main`.
 Run tests with that interpreter: `.../3.14/bin/python3 -m pytest tests/ -q`
-(baseline at time of writing: 34 passed, 10 xfailed).
+(baseline when this list was written: 34 passed, 10 xfailed; after the P1/P2 pass: 58 passed, 9 xfailed;
+after the P3 pass: **87 passed, 5 xfailed**).
 
 ---
 
@@ -72,40 +73,117 @@ Run tests with that interpreter: `.../3.14/bin/python3 -m pytest tests/ -q`
       parametrized `relay=` injection and no-shared-default coverage across all 9 constructible
       drivers. Suite: **58 passed, 9 xfailed** (was 34 passed, 10 xfailed).
 
-## Priority 3 — dummy mode: collapse to one mechanism
+## Priority 3 — dummy mode: collapse to one mechanism — **DONE**
 
 Design decision (agreed): delete `@enabledummy` from setters entirely, make `modify_state()` the
 single dummy dispatch point, and reserve `dummy_responder()` for genuinely synthetic behavior only.
 
-- [ ] **Remove `@enabledummy` from every `set_*` category method.** They then flow through
+- [x] **Remove `@enabledummy` from every `set_*` category method.** They then flow through
       `modify_state()`, whose `self.dummy` branch already handles dummy correctly and generically.
-- [ ] **Add a generic dummy getter path to `modify_state()`** so `get_*` reads its own state path
+- [x] **Add a generic dummy getter path to `modify_state()`** so `get_*` reads its own state path
       back instead of needing a hand-written `dummy_responder` case:
       `if self.dummy and query_func is None and value is None: return self.state.get(params, indices=indices, fragment=fragment)`
-- [ ] **Reduce `dummy_responder` to synthetic generators only** — `get_waveform`,
+- [x] **Reduce `dummy_responder` to synthetic generators only** — `get_waveform`,
       `get_measured_output`, `get_trace_data`. Deletes the bulk of every category's
       `match func_name:` table.
-- [ ] **Fixes bug: 5 setters silently no-op in dummy mode.** `set_trigger_mode`,
+- [x] **Fixes bug: 5 setters silently no-op in dummy mode.** `set_trigger_mode`,
       `set_trigger_level`, `set_trigger_source`, `set_probe_attenuation`, `set_bandwidth_limit`
       are `@enabledummy` but have no `dummy_responder` case, so they hit the generic fallback
       (`return -1`) and never touch `self.state`.
       *confirmed — `docs/dummy_and_state_review.md` bug #1*
-- [ ] **Fixes bug: mixin methods have no dummy support at all.** `add_measurement`,
+- [x] **Fixes bug: mixin methods have no dummy support at all.** `add_measurement`,
       `clear_measurements`, `get_measurement`, `set_measurement_stat_display` are `@enabledummy`
       with no cases; `add_measurement(1, MEAS_VPP)` returns `None` instead of `True` and adds
       nothing to state. (There are two `#TODO: Handle dummy!` comments marking this.)
       *confirmed*
-- [ ] **Inverted fallback convention.** `Driver.dummy_responder` returns `None` for unrecognized
+- [x] **Inverted fallback convention.** `Driver.dummy_responder` returns `None` for unrecognized
       `set_*` and `-1` for `get_*`; the `Oscilloscope`/`PowerSupply` overrides do the opposite.
       Should be moot once the above lands, but pick one convention.
       *confirmed — `docs/dummy_and_state_review.md` minor notes*
+
+### Outcome
+
+`modify_state()` is now the single dummy dispatch point. Two branches do all the work:
+- **Setter in dummy** (`query_func` is not None): the pre-existing `self.dummy` branch stores the
+  passed value. Unchanged.
+- **Getter in dummy** (`query_func is None`): *new* branch reads the tracked value back via
+  `self.state.get(params, indices, fragment)` instead of writing `self._super_hint` (which is
+  `None` in dummy, since the driver's SCPI body never ran) into state.
+
+That second branch is what removes the need for a hand-written `dummy_responder` case per getter.
+
+- **44 `@enabledummy` decorators removed**; 7 remain, all genuinely synthetic or pure actions:
+  `Oscilloscope.get_waveform` + the 4 acquisition actions, `PowerSupply.get_measured_output`,
+  `BasicVectorNetworkAnalyzerCtg.get_trace_data`.
+- **3 `dummy_responder` overrides deleted outright** (`ArbitraryWaveformGenerator`,
+  `DigitalMultimeter`, `SpectrumAnalyzer`) — every case in them was literally
+  `self.state.get(<same path>)`, i.e. exactly what the generic branch now does.
+- **2 `dummy_responder` overrides shrunk to synthetic-only**: Oscilloscope 65 -> 31 lines,
+  PowerSupply 53 -> 22 lines. Both now delegate unknown names to `super().dummy_responder()`,
+  which also resolves the inverted set_/get_ fallback convention (one convention, in the base).
+- Net **-178 lines** across the category classes.
+- `InstrumentState.get()` gained `fragment=` (P5 item, pulled forward — the fragment read-back
+  path needs it).
+- `MeasurementsMixin.get_measurement` additionally fixed: now uses `populated_items()` instead of
+  `enumerate()` (the positional-vs-key bug from P10), reports the correct message when a
+  measurement isn't found, uses `self.warning()` rather than `self.log.warning()`, and gains a
+  `_dummy_measurement()` helper that computes VMAX/VMIN/VPP/VAVG/FREQ from the driver's own dummy
+  waveform — so dummy measurements agree with what `get_waveform()` returns instead of being a
+  sentinel.
+
+Verified: the 5 previously-silent setters (`set_trigger_mode`, `set_trigger_level`,
+`set_trigger_source`, `set_probe_attenuation`, `set_bandwidth_limit`) now round-trip through
+state; `add_measurement`/`clear_measurements`/`get_measurement`/stat-display work in dummy mode
+for the first time. 4 more `xfail(strict=True)` markers XPASSed and were removed.
+
+Tests: **87 passed, 5 xfailed** (from 58/9). New coverage includes a guard-rail test asserting the
+exact set of methods still allowed to carry `@enabledummy` — it fails if someone decorates a plain
+setter again, which is the mistake that caused the original bug. `osc_dummy_demo.py`,
+`psu_dummy_demo.py`, `dmm_dummy_demo.py` and `state_tracker_demo.py` all still run clean.
+
+### Follow-ups noticed during this pass
+
+- [ ] **`DigitalMultimeter.dummy_responder`'s deleted `return_selected()` helper referenced
+      `self.state.result_B`**, but the state field is `result_R` — it would have raised
+      `AttributeError` for any resistance measurement. Moot now (the override is gone), but
+      `get_value()` still has no synthetic dummy reading: in dummy it reads `result_I`/`result_V`/
+      `result_R` back, which are `None` until something sets them. Decide whether a DMM should
+      synthesize a reading the way `PowerSupply.get_measured_output` does. *confirmed*
+- [ ] **`SpectrumAnalyzer` and VNA have no `init_dummy_state()` content** (`pass`), so their dummy
+      state starts entirely `None` and getters read `None` back. Now that read-back is the generic
+      path, populating a sensible default state matters more than it did. *static*
 
 ## Priority 4 — `_super_hint` and `superreturn`
 
 - [ ] **`superreturn` uses `super(type(self), self)`** — `type(self)` is the runtime class, not the
       defining class. Works today only because no concrete driver is subclassed; the first
       `class MyScope(RigolDS1000Z)` infinite-recurses on every decorated method.
-      Fix: make `superreturn` a descriptor class and capture the owner in `__set_name__`.
+      Fix: make `superreturn` a descriptor class and capture the owner in `__set_name__` — that
+      is the only hook that sees the *defining* class, and only descriptors (not plain functions)
+      receive it:
+
+      ```python
+      class superreturn:
+          def __init__(self, func):
+              self.func = func; self.owner = None
+              functools.update_wrapper(self, func)
+          def __set_name__(self, owner, name):
+              self.owner = owner                      # e.g. RigolDS1000Z, captured once
+          def __get__(self, obj, objtype=None):
+              return self if obj is None else functools.partial(self.__call__, obj)
+          def __call__(self, obj, *args, **kwargs):
+              obj._super_hint = None                  # fixes the stale-value bug too
+              if not obj.dummy:
+                  try:
+                      obj._super_hint = self.func(obj, *args, **kwargs)   # capture the return
+                  except Exception as e:
+                      obj.log.error(f"Failed to call driver function: >:a{self.func}< ({e}).")
+                      return None
+              return getattr(super(self.owner, obj), self.func.__name__)(*args, **kwargs)
+      ```
+
+      `self.owner` is fixed at class-creation time regardless of `type(obj)`, so the MRO walk
+      always advances and terminates. This single rewrite folds in all four P4 items at once.
       *static (well-known Python failure mode)*
 - [ ] **`_super_hint` is never cleared between calls.** A driver getter that early-`return`s
       (e.g. `RigolDS1000Z.get_coupling` on an unrecognized coupling string) leaves the *previous*
@@ -128,7 +206,8 @@ single dummy dispatch point, and reserve `dummy_responder()` for genuinely synth
 - [ ] **`set(..., fragment=X)` raises `UnboundLocalError` for an unknown fragment** — the error
       message interpolates `obj_top` before it's assigned, instead of logging and returning `False`.
       *confirmed — `docs/dummy_and_state_review.md` bug #2*
-- [ ] **`get()` has no `fragment=` parameter** at all, unlike `set()`. No way to read a
+- [x] **`get()` has no `fragment=` parameter** at all, unlike `set()`. (Done early — the P3
+      dummy read-back path required it. The full `_resolve()` unification is still open.) No way to read a
       state-fragment value back through the top-level API.
       *confirmed — `docs/dummy_and_state_review.md` bug #3*
 - [ ] Both leave `list_at_top` unbound if `params` is empty, and both reference the loop variable
@@ -173,8 +252,57 @@ serialization manifest; `add_param` is Constellation's per-instance units/is_dat
 Deriving one from the other needs class-creation-time info that `add_param` doesn't have.
 `validate()` is the right guard — the problem is it isn't reliably *called*.
 
-- [ ] **Call `validate()` centrally** from `Driver.__init__` / `discover_mixins()` rather than
-      trusting each `InstrumentState` subclass to remember.
+### How to enforce `validate()` automatically (prototyped and verified)
+
+Calling it from `Driver.__init__`/`discover_mixins()` was the first idea, but it's the wrong
+level: it only reaches `self.state` and the mixin fragments, and misses every *nested*
+`InstrumentState` (the per-channel/per-trace objects inside an `IndexedList`, and any state class
+built lazily — `OscilloscopeMeasurementSetting` is only constructed inside `add_measurement()`,
+long after `Driver.__init__` has returned).
+
+The enforcement point that can't be missed is `InstrumentState.__init_subclass__`, which fires
+once per subclass *definition*. It can't call `validate()` itself (there's no instance yet), but it
+can wrap the subclass's `__init__` so validation runs automatically right after construction:
+
+```python
+def __init_subclass__(cls, **kwargs):
+    super().__init_subclass__(**kwargs)      # MUST cooperate: Serializable uses this hook too,
+                                             # for class registration + __state_fields__ merging
+    orig_init = cls.__init__                 # may already be a wrapper (inherited) - wrap anyway
+    @functools.wraps(orig_init)
+    def _validating_init(self, *args, **kw):
+        orig_init(self, *args, **kw)
+        if type(self) is cls:                # only the most-derived class fires -> exactly once
+            self.validate()
+    cls.__init__ = _validating_init
+```
+
+Verified behavior:
+- **Fires exactly once per construction** in all three inheritance shapes — a base class, a
+  subclass that defines its own `__init__`, and a subclass that *inherits* `__init__`. (The
+  `type(self) is cls` guard is what prevents a `B(A)` hierarchy from validating twice. Note the
+  obvious-looking optimization of tagging the wrapper and skipping already-wrapped `__init__`s is
+  **wrong** — a subclass that inherits `__init__` would then never validate at all.)
+- **Catches the real drift**: constructing `OscilloscopeMeasurementSetting` under the hook
+  immediately reports `last_measured_value` as missing from `__state_fields__`.
+- **Cooperates with `Serializable.__init_subclass__`** (class registration and the
+  `__extend_state_fields__` parent-field merge) as long as `super().__init_subclass__(**kwargs)`
+  is called first.
+- Constructing all five working drivers under the hook produces **zero** new warnings, so turning
+  this on is not a noise event — the only thing it surfaces today is the one genuine bug.
+
+Once this is in, delete the ~8 manual `self.validate()` calls scattered through the category
+classes; they become redundant (and can't be forgotten by the next state class).
+
+- [-] ~~Call `validate()` centrally from `Driver.__init__`/`discover_mixins()`~~ — superseded by
+      the `__init_subclass__` approach above; the `Driver.__init__` level can't see nested or
+      lazily-built state objects.
+- [ ] **Implement the `__init_subclass__` auto-validate hook** in `InstrumentState` (needs
+      `import functools` in `base.py`).
+- [ ] **Remove the now-redundant manual `self.validate()` calls** from the category state classes.
+- [ ] **Do the `validate()` output fix in the same pass** (see below) — auto-validation makes a
+      `print()`-to-stdout side effect fire on every state object ever constructed, which is much
+      worse than it is today.
 - [ ] **`OscilloscopeMeasurementSetting` has real drift**: `add_param("last_measured_value", ...)`
       but it's missing from `__state_fields__`, and the class never calls `validate()` — so the
       field silently does not serialize.
@@ -297,17 +425,17 @@ All of these are methods calling names that do not exist, or passing wrong argum
       `refresh_state`. Either move the hooks onto the fragment classes, or have `refresh_mixins`
       walk the MRO the way `discover_mixins()` does.
       *static*
-- [ ] **`MeasurementsMixin.get_measurement` confuses positional index with IndexedList key.**
+- [x] **`MeasurementsMixin.get_measurement` confuses positional index with IndexedList key.**
       `for idx, am in enumerate(...active_measurements)` then `active_measurements[meas_idx]` —
       but `__iter__` skips unpopulated slots, so `idx` is a positional counter. Agrees today only
       because `first_index=0` and `append()` fills densely; any gap (e.g. `clear_measurements()`
       then selective re-add) silently updates the wrong measurement. Use `populated_items()`.
       *static*
-- [ ] **`MeasurementsMixin` uses `self.log.warning(...)`** instead of the `Driver.warning()`
+- [x] **`MeasurementsMixin` uses `self.log.warning(...)`** instead of the `Driver.warning()`
       wrapper, so its messages lack the instrument identifier prefix (`CLAUDE.md` requires the
       wrappers).
       *static*
-- [ ] **Wrong message text** in `get_measurement`'s not-found branch: logs "Measurement already
+- [x] **Wrong message text** in `get_measurement`'s not-found branch: logs "Measurement already
       exists" when the measurement was *not* found.
       *static*
 
@@ -323,9 +451,31 @@ All of these are methods calling names that do not exist, or passing wrong argum
       `numpy.float64` into an otherwise plain dict.
       *confirmed — `docs/dummy_and_state_review.md` minor notes*
 - [ ] **Design a shared x/y-with-units contract** for waveform/trace/spectrum data, plus unit
-      conversion (feed in `time_ms` or `time_s`, ask for `time_us`). See the discussion notes —
-      leading candidate is a canonical `{"x", "y", "x_unit", "y_unit"}` dict enforced by a
-      normalizing helper at the `modify_state` boundary, rather than a new class.
+      conversion. Decision from discussion: **no new class** — the root problem is that the unit
+      is encoded in the *key name* (`time_s` vs `time_mS`), which is why it's unenforceable and
+      unconvertible. Move the unit into a value and the keys become fixed:
+
+      ```python
+      {"x": [...], "y": [...], "x_unit": "s", "y_unit": "V"}
+      ```
+
+      Two pieces make it enforceable rather than conventional:
+      1. `normalize_xy(data, ...)` — accepts the legacy shapes (`{"time_s":..., "volt_V":...}`,
+         `{"time_idx":...}`) and returns the canonical form, logging a deprecation. Called at the
+         `modify_state` boundary, the same choke point that makes dummy mode work, so drivers can
+         be migrated one at a time instead of all at once.
+      2. `convert(values, from_unit, to_unit)` — ~25 lines over an SI-prefix table
+         (`f/p/n/u/m/''/k/M/G/T`), splitting `"mS"` into prefix+base and rejecting mismatched base
+         units. Then `convert(wav["x"], wav["x_unit"], "us")` works regardless of which driver
+         produced the waveform, which is the actual goal.
+
+      Deliberately **not** `pint`: `Quantity` objects don't round-trip through HDF5/JSON, so they'd
+      fight `InstrumentState` serialization at every boundary. Plain floats + a unit *string* stay
+      serializable — the same constraint that shaped `IndexedList`'s `"idx-N"` keys.
+
+      Note this is a **breaking change** to the waveform contract: `plot_waveform()`, the GUI
+      widgets (`ui.py`, `oscilloscope_gui.py`), and the networking examples all read
+      `time_s`/`volt_V` today. Needs its own pass, not a fold-in.
 
 ## Priority 12 — state persistence
 

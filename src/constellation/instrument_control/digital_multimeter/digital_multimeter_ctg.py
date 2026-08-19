@@ -40,70 +40,11 @@ class DigitalMultimeter(Driver):
 		self.set_measurement(DigitalMultimeter.MEAS_VOLT_DC)
 		self.set_trigger_type(DigitalMultimeter.TRIG_CONT)
 	
-	def dummy_responder(self, func_name:str, *args, **kwargs):
-		''' Function expected to behave as the "real" equivalents. ie. write commands don't
-		need to return anything, reads commands or similar should. What is returned here
-		should mimic what would be returned by the "real" function if it were connected to
-		hardware.
-		'''
-		
-		def return_selected(self):
-			# Check if last value was a current
-			if self.state.measurement_type in (DigitalMultimeter.MEAS_CURR_AC, DigitalMultimeter.MEAS_CURR_DC):
-				return self.state.result_I
-			elif self.state.measurement_type in (DigitalMultimeter.MEAS_VOLT_AC, DigitalMultimeter.MEAS_VOLT_DC):
-				return self.state.result_V
-			elif self.state.measurement_type in (DigitalMultimeter.MEAS_RESISTANCE_2WIRE, DigitalMultimeter.MEAS_RESISTANCE_4WIRE):
-				return self.state.result_B
-		
-		# Put everything in a try-catch in case arguments are missing or similar
-		try:
-			
-			# Check for known functions
-			found = True
-			adjective = ""
-			match func_name:
-				case "set_measurement":
-					rval = None
-				case "get_measurement":
-					rval = self.state.get(["measurement_type"])
-				case "set_trigger_type":
-					rval = None
-				case "get_trigger_type":
-					rval = self.state.get(["trigger_type"])
-				case "get_value":
-					rval = return_selected(self)
-				case "send_trigger_and_read":
-					rval = return_selected(self)
-				case _:
-					found = False
-			
-			# If function was found, label as recognized, else check match for general getter or setter
-			if found:
-				adjective = "recognized"
-			else:
-				if "set_" == func_name[:4]:
-					rval = -1
-					adjective = "set_"
-				elif "get_" == func_name[:4]:
-					rval = None
-					adjective = "get_"
-				else:
-					rval = None
-					adjective = "unrecognized"
-				
-			self.debug(f"Dummy responder sending >{protect_str(rval)}< to {adjective} function (>{func_name}<).")
-			return rval
-		except Exception as e:
-			self.error(f"Failed to respond to dummy instruction. ({e})")
-			return None
-	
 	@abstractmethod
 	def set_measurement(self, measurement:str, range:float=None):
 		self.modify_state(self.get_measurement, ["measurement_type"], measurement)
 	
 	@abstractmethod
-	@enabledummy
 	def get_measurement(self):
 		return self.modify_state(None, ["measurement_type"], self._super_hint)
 	
@@ -112,7 +53,6 @@ class DigitalMultimeter(Driver):
 		self.modify_state(self.get_measurement, ["trigger_type"], trig)
 	
 	@abstractmethod
-	@enabledummy
 	def get_trigger_type(self):
 		return self.modify_state(None, ["trigger_type"], self._super_hint)
 	

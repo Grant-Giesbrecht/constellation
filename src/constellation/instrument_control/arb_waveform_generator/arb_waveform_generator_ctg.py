@@ -61,70 +61,11 @@ class ArbitraryWaveformGenerator(Driver):
 			self.set_offset(ch_no, 0)
 			self.set_output_enable(ch_no, False)
 	
-	def dummy_responder(self, func_name:str, *args, **kwargs):
-		''' Function expected to behave as the "real" equivalents. ie. write commands don't
-		need to return anything, reads commands or similar should. What is returned here
-		should mimic what would be returned by the "real" function if it were connected to
-		hardware.
-		'''
-		
-		# Put everything in a try-catch in case arguments are missing or similar
-		try:
-			
-			# Check for known functions
-			found = True
-			adjective = ""
-			match func_name:
-				case "set_waveform":
-					rval = None
-				case "get_waveform":
-					rval = self.state.get(["channels", "waveform_type"], indices=[args[0]])
-				case "set_frequency":
-					rval = None
-				case "get_frequency":
-					rval = self.state.get(["channels", "frequency"], indices=[args[0]])
-				case "set_amplitude":
-					rval = None
-				case "get_amplitude":
-					rval = self.state.get(["channels", "amplitude"], indices=[args[0]])
-				case "set_offset":
-					rval = None
-				case "get_offset":
-					rval = self.state.get(["channels", "offset"], indices=[args[0]])
-				case "set_output_enable":
-					rval = None
-				case "get_output_enable":
-					rval = self.state.get(["channels", "output_enable"], indices=[args[0]])
-				case _:
-					found = False
-				
-			
-			# If function was found, label as recognized, else check match for general getter or setter
-			if found:
-				adjective = "recognized"
-			else:
-				if "set_" == func_name[:4]:
-					rval = -1
-					adjective = "set_"
-				elif "get_" == func_name[:4]:
-					rval = None
-					adjective = "get_"
-				else:
-					rval = None
-					adjective = "unrecognized"
-				
-			self.debug(f"Dummy responder sending >{protect_str(rval)}< to {adjective} function (>{func_name}<).")
-			return rval
-		except Exception as e:
-			self.error(f"Failed to respond to dummy instruction. ({e})")
-			return None
-	
 	@abstractmethod
 	def set_waveform(self, channel:int, wave:str):
 		self.modify_state(lambda: self.get_waveform(channel), ["channels", "waveform_type"], wave, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_waveform(self, channel:int):
 		return self.modify_state(None, ["channels", "waveform_type"], self._super_hint, indices=[channel])
 	
@@ -133,7 +74,6 @@ class ArbitraryWaveformGenerator(Driver):
 		self.modify_state(lambda: self.get_frequency(channel), ["channels", "frequency"], freq_hz, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_frequency(self, channel:int):
 		return self.modify_state(None, ["channels", "frequency"], self._super_hint, indices=[channel])
 	
@@ -142,7 +82,6 @@ class ArbitraryWaveformGenerator(Driver):
 		self.modify_state(lambda: self.get_amplitude(channel), ["channels", "amplitude"], amplitude_Vpp, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_amplitude(self, channel:int):
 		return self.modify_state(None, ["channels", "amplitude"], self._super_hint, indices=[channel])
 	
@@ -151,7 +90,6 @@ class ArbitraryWaveformGenerator(Driver):
 		self.modify_state(lambda: self.get_offset(channel), ["channels", "offset"], offset_V, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_offset(self, channel:int):
 		return self.modify_state(None, ["channels", "offset"], self._super_hint, indices=[channel])
 	
@@ -160,7 +98,6 @@ class ArbitraryWaveformGenerator(Driver):
 		self.modify_state(lambda: self.get_output_enable(channel), ["channels", "output_enable"], enable, indices=[channel])
 	
 	@abstractmethod
-	@enabledummy
 	def get_output_enable(self, channel:int):
 		return self.modify_state(None, ["channels", "output_enable"], self._super_hint, indices=[channel])
 	
