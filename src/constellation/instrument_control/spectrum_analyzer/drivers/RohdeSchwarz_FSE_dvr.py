@@ -14,8 +14,8 @@ RS_FSE_DRIVER_MAX_READ_LEN = 1073741824
 
 class RohdeSchwarzFSE(SpectrumAnalyzer):
 	
-	def __init__(self, address:str, log:plf.LogPile):
-		super().__init__(address, log, expected_idn="Rohde&Schwarz,FSE") # Example 'Rohde&Schwarz,FSQ-26,200334/026,4.75\n'
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, **kwargs):
+		super().__init__(address, log, relay=relay, expected_idn="Rohde&Schwarz,FSE", **kwargs) # Example 'Rohde&Schwarz,FSQ-26,200334/026,4.75\n'
 		
 		self.trace_lookup = {}
 	

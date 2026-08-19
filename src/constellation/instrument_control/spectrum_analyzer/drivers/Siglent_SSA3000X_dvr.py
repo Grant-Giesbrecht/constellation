@@ -13,7 +13,7 @@ from constellation.instrument_control.spectrum_analyzer.spectrum_analyzer_ctg im
 
 class SiglentSSA3000X(SpectrumAnalyzer):
 	
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=DirectSCPIRelay(), **kwargs):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, **kwargs):
 		super().__init__(address, log, relay=relay, expected_idn="Siglent Technologies,SSA30", **kwargs)
 		
 		self.trace_lookup = {}

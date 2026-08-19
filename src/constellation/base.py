@@ -715,7 +715,11 @@ class Driver(ABC):
 		
 		#TODO: Will be replaced by Relay
 		self.online = False
-		self.relay = relay
+		# Default to a local PyVISA relay, constructed fresh per Driver. This default lives here
+		# rather than in each driver's signature so that (a) a driver can't accidentally share one
+		# relay object between instances via a mutable default argument, and (b) every driver
+		# stays swappable onto a RemoteTextCommandRelayClient just by passing relay=.
+		self.relay = relay if relay is not None else DirectSCPIRelay()
 		
 		# Configure relay with address and log
 		self.relay.configure(self.address, self.log)

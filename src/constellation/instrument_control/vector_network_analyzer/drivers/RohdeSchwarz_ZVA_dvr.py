@@ -9,8 +9,8 @@ import array
 
 class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	
-	def __init__(self, address:str, log:plf.LogPile):
-		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Rohde&Schwarz,ZVA")
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, **kwargs):
+		super().__init__(address, log, relay=relay, expected_idn="Rohde&Schwarz,ZVA", **kwargs)
 		
 		# This translates the string measurement codes defined the the BasicVectorNetworkAnalyzerCtg class
 		# to strings that are understood by the specific instrument model (the ZVA).

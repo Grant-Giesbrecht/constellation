@@ -10,8 +10,8 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 	
 	
 	
-	def __init__(self, address:str, log:plf.LogPile):
-		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Siglent Technologies, SDG2", max_channels=2)
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, **kwargs):
+		super().__init__(address, log, relay=relay, expected_idn="Siglent Technologies, SDG2", max_channels=2, **kwargs)
 	
 	@superreturn
 	def set_waveform(self, channel:int, wave:str):

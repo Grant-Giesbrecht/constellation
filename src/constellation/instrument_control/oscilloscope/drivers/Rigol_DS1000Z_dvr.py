@@ -33,7 +33,7 @@ def _parse_wav_preamble(preamble_str:str):
 
 class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=DirectSCPIRelay(), max_channels:int=4, **kwargs):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, max_channels:int=4, **kwargs):
 		super().__init__(address, log, relay=relay, expected_idn='RIGOL TECHNOLOGIES,DS10', max_channels=max_channels, num_div_horiz=12, num_div_vert=8, **kwargs)
 		
 		# Table to translate mixin constants to SCPI measurement strings

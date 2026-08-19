@@ -41,9 +41,11 @@ class SpectrumAnalyzerState(InstrumentState):
 class SpectrumAnalyzer(Driver):
 	
 	def __init__(self, address:str, log:plf.LogPile, expected_idn:str="", dummy:bool=False, relay:CommandRelay=None, num_traces:int=1, first_trace:int=1, ndiv_horiz:int=8, ndiv_vert:int=8, **kwargs):
-		super().__init__(address, log, expected_idn=expected_idn, dummy=dummy, relay=relay, **kwargs)
-		
-		self.state = SpectrumAnalyzerState(first_trace=first_trace, num_traces=num_traces, ndiv_horiz=ndiv_horiz, ndiv_vert=ndiv_vert, log=log)
+		# State must be built BEFORE super().__init__(), which requires it positionally and
+		# also hands it to discover_mixins(). Building it afterwards left Driver.__init__ with no
+		# state at all, which made every SpectrumAnalyzer driver impossible to construct.
+		_state = SpectrumAnalyzerState(first_trace=first_trace, num_traces=num_traces, ndiv_horiz=ndiv_horiz, ndiv_vert=ndiv_vert, log=log)
+		super().__init__(address, log, relay, _state, expected_idn=expected_idn, dummy=dummy, first_trace_num=first_trace, **kwargs)
 		
 		if self.dummy:
 			self.init_dummy_state()

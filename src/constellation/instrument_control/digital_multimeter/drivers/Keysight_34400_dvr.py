@@ -8,8 +8,8 @@ from constellation.instrument_control.digital_multimeter.digital_multimeter_ctg 
 
 class Keysight34400(DigitalMultimeter):
 	
-	def __init__(self, address:str, log:plf.LogPile, **kwargs):
-		super().__init__(address, log, relay=DirectSCPIRelay(), expected_idn="Keysight Technologies,344", **kwargs) 
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, **kwargs):
+		super().__init__(address, log, relay=relay, expected_idn="Keysight Technologies,344", **kwargs) 
 		
 		# Unit to make sure is matched by returned string
 		self.check_units = ""
