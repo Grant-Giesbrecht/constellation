@@ -548,6 +548,59 @@ All of these are methods calling names that do not exist, or passing wrong argum
 
 ## Priority 12 — state persistence
 
+### OPEN QUESTION — the "instrument data vs. instrument settings" split (needs a decision)
+
+**Status: unresolved. Do not clean up until the design question below is answered** — the three
+vestiges here are all fragments of one abandoned design, and deleting them piecemeal would throw
+away the classification work that a real answer needs.
+
+Three separate mechanisms exist to express "this parameter is measurement *data*, not a *setting*".
+None of them is wired to anything:
+
+1. **`DataEntry` + `Driver.data` — completely dead.** `DataEntry` (`base.py`, holds
+   `update_time` / `value` / `data_hash`) is **never instantiated anywhere in the repo**. The only
+   references are the class definition itself, the `self.data = {}` line in `Driver.__init__`
+   whose comment claims "Each value is a DataEntry instance", and two mentions in prose docs.
+   Verified at runtime: `driver.data` is `{}` after construction and still `{}` after
+   `refresh_data()` — every category's `refresh_data()` writes into `self.state`, never into
+   `self.data`. The real data lives in e.g. `state.channels[1].waveform`. `data_hash` carries its
+   own TODO arguing against itself ("complicated and I'm not sure it's really worth while").
+   *confirmed*
+2. **`InstrumentState.is_data` + `add_param(is_data=True)` — recorded but never consulted.**
+   Five params are flagged across the categories (`Oscilloscope.waveform`, `SpectrumAnalyzer.
+   waveform`, `VNA.data`, `DAQ.last_value_V`, `DAQ.last_acquisition`). The flag has no effect:
+   `waveform` is marked `is_data=True` and still appears 8 times in `state_to_dict()` output.
+   `base.py` already carries the comment `# is_data is not used.`
+   *confirmed*
+3. **`state_to_dict(include_data=...)` / `dump_state(include_data=...)` — dead parameter**, never
+   referenced in either body (see the existing item below).
+
+**The question to answer first:** should measurement data be persisted alongside instrument
+settings at all? Waveforms and traces aren't small, and Constellation now has a labmesh `DataBank`
+that exists precisely to hold bulk datasets. Plausible answers:
+- **(a)** Data never goes in the state file. `include_data` is removed, `is_data` becomes the
+  exclusion filter in `state_to_dict()`, `DataEntry`/`Driver.data` are deleted. Bulk data goes to
+  the databank.
+- **(b)** Data is opt-in via `include_data=True`, implemented using `is_data` as the filter.
+  `DataEntry`/`Driver.data` still deleted (state fields already carry the data).
+- **(c)** Revive `Driver.data` as a genuine separate store with timestamps — the original intent.
+  Highest cost; needs a reason `is_data`-flagged state fields can't serve.
+
+Current lean is (a) or (b): the data already lives in `state`, so `Driver.data` is redundant
+regardless of which persistence rule is chosen — but that is a call to make deliberately, not by
+default.
+
+**Cleanup blocked on that decision:**
+- [ ] Decide (a)/(b)/(c) above.
+- [ ] Then: delete `DataEntry` and `Driver.data` (~15 lines) if the answer is (a) or (b).
+- [ ] Then: audit `is_data` labelling for consistency — it is currently wrong in at least one
+      place. `PowerSupplyChannelState.voltage_meas`/`current_meas` are measurements and are **not**
+      flagged, while `DAQ.last_value_V` is. Whatever the rule turns out to be, the labels have to
+      agree with it before they can drive behavior. *confirmed*
+- [ ] Then: resolve `include_data` (item immediately below) as part of the same change.
+
+---
+
 - [ ] **`state_to_dict(include_data=False)`'s `include_data` parameter is dead** — never
       referenced in the body. `self.data` is never included regardless, contradicting the
       docstring. Decide what it should mean (waveforms aren't small — does data belong in the
