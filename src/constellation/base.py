@@ -587,129 +587,157 @@ class InstrumentState(Serializable):
 		
 		return False
 	
-	def set(self, params:tuple, value, indices:tuple=None, fragment:str=None) -> bool:
-		''' Sets the value. Note that lists of objects MUST be stored
-		in the IndexedList class.
+	def _get_fragment(self, fragment:str, action:str, params:tuple, indices:tuple):
+		''' Looks up a state fragment by name, logging and returning None if it doesn't exist.
+		Shared by set() and get() so their fragment handling can't drift apart. '''
 		
+		if fragment not in self.state_fragments:
+			self.log.error(f"Cannot {action} state. Fragment >{fragment}< not found in >:q{type(self).__name__}<.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)})")
+			return None
 		
+		return self.state_fragments[fragment]
+	
+	def _resolve(self, params:tuple, indices:tuple=None, action:str="access"):
+		''' Walks `params` (descending into IndexedLists via the parallel `indices` tuple) and
+		resolves the final slot it names.
 		
+		This is the single path-resolution routine behind both set() and get(). Any future change to
+		path semantics now happens once, here.
+		
+		Args:
+			params (tuple): Attribute names to walk, outermost first.
+			indices (tuple): Parallel to `params` - indices[i] is used when params[i] resolves to
+				an IndexedList. Entries for non-IndexedList params are ignored and may be None.
+			action (str): Verb used in log messages ("set"/"get"), for readable errors.
+		
+		Returns:
+			tuple: (container, key, is_indexed), or None if the path is invalid (already logged).
+				is_indexed True  -> read/write with container.get_idx_val(key)/set_idx_val(key, v)
+				is_indexed False -> read/write with getattr(container, key)/setattr(...)
 		'''
 		
-		# If a state_fragment is being modified, handle it
-		if fragment is not None:
-			
-			# Validate fragment exists
-			if fragment not in self.state_fragments:
-				self.log.error(f"Cannot set state. Fragment >{fragment}< not found in object >:q{obj_top}<.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
-				return False
-			
-			# Call set on fragment and return result
-			return self.state_fragments[fragment].set(params, value, indices=indices)
+		detail = f"params=({protect_str(params)}), indices=({protect_str(indices)})"
 		
-		obj_under = None # Object one notch lower
-		obj_top = self # Object at top of stack
+		# Guard the empty path. The old implementation left `list_at_top`, `idx` and `obj_under`
+		# unbound here and died with an UnboundLocalError / setattr(None, ...).
+		if params is None or len(params) == 0:
+			self.log.error(f"Cannot {action} state. No parameters were given.", detail=detail)
+			return None
 		
-		# Scan over all params... get top level object
+		obj = self
+		
 		for idx, p in enumerate(params):
 			
+			is_last = (idx == len(params) - 1)
+			
 			# Check that parameter exists
-			if not hasattr(obj_top, p):
-				self.log.error(f"Cannot set state. Parameter >{p}< not found in object >:q{obj_top}<.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)}), value={protect_str(value)}")
-				return False
+			if not hasattr(obj, p):
+				self.log.error(f"Cannot {action} state. Parameter >{p}< not found in >:q{type(obj).__name__}<.", detail=detail)
+				return None
 			
-			# Update object references
-			obj_under = obj_top
-			obj_top = getattr(obj_under, p)
+			parent, obj = obj, getattr(obj, p)
 			
-			# Handle lists
-			list_at_top = False # Indicates if the top level object is an IndexedList
-			if isinstance(obj_top, IndexedList):
-				
-				# Validate that an index exists
-				if indices is None:
-					self.log.error(f"Cannot set state. Required a valid index tuple for indices paramter.")
-					return False
-				if len(indices) < idx+1:
-					self.log.error(f"Cannot set state. Required indices paramter with greater length.")
-					return False
-				if indices[idx] is None:
-					self.log.error(f"Cannot set state. Required indices paramter value not equal to None.")
-					return False
-				
-				# Move into list if not at end of navigating tree
-				if idx != len(params)-1:
-					# Object is a list - shift obj_top to correct item in the list, not the list itself
-					obj_top = obj_top.get_idx_val(indices[idx])
-				else:
-					list_at_top = True
+			# Plain attribute: if it's the last one, that's the slot we want.
+			if not isinstance(obj, IndexedList):
+				if is_last:
+					return (parent, p, False)
+				continue
+			
+			# An IndexedList needs a usable index from the parallel indices tuple.
+			if indices is None or len(indices) <= idx or indices[idx] is None:
+				self.log.error(f"Cannot {action} state. Parameter >{p}< is an IndexedList and requires >indices[{idx}]<.", detail=detail)
+				return None
+			
+			# Validate the index is in range. Previously an out-of-range index raised a raw
+			# KeyError out of set()/get(); now it's logged and reported like every other bad
+			# input on this path, so callers only have one failure mode to handle.
+			try:
+				obj.get_valid_idx(indices[idx])
+			except KeyError as e:
+				self.log.error(f"Cannot {action} state. Index >{indices[idx]}< is out of range for >{p}<. ({e})", detail=detail)
+				return None
+			
+			# The IndexedList slot itself is the target
+			if is_last:
+				return (obj, indices[idx], True)
+			
+			# Otherwise descend into the element it holds
+			nxt = obj.get_idx_val(indices[idx])
+			if nxt is None:
+				self.log.error(f"Cannot {action} state. >{p}< index >{indices[idx]}< is not populated.", detail=detail)
+				return None
+			obj = nxt
 		
-		# Update value of final parameter
-		if list_at_top:
-			obj_top.set_idx_val(indices[idx], value)
-		else:
-			setattr(obj_under, params[-1], value)
+		# Unreachable: the loop always returns on the final param.
+		return None
+	
+	def set(self, params:tuple, value, indices:tuple=None, fragment:str=None) -> bool:
+		''' Writes a value into the state at the path named by `params`/`indices`.
+		
+		Note that lists of objects MUST be stored in the IndexedList class.
+		
+		Args:
+			params (tuple): Attribute names to walk, outermost first.
+			value: Value to store.
+			indices (tuple): Parallel to `params`; see _resolve().
+			fragment (str): Optional state-fragment name to write into instead of this object.
+		
+		Returns:
+			bool: True on success. False (with a logged error) on any invalid path.
+		'''
+		
+		# If a state_fragment is being modified, hand off to it
+		if fragment is not None:
+			frag = self._get_fragment(fragment, "set", params, indices)
+			if frag is None:
+				return False
+			return frag.set(params, value, indices=indices)
+		
+		target = self._resolve(params, indices=indices, action="set")
+		if target is None:
+			return False
+		
+		container, key, is_indexed = target
+		
+		try:
+			if is_indexed:
+				container.set_idx_val(key, value)
+			else:
+				setattr(container, key, value)
+		except Exception as e:
+			self.log.error(f"Cannot set state. Rejected value for {param_idx_to_str(params, indices=indices)}. ({e})", detail=f"value={protect_str(value)}")
+			return False
 		
 		return True
 	
 	def get(self, params:tuple, indices:tuple=None, fragment:str=None):
-		''' Reads a value out of the state by walking `params` (descending into IndexedLists
-		using the parallel `indices` tuple), mirroring set(). Returns None on any invalid path.
+		''' Reads the value at the path named by `params`/`indices`. Mirrors set().
+		
+		Args:
+			params (tuple): Attribute names to walk, outermost first.
+			indices (tuple): Parallel to `params`; see _resolve().
+			fragment (str): Optional state-fragment name to read from instead of this object.
+		
+		Returns:
+			The stored value, or None if the path is invalid (with a logged error).
 		'''
 		
-		# If a state_fragment is being read, hand off to it (mirrors set()'s fragment handling)
+		# If a state_fragment is being read, hand off to it
 		if fragment is not None:
-			
-			# Validate fragment exists
-			if fragment not in self.state_fragments:
-				self.log.error(f"Cannot get state. Fragment >{fragment}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)})")
+			frag = self._get_fragment(fragment, "get", params, indices)
+			if frag is None:
 				return None
-			
-			# Call get on fragment and return result
-			return self.state_fragments[fragment].get(params, indices=indices)
+			return frag.get(params, indices=indices)
 		
-		obj_under = None # Object one notch lower
-		obj_top = self # Object at top of stack
+		target = self._resolve(params, indices=indices, action="get")
+		if target is None:
+			return None
 		
-		# Scan over all params... get top level object
-		for idx, p in enumerate(params):
-			
-			# Check that parameter exists
-			if not hasattr(obj_top, p):
-				self.log.error(f"Cannot get state. Parameter >{p}< not found.", detail=f"params=({protect_str(params)}), indices=({protect_str(indices)})")
-				return None
-			
-			# Update object references
-			obj_under = obj_top
-			obj_top = getattr(obj_under, p)
-			
-			# Handle lists
-			list_at_top = False # Indicates if the top level object is an IndexedList
-			if isinstance(obj_top, IndexedList):
-				
-				# Validate that an index exists
-				if indices is None:
-					self.log.error(f"Cannot get state. Required a valid index tuple for indices paramter.")
-					return None
-				if len(indices) < idx+1:
-					self.log.error(f"Cannot get state. Required indices paramter with greater length.")
-					return None
-				if indices[idx] is None:
-					self.log.error(f"Cannot get state. Required indices paramter value not equal to None.")
-					return None
-				
-				# Move into list if not at end of navigating tree
-				if idx != len(params)-1:
-					# Object is a list - shift obj_top to correct item in the list, not the list itself
-					obj_top = obj_top.get_idx_val(indices[idx])
-				else:
-					list_at_top = True
+		container, key, is_indexed = target
 		
-		# Update value of final parameter
-		if list_at_top:
-			return obj_top.get_idx_val(indices[idx])
-		else:
-			return getattr(obj_under, params[-1])
+		return container.get_idx_val(key) if is_indexed else getattr(container, key)
 	
+
 class DataEntry:
 	''' Used in driver.data to describe a measurement result and its
 	accompanying time.'''
@@ -1218,10 +1246,11 @@ class Driver(ABC):
 			value: Value for parameter being sent to the instrument. This will be used to
 				update the internal state if query_func is None, or if the instrument is in
 				dummy mode or blind_state_update mode. 
-			indices (tuple): Tuple of ints. If N strings are contained in the `param`
-				tuple, indices must contain N-1 ints. indices's first value contains the index for 
-				the first param, assuming it's an IndexedList. If it is not, pass None for that
-				value in indices.
+			indices (tuple): Tuple of ints, PARALLEL to `params` - indices[i] is used when
+				params[i] resolves to an IndexedList, and is ignored (pass None) otherwise. It
+				only needs to be long enough to cover the deepest IndexedList in the path.
+				(An earlier version of this docstring said N-1 ints for N params; that was
+				wrong - the tuples are index-aligned, not offset.)
 			
 		Returns:
 			value, or result of query_func if provided.

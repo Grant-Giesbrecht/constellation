@@ -17,7 +17,7 @@ from constellation.relay import DirectSCPIRelay, VICPDirectSCPIRelay, CommandRel
 from constellation.all import (RigolDS1000Z as _RZ, SiglentSSA3000X, RigolDP832, SiglentSDM3000X,
 	Keysight34400, Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE,
 	DigitalMultimeter)
-from constellation.instrument_control.oscilloscope.oscilloscope_ctg import Oscilloscope
+from constellation.instrument_control.oscilloscope.oscilloscope_ctg import Oscilloscope, OscilloscopeChannelState
 from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000Z_dvr import RigolDS1000Z
 
 def make_log():
@@ -107,12 +107,8 @@ def test_instrumentstate_set_missing_param_returns_false_not_raise():
 	assert s.set(["does_not_exist"], 1.0) is False
 	assert s.get(["does_not_exist"]) is None
 
-@pytest.mark.xfail(strict=True, reason=(
-	"BUG: InstrumentState.set() references the local variable `obj_top` in its error message "
-	"for an unrecognized `fragment` name before `obj_top` is ever assigned (that assignment only "
-	"happens later, in the non-fragment code path). This raises UnboundLocalError instead of "
-	"logging an error and returning False like every other invalid-input path in set()/get()."
-))
+# FIXED: set()/get() now share _resolve() and _get_fragment(); the fragment error no
+# longer references an unassigned local.
 def test_instrumentstate_set_bad_fragment_fails_gracefully():
 	s = _DemoState(log=make_log())
 	result = s.set(["volt"], 1.0, fragment="no_such_fragment")
@@ -690,3 +686,98 @@ def test_no_driver_assigns_super_hint_directly():
 			if re.match(r'\s*self\._super_hint\s*=', line):
 				offenders.append(f"{f.name}:{i}")
 	assert offenders == [], f"drivers must `return` their value, not assign _super_hint: {offenders}"
+
+# ---------------------------------------------------------------------------
+# InstrumentState path resolution (_resolve, shared by set() and get())
+# ---------------------------------------------------------------------------
+
+def _state():
+	return make_dummy_osc().state
+
+# --- happy paths ---------------------------------------------------------------------
+
+def test_resolve_scalar_roundtrip():
+	st = _state()
+	assert st.set(["div_time"], 0.5) is True
+	assert st.get(["div_time"]) == 0.5
+
+def test_resolve_indexed_roundtrip():
+	st = _state()
+	assert st.set(["channels", "div_volt"], 0.25, indices=[2]) is True
+	assert st.get(["channels", "div_volt"], indices=[2]) == 0.25
+	# other channels untouched
+	assert st.get(["channels", "div_volt"], indices=[3]) != 0.25
+
+def test_resolve_fragment_roundtrip():
+	st = _state()
+	assert st.set(["show_stat_table"], True, fragment="measurements") is True
+	assert st.get(["show_stat_table"], fragment="measurements") is True
+
+def test_resolve_whole_indexedlist_slot():
+	""" A path ending ON an IndexedList addresses the slot itself, not an attribute of it. """
+	st = _state()
+	chan = st.get(["channels"], indices=[1])
+	assert isinstance(chan, OscilloscopeChannelState)
+
+	replacement = OscilloscopeChannelState(log=make_log())
+	replacement.div_volt = 9.9
+	assert st.set(["channels"], replacement, indices=[1]) is True
+	assert st.get(["channels", "div_volt"], indices=[1]) == 9.9
+
+# --- error paths: every one returns cleanly, none raise ---------------------------------
+
+@pytest.mark.parametrize("desc,params,indices,fragment", [
+	("empty params",               [],                        None,   None),
+	("unknown top-level param",    ["nope"],                  None,   None),
+	("unknown nested param",       ["channels", "bogus"],     [1],    None),
+	("IndexedList with no index",  ["channels", "div_volt"],  None,   None),
+	("indices too short",          ["channels", "div_volt"],  [],     None),
+	("index is None",              ["channels", "div_volt"],  [None], None),
+	("index out of range",         ["channels", "div_volt"],  [99],   None),
+	("unknown fragment",           ["show_stat_table"],       None,   "nope"),
+])
+def test_resolve_bad_paths_do_not_raise(desc, params, indices, fragment):
+	""" set() must return False and get() must return None for every invalid path - never raise.
+	Before _resolve() unified them, an empty params tuple and an unrecognized fragment both
+	raised UnboundLocalError, and an out-of-range index raised a bare KeyError. """
+	st = _state()
+	assert st.set(params, 1, indices=indices, fragment=fragment) is False
+	assert st.get(params, indices=indices, fragment=fragment) is None
+
+def test_resolve_bad_path_leaves_state_untouched():
+	st = _state()
+	st.set(["channels", "div_volt"], 0.5, indices=[1])
+	assert st.set(["channels", "div_volt"], 7.7, indices=[99]) is False
+	assert st.get(["channels", "div_volt"], indices=[1]) == 0.5
+
+def test_resolve_unpopulated_indexedlist_element_is_reported():
+	""" Descending THROUGH an unpopulated slot is an error, not a crash. """
+	st = _state()
+	st.channels.clear()
+	assert st.set(["channels", "div_volt"], 1.0, indices=[1]) is False
+	assert st.get(["channels", "div_volt"], indices=[1]) is None
+
+def test_set_and_get_agree_on_what_is_a_valid_path():
+	""" The whole point of sharing _resolve(): set() and get() cannot disagree about which
+	paths are legal. """
+	st = _state()
+	paths = [
+		(["div_time"], None, None),
+		(["channels", "div_volt"], [2], None),
+		(["show_stat_table"], None, "measurements"),
+		(["nope"], None, None),
+		(["channels", "div_volt"], [99], None),
+		([], None, None),
+		(["x"], None, "nope"),
+	]
+	for params, indices, fragment in paths:
+		set_ok = st.set(params, 1, indices=indices, fragment=fragment)
+		get_val = st.get(params, indices=indices, fragment=fragment)
+		# set succeeded <=> get resolved the path
+		assert set_ok == (get_val is not None), f"disagreement on {params} / {indices} / {fragment}"
+
+def test_set_rejects_a_value_the_indexedlist_type_check_refuses():
+	""" IndexedList.validate_type raises TypeError; set() reports it rather than propagating. """
+	st = _state()
+	assert st.set(["channels"], "not a channel state", indices=[1]) is False
+	assert isinstance(st.get(["channels"], indices=[1]), OscilloscopeChannelState)

@@ -15,7 +15,8 @@ Test env note: the repo's deps (`pylogfile`, `stardust`, `labmesh`) are installe
 Run tests with that interpreter: `.../3.14/bin/python3 -m pytest tests/ -q`
 (baseline when this list was written: 34 passed, 10 xfailed; after the P1/P2 pass: 58 passed, 9 xfailed;
 after the P3 pass: 87 passed, 5 xfailed;
-after the P4 pass: **95 passed, 5 xfailed**).
+after the P4 pass: 95 passed, 5 xfailed;
+after the P5 pass: **112 passed, 4 xfailed**).
 
 ---
 
@@ -231,21 +232,56 @@ value translation, the stale-hint regression, subclass-no-recursion (asserting a
 which would have been ~1000), subclass state tracking, SCPI still being emitted, metadata
 preservation, and a guard rail asserting no driver assigns `_super_hint` directly.
 
-## Priority 5 — `InstrumentState.set()` / `get()`
+## Priority 5 — `InstrumentState.set()` / `get()` — **DONE**
 
-- [ ] **Unify behind one private `_resolve(params, indices, fragment)` helper.** `set()` and
+- [x] **Unify behind one private `_resolve(params, indices, fragment)` helper.** `set()` and
       `get()` are copy-paste twins that have already drifted; a shared resolver makes further
       drift structurally impossible.
-- [ ] **`set(..., fragment=X)` raises `UnboundLocalError` for an unknown fragment** — the error
+- [x] **`set(..., fragment=X)` raises `UnboundLocalError` for an unknown fragment** — the error
       message interpolates `obj_top` before it's assigned, instead of logging and returning `False`.
       *confirmed — `docs/dummy_and_state_review.md` bug #2*
 - [x] **`get()` has no `fragment=` parameter** at all, unlike `set()`. (Done early — the P3
       dummy read-back path required it. The full `_resolve()` unification is still open.) No way to read a
       state-fragment value back through the top-level API.
       *confirmed — `docs/dummy_and_state_review.md` bug #3*
-- [ ] Both leave `list_at_top` unbound if `params` is empty, and both reference the loop variable
+- [x] Both leave `list_at_top` unbound if `params` is empty, and both reference the loop variable
       `idx` after the loop body.
       *static*
+
+### Outcome
+
+`set()` and `get()` are now three-line wrappers over two shared helpers, `_resolve()` and
+`_get_fragment()`. 123 lines of duplicated walk became 152 lines with the duplication gone (the
+growth is docstrings and the error handling the old copies lacked). `_resolve()` returns a
+`(container, key, is_indexed)` triple, so both callers agree by construction on which paths are
+legal — the drift class that produced these bugs is now structurally impossible.
+
+Behavior changes, each verified against the pre-change code rather than assumed:
+
+| Case | Before | After |
+|---|---|---|
+| `set([], v)` / `get([])` — empty path | `UnboundLocalError` | `False` / `None`, logged |
+| `set(..., fragment="nope")` | `UnboundLocalError` | `False`, logged |
+| index out of range | raw `KeyError` propagated | `False` / `None`, logged |
+| descending through an unpopulated slot | misleading "Parameter not found" | names the slot and index |
+| value rejected by `IndexedList.validate_type` | `TypeError` propagated | `False`, logged |
+| everything else | unchanged | unchanged |
+
+The `KeyError`/`TypeError` → logged-return change makes this path have exactly one failure mode
+instead of three. Checked that nothing depended on the exceptions propagating: there is no
+`except KeyError` anywhere in `src/`, `examples/` or `tests/` other than the one now inside
+`_resolve()` itself.
+
+Also corrected `modify_state()`'s docstring, which claimed `indices` holds N-1 ints for N params.
+It doesn't — the tuples are **parallel**: `indices[i]` applies to `params[i]` when that param is an
+IndexedList. Demonstrated: `set(["channels","div_volt"], v, indices=[3])` (2 params, 1 index)
+resolves correctly.
+
+Tests: **112 passed, 4 xfailed** (from 95/5). One more `xfail(strict=True)` XPASSed and was
+removed. New coverage: happy paths for scalar/indexed/fragment/whole-slot access, a parametrized
+sweep of 8 invalid paths asserting neither method raises, state-left-untouched on failure,
+unpopulated-element reporting, type-rejection, and `test_set_and_get_agree_on_what_is_a_valid_path`
+which asserts the two methods accept exactly the same path set.
 
 ## Priority 6 — IndexedList
 
