@@ -1,4 +1,6 @@
 import pylogfile.base as plf
+import base64
+import struct
 from abc import abstractmethod
 from pyvicp import Client
 import pyvisa as pv
@@ -72,6 +74,24 @@ class CommandRelay:
 			tuple: Element 0 = success status, element 1 = list of decoded values.
 		'''
 		raise NotImplementedError(f"{type(self).__name__} does not support query_binary().")
+
+	def write_binary(self, cmd:str, values:list, datatype:str='B'):
+		''' Optional capability: writes a SCPI command followed by an IEEE 488.2 definite-length
+		binary block (#<n><count><bytes>). The inverse of query_binary(), and the practical way to
+		push bulk data *to* an instrument - e.g. loading an arbitrary waveform into an AWG, where
+		sending the same points as comma-separated ASCII would be several times larger and much
+		slower.
+
+		Args:
+			cmd (str): SCPI command the block is attached to (e.g. ":WVDT WVNM,wave1,WAVEDATA,").
+			values (list): Data points to send.
+			datatype (str): struct format character for each data point (PyVISA convention -
+				'B' for unsigned byte, 'h' for signed 16-bit, etc.).
+
+		Returns:
+			bool: Success status of the write.
+		'''
+		raise NotImplementedError(f"{type(self).__name__} does not support write_binary().")
 
 class VICPDirectSCPIRelay(CommandRelay):
 	''' A relay that directly connects to instruments via VICP and relays
@@ -155,7 +175,33 @@ class VICPDirectSCPIRelay(CommandRelay):
 			return False, ""
 		
 		return True, rv
-	
+
+	def write_binary(self, cmd:str, values:list, datatype:str='B') -> bool:
+		''' Writes a binary block over VICP. pyvicp has no equivalent of PyVISA's
+		write_binary_values(), so the IEEE 488.2 definite-length header is built here:
+		'#' + <number of digits in the count> + <count> + <payload bytes>.
+
+		Args:
+			cmd (str): SCPI command the block is attached to.
+			values (list): Data points to send.
+			datatype (str): struct format character per data point.
+
+		Returns:
+			bool: Success status of the write.
+		'''
+
+		try:
+			payload = struct.pack(f"<{len(values)}{datatype}", *values)
+			count = str(len(payload))
+			header = f"{cmd}#{len(count)}{count}".encode()
+			self.inst.send(header + payload)
+			self.log.lowdebug(f"VICPDirectSCPIRelay wrote binary block to instrument: >:a{len(values)} values<.")
+		except Exception as e:
+			self.log.error(f"VICPDirectSCPIRelay failed to write binary block to instrument {self.address}. ({e})")
+			return False
+
+		return True
+
 class DirectSCPIRelay(CommandRelay):
 	''' A relay that directly connects to instruments via PyVisa and relays
 	SCPI commands from a driver.
@@ -279,6 +325,30 @@ class DirectSCPIRelay(CommandRelay):
 
 		return True, rv
 
+	def write_binary(self, cmd:str, values:list, datatype:str='B') -> bool:
+		''' Writes a binary block via PyVISA's write_binary_values(), which builds the IEEE
+		488.2 block header for us.
+
+		Args:
+			cmd (str): SCPI command the block is attached to.
+			values (list): Data points to send.
+			datatype (str): struct format character per data point (PyVISA convention).
+
+		Returns:
+			bool: Success status of the write.
+		'''
+
+		try:
+			# is_big_endian=False matches the little-endian convention used across the network
+			# relay, so a block reads back identically whether it was sent locally or remotely.
+			self.inst.write_binary_values(cmd, values, datatype=datatype, is_big_endian=False)
+			self.log.lowdebug(f"DirectSCPIRelay wrote binary block to instrument: >:a{len(values)} values<.")
+		except Exception as e:
+			self.log.error(f"DirectSCPIRelay failed to write binary block to instrument {self.address}. ({e})")
+			return False
+
+		return True
+
 class RemoteTextCommandRelayClient(CommandRelay):
 	''' A CommandRelay that tunnels write/read/query calls over labmesh to a remote
 	instrument-adjacent process (a RemoteTextCommandRelayListener wrapped in a
@@ -292,13 +362,19 @@ class RemoteTextCommandRelayClient(CommandRelay):
 	only thing that changes between local and networked use.
 	'''
 
-	def __init__(self, broker_address:str="127.0.0.1", broker_rpc:str="tcp://BROKER:5750", broker_xpub:str="tcp://BROKER:5752", timeout_s:float=10.0):
+	def __init__(self, broker_address:str="127.0.0.1", broker_rpc:str="tcp://BROKER:5750", broker_xpub:str="tcp://BROKER:5752", timeout_s:float=10.0, binary_timeout_s:float=60.0):
 		super().__init__()
 
 		self.broker_address = broker_address
 		self.broker_rpc = broker_rpc
 		self.broker_xpub = broker_xpub
 		self.timeout_s = timeout_s
+		# Binary block reads get their own, much longer timeout. A full-memory :WAV:DATA? chunk
+		# was confirmed against real hardware to take 15-20+ seconds, and DirectSCPIRelay allows
+		# 30s for exactly that reason - so the 10s text timeout would abandon the RPC while the
+		# instrument was still legitimately transferring, and the caller would see an empty
+		# waveform rather than a slow one.
+		self.binary_timeout_s = binary_timeout_s
 
 		self.director = None
 		self.relay_client = None
@@ -329,14 +405,20 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		self._loop_thread.start()
 		ready.wait()
 
-	def _run(self, coro):
+	def _run(self, coro, timeout_s:float=None):
 		''' Runs a coroutine on this relay's background event loop and blocks until it
 		completes. This is the sync-to-async bridge between Driver's synchronous
-		write/read/query and labmesh's async RelayClient.call(). '''
+		write/read/query and labmesh's async RelayClient.call().
+
+		Args:
+			coro: Coroutine to run.
+			timeout_s (float): Optional override of self.timeout_s, for operations that are
+				legitimately slower than a text query (see query_binary).
+		'''
 
 		self._ensure_loop()
 		future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-		return future.result(self.timeout_s)
+		return future.result(self.timeout_s if timeout_s is None else timeout_s)
 
 	def connect(self) -> bool:
 		''' Connects to the broker and resolves this relay's `address` (set via configure(),
@@ -434,6 +516,96 @@ class RemoteTextCommandRelayClient(CommandRelay):
 			self.log.error(f"RemoteTextCommandRelayClient failed to query via relay >{self.address}<. ({e})")
 			return False, ""
 
+	def query_binary(self, cmd:str, datatype:str='B') -> tuple:
+		''' Queries a binary block from the instrument via the remote relay.
+
+		The block crosses the mesh as base64 rather than as a JSON list of numbers: a
+		full-memory waveform is hundreds of thousands of points, which as JSON text is roughly
+		3x the size of base64 and far slower to parse on both ends. The listener packs the
+		decoded values little-endian with the same `datatype`, so this is byte-exact regardless
+		of the two hosts' native endianness.
+
+		Args:
+			cmd (str): SCPI query command (e.g. ":WAV:DATA?").
+			datatype (str): struct format character per data point (PyVISA convention).
+
+		Returns:
+			tuple: Element 0 = success status, element 1 = list of decoded values.
+		'''
+
+		if self.relay_client is None:
+			self.log.error(f"RemoteTextCommandRelayClient cannot query_binary - not connected.")
+			return False, []
+
+		try:
+			ok, payload = self._run(
+				self.relay_client.call("query_binary", {"cmd": cmd, "datatype": datatype}),
+				timeout_s=self.binary_timeout_s,
+			)
+		except Exception as e:
+			self.log.error(f"RemoteTextCommandRelayClient failed to query_binary via relay >{self.address}<. ({e})")
+			return False, []
+
+		if not ok:
+			self.log.error(f"RemoteTextCommandRelayClient: remote relay >{self.address}< reported failure for query_binary.")
+			return False, []
+
+		try:
+			raw = base64.b64decode(payload)
+			item_size = struct.calcsize(f"<{datatype}")
+			if item_size == 0 or len(raw) % item_size != 0:
+				raise ValueError(f"{len(raw)} bytes is not a whole number of '{datatype}' items")
+			values = list(struct.unpack(f"<{len(raw)//item_size}{datatype}", raw))
+		except Exception as e:
+			self.log.error(f"RemoteTextCommandRelayClient failed to decode binary block from relay >{self.address}<. ({e})")
+			return False, []
+
+		self.log.lowdebug(f"RemoteTextCommandRelayClient read binary block via relay: >:a{len(values)} values<")
+		return True, values
+
+	def write_binary(self, cmd:str, values:list, datatype:str='B') -> bool:
+		''' Sends a binary block to the instrument via the remote relay.
+
+		Mirrors query_binary(): the payload is packed little-endian with `datatype` and base64'd,
+		because labmesh's RPC envelope is strictly JSON (labmesh.util.dumps/loads are
+		json.dumps/json.loads) and JSON has no bytes type. Sending the points as a JSON number
+		list instead would be roughly 3x larger on the wire.
+
+		Uses binary_timeout_s rather than the text timeout - pushing a full arbitrary waveform
+		into an AWG is the same order of transfer as reading one back off a scope.
+
+		Args:
+			cmd (str): SCPI command the block is attached to.
+			values (list): Data points to send.
+			datatype (str): struct format character per data point.
+
+		Returns:
+			bool: Success status of the write.
+		'''
+
+		if self.relay_client is None:
+			self.log.error(f"RemoteTextCommandRelayClient cannot write_binary - not connected.")
+			return False
+
+		try:
+			payload = base64.b64encode(struct.pack(f"<{len(values)}{datatype}", *values)).decode("ascii")
+		except Exception as e:
+			self.log.error(f"RemoteTextCommandRelayClient failed to pack {len(values)} values as '{datatype}'. ({e})")
+			return False
+
+		try:
+			ok = self._run(
+				self.relay_client.call("write_binary", {"cmd": cmd, "payload": payload, "datatype": datatype}),
+				timeout_s=self.binary_timeout_s,
+			)
+		except Exception as e:
+			self.log.error(f"RemoteTextCommandRelayClient failed to write_binary via relay >{self.address}<. ({e})")
+			return False
+
+		if ok:
+			self.log.lowdebug(f"RemoteTextCommandRelayClient wrote binary block via relay: >:a{len(values)} values<")
+		return bool(ok)
+
 class RemoteTextCommandRelayListener:
 	''' Wraps a local CommandRelay (DirectSCPIRelay or VICPDirectSCPIRelay) and exposes plain
 	synchronous write/read/query/connect/close methods - this is the object handed to
@@ -472,3 +644,71 @@ class RemoteTextCommandRelayListener:
 	def query(self, cmd:str) -> list:
 		''' Returns [success:bool, value:str] - see read(). '''
 		return list(self.local_relay.query(cmd))
+
+	def query_binary(self, cmd:str, datatype:str='B') -> list:
+		''' Reads a binary block from the instrument and returns it as
+		[success:bool, base64_str] so it can cross the mesh as JSON.
+
+		The local relay hands back already-decoded values; those are re-packed little-endian
+		with the same `datatype` and base64'd. Explicit little-endian (rather than native byte
+		order) means the bench machine and the controlling machine don't have to share an
+		architecture.
+
+		Returns [False, ""] if the local relay can't do binary reads at all - VICPDirectSCPIRelay
+		doesn't implement query_binary, and that must surface as a clean failure here rather than
+		as an unhandled NotImplementedError inside the RelayAgent.
+		'''
+
+		try:
+			ok, values = self.local_relay.query_binary(cmd, datatype=datatype)
+		except NotImplementedError as e:
+			self.log.error(f"RemoteTextCommandRelayListener: local relay does not support query_binary. ({e})")
+			return [False, ""]
+		except Exception as e:
+			self.log.error(f"RemoteTextCommandRelayListener failed to query binary block. ({e})")
+			return [False, ""]
+
+		if not ok:
+			return [False, ""]
+
+		try:
+			packed = struct.pack(f"<{len(values)}{datatype}", *values)
+		except Exception as e:
+			self.log.error(f"RemoteTextCommandRelayListener failed to pack {len(values)} values as '{datatype}'. ({e})")
+			return [False, ""]
+
+		self.log.lowdebug(f"RemoteTextCommandRelayListener relaying binary block: >:a{len(values)} values, {len(packed)} bytes<")
+		return [True, base64.b64encode(packed).decode("ascii")]
+
+	def write_binary(self, cmd:str, payload:str, datatype:str='B') -> bool:
+		''' Decodes a base64 binary block from the client and hands it to the local relay.
+
+		Note the signature differs from CommandRelay.write_binary(): this takes the base64
+		`payload` string that crossed the network, not a list of values, because that is what the
+		RPC actually carries. The client packs, this unpacks.
+
+		Returns False if the local relay can't do binary writes at all, rather than letting a
+		NotImplementedError escape into the RelayAgent.
+		'''
+
+		try:
+			raw = base64.b64decode(payload)
+			item_size = struct.calcsize(f"<{datatype}")
+			if item_size == 0 or len(raw) % item_size != 0:
+				raise ValueError(f"{len(raw)} bytes is not a whole number of '{datatype}' items")
+			values = list(struct.unpack(f"<{len(raw)//item_size}{datatype}", raw))
+		except Exception as e:
+			self.log.error(f"RemoteTextCommandRelayListener failed to decode binary block. ({e})")
+			return False
+
+		try:
+			ok = self.local_relay.write_binary(cmd, values, datatype=datatype)
+		except NotImplementedError as e:
+			self.log.error(f"RemoteTextCommandRelayListener: local relay does not support write_binary. ({e})")
+			return False
+		except Exception as e:
+			self.log.error(f"RemoteTextCommandRelayListener failed to write binary block. ({e})")
+			return False
+
+		self.log.lowdebug(f"RemoteTextCommandRelayListener relayed binary block to instrument: >:a{len(values)} values<")
+		return bool(ok)

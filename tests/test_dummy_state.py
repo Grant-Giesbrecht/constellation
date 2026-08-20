@@ -886,3 +886,270 @@ def test_get_all_waveforms_works_for_a_driver_without_kwargs():
 	waves = osc.get_all_waveforms()
 	assert len(waves) > 0
 	assert all(w is not None for w in waves)
+
+# ---------------------------------------------------------------------------
+# query_binary across the network relay boundary
+# ---------------------------------------------------------------------------
+
+import base64 as _base64
+import struct as _struct
+import types as _types
+from constellation.relay import RemoteTextCommandRelayClient, RemoteTextCommandRelayListener
+
+class _BinaryCapableRelay(CommandRelay):
+	""" Local relay standing in for pyvisa, returning a known list of values. """
+
+	def __init__(self, values):
+		super().__init__()
+		self.values = values
+
+	def connect(self): return True
+	def close(self): pass
+	def write(self, cmd): return True
+	def read(self): return True, ""
+	def query(self, cmd): return True, "x"
+	def query_binary(self, cmd, datatype='B'): return True, list(self.values)
+
+class _NoBinaryRelay(_BinaryCapableRelay):
+	""" Mimics VICPDirectSCPIRelay, which has no binary support. """
+	def query_binary(self, cmd, datatype='B'):
+		raise NotImplementedError("this relay does not support query_binary()")
+
+class _LoopbackBinaryClient(RemoteTextCommandRelayClient):
+	""" A RemoteTextCommandRelayClient whose RPC goes straight into a listener instead of over
+	the broker, so the encode/decode contract can be exercised with no live mesh. """
+
+	def __init__(self, listener):
+		super().__init__()
+		self.listener = listener
+		# stand in for the labmesh RelayClient
+		self.relay_client = _types.SimpleNamespace(
+			call=lambda name, kw: getattr(self.listener, name)(**kw))
+
+	def _run(self, coro, timeout_s=None):
+		return coro          # the "coroutine" is already the listener's return value
+
+def _binary_pair(values):
+	log = make_log()
+	listener = RemoteTextCommandRelayListener("addr", log, local_relay=_BinaryCapableRelay(values))
+	client = _LoopbackBinaryClient(listener)
+	client.configure("relay-1", log)
+	return client
+
+@pytest.mark.parametrize("datatype,values", [
+	("B", [0, 1, 127, 255] * 3),                 # unsigned bytes - the Rigol's format
+	("h", [-32768, -1, 0, 1, 32767]),            # signed 16-bit, exercises sign handling
+	("i", [-(2**31), 0, 2**31 - 1]),             # signed 32-bit
+	("B", []),                                   # empty block
+], ids=["byte", "int16", "int32", "empty"])
+def test_query_binary_roundtrips_exactly(datatype, values):
+	""" Regression: RemoteTextCommandRelayClient had no query_binary at all, so the base class
+	raised NotImplementedError, Driver.query_binary swallowed it, and every waveform captured
+	over labmesh came back as [] - silently, since binary=True is get_waveform()'s default. """
+	client = _binary_pair(values)
+	ok, got = client.query_binary(":WAV:DATA?", datatype=datatype)
+	assert ok is True
+	assert got == values
+
+def test_query_binary_roundtrips_floats():
+	client = _binary_pair([1.5, -2.25, 0.0, 1024.0])
+	ok, got = client.query_binary(":WAV:DATA?", datatype="f")
+	assert ok is True
+	assert got == pytest.approx([1.5, -2.25, 0.0, 1024.0])
+
+def test_query_binary_roundtrips_a_full_size_waveform():
+	""" 250k points is the DS1000Z's max single-chunk transfer, i.e. the realistic worst case. """
+	values = [i % 256 for i in range(250000)]
+	client = _binary_pair(values)
+	ok, got = client.query_binary(":WAV:DATA?", datatype="B")
+	assert ok is True
+	assert got == values
+
+def test_query_binary_is_endian_explicit():
+	""" The payload must be little-endian regardless of host byte order, so a bench machine and
+	a controlling machine of different architectures interoperate. """
+	values = [1, 256, 65535]
+	listener = RemoteTextCommandRelayListener("addr", make_log(),
+	                                          local_relay=_BinaryCapableRelay(values))
+	ok, payload = listener.query_binary(":WAV:DATA?", datatype="H")
+	assert ok is True
+	assert _base64.b64decode(payload) == _struct.pack("<3H", *values)
+
+def test_query_binary_fails_cleanly_when_local_relay_cannot():
+	""" A VICP relay has no binary support; that must surface as a clean failure rather than an
+	unhandled NotImplementedError inside the RelayAgent. """
+	listener = RemoteTextCommandRelayListener("addr", make_log(), local_relay=_NoBinaryRelay([]))
+	assert listener.query_binary(":WAV:DATA?") == [False, ""]
+
+def test_query_binary_client_reports_failure_without_raising():
+	log = make_log()
+	listener = RemoteTextCommandRelayListener("addr", log, local_relay=_NoBinaryRelay([]))
+	client = _LoopbackBinaryClient(listener)
+	client.configure("relay-1", log)
+	assert client.query_binary(":WAV:DATA?") == (False, [])
+
+def test_query_binary_client_rejects_a_corrupt_payload():
+	""" A truncated block must be reported, not silently decoded into garbage. """
+	log = make_log()
+	listener = RemoteTextCommandRelayListener("addr", log,
+	                                          local_relay=_BinaryCapableRelay([1, 2, 3]))
+	client = _LoopbackBinaryClient(listener)
+	client.configure("relay-1", log)
+	# 3 bytes is not a whole number of int32s
+	client.relay_client = _types.SimpleNamespace(
+		call=lambda name, kw: [True, _base64.b64encode(b"\x01\x02\x03").decode()])
+	assert client.query_binary(":WAV:DATA?", datatype="i") == (False, [])
+
+def test_query_binary_uses_a_longer_timeout_than_text():
+	""" A full-memory :WAV:DATA? chunk can legitimately take 15-20+ s (DirectSCPIRelay allows
+	30 s for it), so the 10 s text timeout would abandon the transfer mid-flight. """
+	client = RemoteTextCommandRelayClient()
+	assert client.binary_timeout_s > client.timeout_s
+	assert client.binary_timeout_s >= 30.0
+
+# ---------------------------------------------------------------------------
+# write_binary: pushing bulk data TO an instrument (e.g. an AWG waveform)
+# ---------------------------------------------------------------------------
+
+class _BinaryWriteCapture(CommandRelay):
+	""" Records what write_binary() hands to the local relay. """
+
+	def __init__(self):
+		super().__init__()
+		self.received = None
+
+	def connect(self): return True
+	def close(self): pass
+	def write(self, cmd): return True
+	def read(self): return True, ""
+	def query(self, cmd): return True, ""
+
+	def write_binary(self, cmd, values, datatype='B'):
+		self.received = (cmd, list(values), datatype)
+		return True
+
+class _FakeVisaInst:
+	""" Stands in for a pyvisa Resource for write_binary_values(). """
+
+	def __init__(self):
+		self.calls = []
+
+	def write_binary_values(self, cmd, values, datatype='B', is_big_endian=False):
+		self.calls.append({"cmd": cmd, "values": list(values),
+		                   "datatype": datatype, "is_big_endian": is_big_endian})
+
+def test_direct_relay_write_binary_forwards_to_pyvisa():
+	relay = DirectSCPIRelay()
+	relay.configure("addr", make_log())
+	relay.inst = _FakeVisaInst()
+
+	assert relay.write_binary(":WVDT ", [1, 2, 250], datatype="B") is True
+	call = relay.inst.calls[0]
+	assert call["values"] == [1, 2, 250]
+	assert call["datatype"] == "B"
+	# must match the little-endian convention the network relay uses, so a block behaves the
+	# same whether it was sent locally or over the mesh
+	assert call["is_big_endian"] is False
+
+def test_direct_relay_write_binary_reports_failure():
+	class Boom(_FakeVisaInst):
+		def write_binary_values(self, *a, **k): raise RuntimeError("instrument said no")
+	relay = DirectSCPIRelay()
+	relay.configure("addr", make_log())
+	relay.inst = Boom()
+	assert relay.write_binary(":WVDT ", [1], datatype="B") is False
+
+def test_vicp_relay_builds_an_ieee_definite_length_header():
+	""" pyvicp has no write_binary_values(), so the #<ndigits><count> header is built by hand. """
+	relay = VICPDirectSCPIRelay()
+	relay.configure("addr", make_log())
+
+	class FakeVicp:
+		def __init__(self): self.sent = b""
+		def send(self, b): self.sent += b
+	relay.inst = FakeVicp()
+
+	assert relay.write_binary("C1:WF ", [1, 2, 3], datatype="B") is True
+	# 3 payload bytes -> count "3" is 1 digit -> "#13"
+	assert relay.inst.sent == b"C1:WF #13\x01\x02\x03"
+
+def test_vicp_header_digit_count_scales():
+	relay = VICPDirectSCPIRelay()
+	relay.configure("addr", make_log())
+	class FakeVicp:
+		def __init__(self): self.sent = b""
+		def send(self, b): self.sent += b
+	relay.inst = FakeVicp()
+
+	relay.write_binary("C1:WF ", [0] * 1234, datatype="B")
+	# 1234 bytes -> count "1234" is 4 digits -> "#41234"
+	assert relay.inst.sent.startswith(b"C1:WF #41234")
+
+def _write_binary_pair():
+	log = make_log()
+	capture = _BinaryWriteCapture()
+	listener = RemoteTextCommandRelayListener("addr", log, local_relay=capture)
+	client = _LoopbackBinaryClient(listener)
+	client.configure("relay-1", log)
+	return client, capture
+
+@pytest.mark.parametrize("datatype,values", [
+	("B", [0, 1, 127, 255]),
+	("h", [-32768, -1, 0, 32767]),
+	("i", [-(2**31), 0, 2**31 - 1]),
+	("B", []),
+], ids=["byte", "int16", "int32", "empty"])
+def test_write_binary_crosses_the_network_exactly(datatype, values):
+	client, capture = _write_binary_pair()
+	assert client.write_binary(":ARB:DATA ", values, datatype=datatype) is True
+	cmd, got, dt = capture.received
+	assert cmd == ":ARB:DATA "
+	assert got == values
+	assert dt == datatype
+
+def test_write_binary_crosses_the_network_for_a_full_waveform():
+	client, capture = _write_binary_pair()
+	values = [i % 256 for i in range(250000)]
+	assert client.write_binary(":ARB:DATA ", values, datatype="B") is True
+	assert capture.received[1] == values
+
+def test_write_binary_fails_cleanly_when_local_relay_cannot():
+	""" A relay with no binary-write support must surface as False, not an unhandled
+	NotImplementedError inside the RelayAgent. """
+	class NoBinaryWrite(_BinaryWriteCapture):
+		def write_binary(self, cmd, values, datatype='B'):
+			raise NotImplementedError("no binary write here")
+	listener = RemoteTextCommandRelayListener("addr", make_log(), local_relay=NoBinaryWrite())
+	payload = _base64.b64encode(_struct.pack("<3B", 1, 2, 3)).decode()
+	assert listener.write_binary(":ARB:DATA ", payload, datatype="B") is False
+
+def test_write_binary_listener_rejects_a_corrupt_payload():
+	listener = RemoteTextCommandRelayListener("addr", make_log(), local_relay=_BinaryWriteCapture())
+	# 3 bytes is not a whole number of int32s
+	payload = _base64.b64encode(b"\x01\x02\x03").decode()
+	assert listener.write_binary(":ARB:DATA ", payload, datatype="i") is False
+
+def test_write_binary_client_reports_failure_without_raising():
+	client, _ = _write_binary_pair()
+	client.relay_client = None
+	assert client.write_binary(":ARB:DATA ", [1, 2, 3]) is False
+
+def test_driver_write_binary_is_a_noop_in_dummy_mode():
+	""" Dummy mode must not touch the relay, but must still report success so callers that
+	check the result behave the same as they would against hardware. """
+	osc = make_dummy_osc()
+	assert osc.write_binary(":ARB:DATA ", [1, 2, 3]) is True
+
+def test_driver_write_binary_forwards_to_the_relay():
+	osc = make_real_osc()
+	captured = {}
+	osc.relay.write_binary = lambda cmd, values, datatype='B': captured.update(
+		cmd=cmd, values=list(values), datatype=datatype) or True
+
+	assert osc.write_binary(":ARB:DATA ", [1, 2, 3], datatype="B") is True
+	assert captured["values"] == [1, 2, 3]
+
+def test_driver_write_binary_refuses_when_offline():
+	osc = make_real_osc()
+	osc.online = False
+	assert osc.write_binary(":ARB:DATA ", [1, 2, 3]) is False

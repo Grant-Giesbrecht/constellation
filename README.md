@@ -74,8 +74,10 @@ TODO = basic example
 
 ### Technical Detail: Networking
 
-- Mention TCPIP, AES, passwords, automatically setup database and server.
-- Mention PyFrost (WIP)
+- Mention labmesh (ZeroMQ mesh: broker, relay nodes, data bank), the shared network-password auth,
+  and the "smart client, dumb relay" split.
+- Note that swapping in `RemoteTextCommandRelayClient` is the only change needed to drive an
+  instrument over the network.
 
 ### Networking Example
 

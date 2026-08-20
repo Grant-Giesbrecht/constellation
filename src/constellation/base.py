@@ -1191,6 +1191,52 @@ class Driver(ABC):
 			self.check_online()
 			return []
 
+	def write_binary(self, cmd:str, values:list, datatype:str='B') -> bool:
+		''' Writes a SCPI command followed by an IEEE 488.2 binary block via the relay (see
+		CommandRelay.write_binary). The inverse of query_binary(): used to push bulk data *to* an
+		instrument, e.g. loading an arbitrary waveform into an AWG, where the same points as
+		comma-separated ASCII would be several times larger and much slower.
+
+		Relays that can't do binary writes raise NotImplementedError, which is caught and logged
+		like any other relay failure. Updates self.online with success/failure.
+
+		Args:
+			cmd (str): SCPI command the block is attached to.
+			values (list): Data points to send.
+			datatype (str): struct format character for each data point (PyVISA convention).
+
+		Returns:
+			bool: True on success. False on failure/offline/unsupported relay. In dummy mode
+				returns True without touching the relay - nothing was written, but nothing
+				failed either, so callers that check the result still behave normally.
+		'''
+
+		# Abort if not an SCPI instrument
+		if not self.is_scpi:
+			self.error(f"Cannot use default write_binary() function, instrument does recognize SCPI commands.")
+			return False
+
+		# Abort if offline
+		if not self.online:
+			self.warning(f"Cannot write_binary when offline.")
+			return False
+
+		# Spoof if dummy
+		if self.dummy:
+			self.lowdebug(f"Writing binary block to dummy: >@:LOCK{cmd}@:UNLOCK< (>:a{len(values)} values<).")
+			return True
+
+		# Attempt write
+		try:
+			self.online = self.relay.write_binary(cmd, values, datatype=datatype)
+			if self.online:
+				self.lowdebug(f"Wrote binary block to instrument: >@:LOCK{cmd}@:UNLOCK< (>:a{len(values)} values<).")
+			return self.online
+		except Exception as e:
+			self.error(f"Failed to write binary block to instrument {self.address}. ({e})")
+			self.check_online()
+			return False
+
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
 		need to return anything, reads commands or similar should. What is returned here

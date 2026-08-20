@@ -13,8 +13,11 @@ and optional AES-encrypted networking so instruments can be controlled/monitored
 ## Commands
 
 - Install for development: `pip install -e .`
-- Run tests: `pytest tests/` (uses plain `pytest`, no config file/markers — tests are simple `assert`-based
-  functions in `tests/test_base.py`). Run a single test: `pytest tests/test_base.py::test_interpret_range`.
+- Run tests: `pytest tests/` (uses plain `pytest`, no config file/markers — `assert`-based functions in
+  `tests/test_base.py` and `tests/test_dummy_state.py`). Run a single test:
+  `pytest tests/test_base.py::test_interpret_range`.
+  Some tests use `xfail(strict=True)` to pin down a *confirmed* bug by asserting the desired behavior — a
+  reported XPASS means the bug got fixed and the marker should be removed, not that the test is broken.
 - There is no lint/format tooling configured in this repo — don't invent one.
 - Docs are built with Sphinx from `docs/` (see `docs/conf.py`, `.readthedocs.yaml`); not part of normal dev loop.
 - Indentation in this codebase is tabs, not spaces — match the surrounding file.
@@ -36,8 +39,11 @@ and follows the same three-layer pattern:
    the category's abstract methods with vendor-specific SCPI commands. Drivers use the `@superreturn`
    decorator on `set_*`/`get_*` methods — it calls the driver's own method body first (skipped entirely in
    dummy mode), then automatically forwards to the parent category class's same-named method, so state
-   tracking in the base class runs uniformly. Drivers set `self._super_hint` to communicate a parsed value
-   up to the superclass's state-update logic.
+   tracking in the base class runs uniformly. A driver getter communicates its parsed value by simply
+   **returning** it; `@superreturn` captures that into `self._super_hint`, which the category method reads.
+   Drivers must never assign `self._super_hint` themselves (a test enforces this). `@superreturn` is a
+   descriptor class, not a function decorator, so it can capture its defining class via `__set_name__` —
+   using `super(type(self), self)` would recurse on any subclassed driver. See `docs/superreturn.md`.
 3. **Mixins** (e.g. `MeasurementsMixin` in `oscilloscope_ctg.py`): optional capabilities not all drivers of
    a category support. A mixin declares `__state_key__` (name in `state.state_fragments`) and
    `__state_fragment__` (its `InstrumentState` subclass); `Driver.discover_mixins()` walks the MRO at
@@ -71,17 +77,42 @@ to a `CommandRelay` (`src/constellation/relay.py`), which is swappable per-drive
   of talking to hardware locally.
 
 This indirection is what lets the exact same driver class run against real hardware, a remote instrument
-over the network, or (via `dummy=True` on `Driver`) a simulated instrument with no relay activity at all —
-dummy mode short-circuits `write`/`read`/`query` and instead routes through each driver's own
-`dummy_responder(func_name, *args, **kwargs)` (pattern-matched on `set_*`/`get_*` prefixes) so code can be
-developed and tested without physical instruments attached.
+over the network, or (via `dummy=True` on `Driver`) a simulated instrument with no relay activity at all,
+so code can be developed and tested without physical instruments attached.
 
-### Networking (`src/constellation/networking/`)
+Dummy mode has **one** dispatch point: `Driver.modify_state()`. If a `set_*`/`get_*` maps to a field in
+`self.state` it needs no dummy-specific code at all — in dummy mode setters store the passed value and
+getters read the tracked value back. `@enabledummy` + `dummy_responder()` is a narrow escape hatch reserved
+for values dummy mode must *invent* (`get_waveform` synthesizing a sine, `get_measured_output` adding noise
+to a setpoint) and for pure actions with no state. Putting `@enabledummy` on a plain setter is a bug: it
+bypasses `modify_state()`, so the value is silently dropped. A test pins down the exact set of methods
+allowed to carry it. See `docs/dummy_mode.md`.
 
-Built on the external `pyfrost` package (`GenCommand`, `Packable`, client/server). `NetworkCommand` wraps a
-remote method call (`target_client`, `remote_id`/`remote_addr`, `function`/`args`/`kwargs`) so a client can
-invoke driver methods on an instrument attached to a different host. `net_client.py`/`net_server.py` build
-on `network.py`'s primitives to implement the actual client/server roles.
+### Networking (labmesh)
+
+Built on the external `labmesh` package (ZeroMQ mesh: `DirectoryBroker`, `RelayAgent`,
+`DirectorClientAgent`, `DataBank`). The older `pyfrost`-based stack (`network.py`, `net_client.py`,
+`net_server.py`, `NetworkCommand`/`GenCommand`/`Packable`) has been fully removed — if you see those
+names anywhere, they're stale references, not code.
+
+The design is **"smart client, dumb relay"** (see `docs/labmesh_migration_plan.md`): the machine physically
+wired to the instrument runs a driver-agnostic SCPI text relay, and the `Driver` — with all its state
+tracking — lives in whichever process actually controls the instrument. The two halves live in
+`relay.py`, not in `networking/`:
+
+- `RemoteTextCommandRelayListener` — wraps a local `DirectSCPIRelay`/`VICPDirectSCPIRelay` and is handed to
+  a `labmesh.RelayAgent` on the bench machine. It knows nothing about categories, drivers or state.
+- `RemoteTextCommandRelayClient` — a `CommandRelay` that tunnels `write`/`read`/`query`/`query_binary` to
+  that listener. Binary blocks cross as base64-encoded little-endian packed values (JSON has no bytes type),
+  and get a longer timeout than text calls since a full-memory waveform read legitimately takes 15-20+ s.
+
+Swapping `DirectSCPIRelay()` for `RemoteTextCommandRelayClient(...)` (and passing a labmesh `relay_id` as
+`address` instead of a VISA resource string) is the *only* difference between local and networked use —
+every driver takes `relay=` for exactly this reason.
+
+`src/constellation/networking/labmesh_net.py` covers the other half: `DriverStateBroadcaster` runs a
+`labmesh.RelayAgent` around an already-connected `Driver` in a background thread, so *other* (non-owning)
+clients can subscribe to its state without controlling the instrument.
 
 ### Logging
 
@@ -97,3 +128,9 @@ connected instruments.
   pattern described above. Don't use these as a reference for new code; treat them as in-progress.
 - `examples/` — runnable scripts demonstrating dummy-mode and hardware usage per category
   (`*_dummy_demo.py`, `*_hardware_demo.py`), plus networking and state-serialization examples.
+- `docs/dummy_mode.md` — how dummy dispatch works and when `@enabledummy` is warranted.
+- `docs/superreturn.md` — how drivers hand parsed values up to their category class.
+- `docs/networking_data_paths.md` — RPC vs DataBank: which channel bulk data should take, and why
+  binary on the RPC path is base64.
+- `todo_list.md` — the live list of known bugs, open design questions, and remaining cleanup work.
+  Worth checking before starting anything; several open items are traps rather than tasks.

@@ -17,7 +17,9 @@ Run tests with that interpreter: `.../3.14/bin/python3 -m pytest tests/ -q`
 after the P3 pass: 87 passed, 5 xfailed;
 after the P4 pass: 95 passed, 5 xfailed;
 after the P5 pass: 112 passed, 4 xfailed;
-after the P9 pass: **124 passed, 4 xfailed**).
+after the P9 pass: 124 passed, 4 xfailed;
+after the P8 pass: 135 passed, 4 xfailed;
+after write_binary: **150 passed, 4 xfailed**).
 
 ---
 
@@ -394,21 +396,21 @@ Verified: **no file under `src/` imports `pyfrost`, `GenCommand`, `Packable`, `N
 `pyfrost-network`. The migration in `docs/labmesh_migration_plan.md` is genuinely complete.
 What remains is documentation and detritus:
 
-- [ ] **`CLAUDE.md` "Networking" section still describes the pyfrost design** and names three
+- [x] **`CLAUDE.md` "Networking" section still describes the pyfrost design** and names three
       files that no longer exist (`network.py`, `net_client.py`, `net_server.py`). Actively
       harmful — it's the file that seeds agent context every session. Rewrite to describe
       `relay.py`'s `RemoteTextCommandRelayClient`/`Listener` and
       `networking/labmesh_net.py`'s `DriverStateBroadcaster`.
-- [ ] **`README.md`** — stale line `- Mention PyFrost (WIP)`.
-- [ ] **`oscilloscope_ctg.py`** — commented-out
+- [x] **`README.md`** — stale line `- Mention PyFrost (WIP)`.
+- [x] **`oscilloscope_ctg.py`** — commented-out
       `# from constellation.networking.net_client import NetworkCommand, NetworkReply`.
-- [ ] **Stale bytecode**: `src/constellation/networking/__pycache__/` still contains
+- [x] **Stale bytecode**: `src/constellation/networking/__pycache__/` still contains
       `net_client.cpython-314.pyc`, `net_server.cpython-314.pyc`, `network.cpython-314.pyc` for
       deleted modules. Delete; consider a `.gitignore` entry.
 
 ### Networking bugs
 
-- [ ] **`query_binary` does not cross the network — waveform capture over labmesh silently
+- [x] **`query_binary` does not cross the network — waveform capture over labmesh silently
       returns empty data.** `RemoteTextCommandRelayClient` doesn't override `query_binary`, so the
       base raises `NotImplementedError`; `Driver.query_binary` catches it, logs, and returns `[]`.
       `RigolDS1000Z.get_waveform(binary=True)` is the *default* path and none of the networking
@@ -435,6 +437,129 @@ What remains is documentation and detritus:
       warns and sets `online = False`, but no `return`/`elif`, so it falls through to an
       unconditional `relay.query("*IDN?")` that immediately overwrites `online`.
       *confirmed — `docs/dummy_and_state_review.md` bug #5*
+
+### P8 outcome (query_binary + pyfrost doc cleanup) — **DONE**
+
+`query_binary` now crosses the mesh. `RemoteTextCommandRelayListener.query_binary` packs the
+locally-decoded values little-endian with the caller's `datatype` and base64s them;
+`RemoteTextCommandRelayClient.query_binary` reverses that. Explicit little-endian (not native byte
+order) means the bench machine and the controlling machine need not share an architecture.
+
+Why base64 rather than a JSON list of numbers, measured on a 250k-point waveform (the DS1000Z's
+max single-chunk transfer):
+
+| encoding | size |
+|---|---|
+| raw bytes | 244 KB |
+| **base64 (chosen)** | **326 KB** |
+| JSON int list | 1116 KB (3.4x larger) |
+
+**Timeout mismatch found and fixed while implementing this.** `DirectSCPIRelay` deliberately allows
+30 s because a full-memory `:WAV:DATA?` chunk was confirmed on real hardware to take 15-20+ s — but
+`RemoteTextCommandRelayClient` used a flat 10 s for every RPC, so the client would have abandoned
+the transfer while the instrument was still legitimately sending. Added a separate
+`binary_timeout_s` (default 60 s) and a `timeout_s` override on `_run()`. Without this the feature
+would have appeared to work on small reads and failed on exactly the ones it was built for.
+
+A local relay that cannot do binary reads (`VICPDirectSCPIRelay`) surfaces as a clean
+`[False, ""]` from the listener rather than an unhandled `NotImplementedError` inside the
+`RelayAgent`.
+
+Doc cleanup: `CLAUDE.md`'s Networking section rewritten around labmesh and the "smart client, dumb
+relay" split; `README.md`'s PyFrost line replaced; the commented-out `net_client` import removed
+from `oscilloscope_ctg.py`; stale `net_client`/`net_server`/`network` `.pyc` files deleted.
+
+Also brought two *other* CLAUDE.md passages up to date, which this session's earlier work had
+falsified: the `@superreturn` description (drivers now **return** their value and must never assign
+`_super_hint`; it is a descriptor class) and the dummy-mode description (`modify_state()` is the
+single dispatch point; `@enabledummy` is a narrow escape hatch). Added pointers to
+`docs/dummy_mode.md`, `docs/superreturn.md` and `todo_list.md`, plus a note explaining that a
+reported XPASS means a bug was fixed and the marker should be removed.
+
+Remaining pyfrost hits are confined to `src/constellation_core.egg-info/` — gitignored build
+metadata from an old build, which regenerates on the next `pip install -e .`. Left alone.
+
+Tests: **135 passed, 4 xfailed** (from 124/4). New coverage: exact round trips for uint8/int16/
+int32/float/empty payloads, a full 250k-point waveform, an explicit little-endian wire-format
+assertion, clean failure when the local relay can't do binary, corrupt/truncated payload rejection,
+and a check that the binary timeout exceeds the text timeout.
+
+### Binary transfer — implemented, with a known ceiling
+
+- [x] **`write_binary` implemented** across all layers (`CommandRelay` contract,
+      `DirectSCPIRelay` via pyvisa `write_binary_values`, `VICPDirectSCPIRelay` building the IEEE
+      488.2 `#<n><count>` header by hand since pyvicp has no equivalent,
+      `RemoteTextCommandRelayClient`/`Listener` over base64 RPC, and `Driver.write_binary`).
+      Motivating case: loading an arbitrary waveform into an AWG, where the same points as
+      comma-separated ASCII are several times larger and much slower.
+- [x] **Documented the two-channel split** in `docs/networking_data_paths.md`: RPC is strictly
+      JSON (`labmesh.util.dumps` is `json.dumps`, so base64 is the only way to carry bytes),
+      while the DataBank has a native chunked binary protocol with SHA-256. Control traffic
+      belongs on RPC; captured datasets belong in the bank.
+- [ ] **No size guard on `query_binary`/`write_binary`.** Base64-over-JSON has no chunking and no
+      integrity check, and the whole payload is one JSON message held in memory on both ends.
+      It is fine at the ~326 KB measured for a 250k-point waveform, but nothing warns a caller
+      pushing several MB through it — which should be using the DataBank instead. Add a threshold
+      warning pointing at `docs/networking_data_paths.md`.
+- [ ] **`VICPDirectSCPIRelay` still has no `query_binary`** (pyvicp provides no block parser, so
+      reading would mean hand-parsing the `#<n><count>` header off the raw stream). `write_binary`
+      is implemented for VICP; the read direction is not. LeCroy scopes therefore can't do binary
+      waveform reads. *static*
+
+### OPEN — ASCII responses cross the mesh uncompressed (two candidate fixes, neither implemented)
+
+**Status: logged, not implemented. Leaning toward option 1.**
+
+Transport encoding currently follows *instrument* encoding. If a driver queries an instrument in
+ASCII, that text crosses labmesh as a JSON string; there is no way to query ASCII and transport it
+as binary. This is the "dumb relay" design working as intended —
+`RemoteTextCommandRelayListener.query()` is literally
+`list(self.local_relay.query(cmd))`, and it has no idea whether the string it is forwarding is
+`"RIGOL TECHNOLOGIES,DS1054Z"` or 250,000 comma-separated floats. Re-encoding requires knowing the
+response is a numeric list.
+
+Measured cost, 250k-point **noisy sine** waveform (a realistic capture, not a repeating ramp —
+an earlier measurement using repetitive data showed gzip at 133x and was meaningless):
+
+| | size | vs today |
+|---|---|---|
+| **raw ASCII in a JSON string (today)** | 3296 KB | 1.0x |
+| re-packed float32 + base64 | 1302 KB | 2.5x |
+| gzipped ASCII | 1112 KB | 3.0x |
+| gzipped float32 | 894 KB | 3.7x |
+
+**Context that outweighs both options:** querying the same waveform via `query_binary` is **326 KB**
+— 10x smaller than the ASCII path. Where the instrument supports binary blocks, using
+`query_binary` beats every row above, and neither option below should be the first thing reached
+for.
+
+**Option 1 (leaning toward this) — add `query_ascii_values` as a relay primitive.**
+pyvisa already provides `query_ascii_values(cmd, converter='f', separator=',')` (confirmed
+present). The listener would parse ASCII into a numeric list, then pack + base64 it exactly as
+`query_binary` does. Drivers would call `self.query_ascii_values(":WAV:DATA?")` instead of
+`self.query(...)` followed by manual splitting.
+- Stays honest about the dumb-relay principle: "parse a separated numeric list" is a standard SCPI
+  concept pyvisa already models, not instrument-specific knowledge.
+- 2.5x on the wire, *and* it removes hand-rolled parsing from drivers — `RigolDS1000Z.get_waveform`
+  currently does `data[11:].split(",")` with a comment about a trailing-comma edge case that this
+  would delete outright.
+- Symmetric with the existing `query_binary`/`write_binary` pair, so it adds no new concepts.
+
+**Option 2 — compress the RPC payload generically.** gzip large text responses in the
+listener/client. Bigger win (3x) and fully transport-agnostic, benefiting every query rather than
+just numeric ones.
+- But this is really a **labmesh-level** concern. Doing it inside
+  `RemoteTextCommandRelayListener` bakes a compression convention into Constellation that labmesh
+  itself doesn't know about. It belongs in `labmesh.util.dumps`/`loads` so the whole mesh benefits
+  (broker, databank announcements, state broadcasts), not only Constellation's relay.
+- **Recommendation: raise this in the labmesh repo rather than working around it here.**
+
+- [ ] Implement `query_ascii_values` across `CommandRelay` / `DirectSCPIRelay` /
+      `RemoteTextCommandRelayClient` / `Listener` / `Driver` (option 1).
+- [ ] Then migrate `RigolDS1000Z.get_waveform`'s ASCII branch onto it and delete the manual
+      `split(",")` parsing.
+- [ ] Separately: raise generic payload compression as an issue in the **labmesh** repo (option 2).
+      Not a Constellation change.
 
 ### Networking optimizations
 
