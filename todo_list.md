@@ -16,7 +16,8 @@ Run tests with that interpreter: `.../3.14/bin/python3 -m pytest tests/ -q`
 (baseline when this list was written: 34 passed, 10 xfailed; after the P1/P2 pass: 58 passed, 9 xfailed;
 after the P3 pass: 87 passed, 5 xfailed;
 after the P4 pass: 95 passed, 5 xfailed;
-after the P5 pass: **112 passed, 4 xfailed**).
+after the P5 pass: 112 passed, 4 xfailed;
+after the P9 pass: **124 passed, 4 xfailed**).
 
 ---
 
@@ -445,40 +446,85 @@ What remains is documentation and detritus:
       `examples/rigol_ds1000z_network/` are near-identical five-file sets
       (broker / bank / relay node / client / observer). Keeping both in sync is a tax — delete one.
 
-## Priority 9 — wrong-name calls and signature mismatches
+## Priority 9 — wrong-name calls and signature mismatches — **DONE**
 
 All of these are methods calling names that do not exist, or passing wrong argument shapes.
 
-- [ ] **`PowerSupply.set_current` and `set_output_enable` pass the wrong readback query** —
+- [x] **`PowerSupply.set_current` and `set_output_enable` pass the wrong readback query** —
       both use `lambda: self.get_voltage(channel)`. On real hardware, setting current queries
       *voltage* back: `current_set`/`enable` never update and `voltage_set` is rewritten instead.
       *static*
-- [ ] **`PowerSupply.apply_state` calls `self.set_enable_output(...)`** — no such method
+- [x] **`PowerSupply.apply_state` calls `self.set_enable_output(...)`** — no such method
       (it's `set_output_enable`). The surrounding `try/except` swallows it as a `lowdebug`, so
       **apply_state silently fails to restore output enable on every channel, with no error.**
       *static*
-- [ ] **`PowerSupply.refresh_data` calls `self.get_output_measurement(ch)`** — no such method
+- [x] **`PowerSupply.refresh_data` calls `self.get_output_measurement(ch)`** — no such method
       (it's `get_measured_output`). Uncaught `AttributeError`.
       *static*
-- [ ] **`PowerSupply.dummy_responder` has `case "set_enable"`** — no method produces that name.
+- [x] **`PowerSupply.dummy_responder` has `case "set_enable"`** — no method produces that name.
       *static*
-- [ ] **`SpectrumAnalyzer.refresh_state`/`apply_state` call `get_num_points()`/`set_num_points()`**
+- [x] **`SpectrumAnalyzer.refresh_state`/`apply_state` call `get_num_points()`/`set_num_points()`**
       which are commented out in the same file -> `AttributeError`.
       *static*
-- [ ] **`SpectrumAnalyzer.refresh_state`/`refresh_data` call `self.get_trace_data(self, t_idx)`** —
+- [x] **`SpectrumAnalyzer.refresh_state`/`refresh_data` call `self.get_trace_data(self, t_idx)`** —
       passing `self` as the first positional argument.
       *static*
-- [ ] **`Oscilloscope.apply_state` can't restore trigger source.** Calls
+- [x] **`Oscilloscope.apply_state` can't restore trigger source.** Calls
       `set_trigger_source(self.state.trigger_source)`, but the signature is
       `(channel:int=None, external:bool=False, line:bool=False)` and the stored value is a string
       like `"CHAN1"` -> `_format_trigger_source` does `"CHAN1" < 1` -> `TypeError`. Round-tripping
       a saved scope state fails here.
       *static*
-- [ ] **`get_all_waveforms` breaks the DS1000E.** It passes `_skip_run_management=True`, but
+- [x] **`get_all_waveforms` breaks the DS1000E.** It passes `_skip_run_management=True`, but
       `RigolDS1000E.get_waveform(self, channel)` takes no kwargs. `superreturn`'s `except` catches
       the `TypeError`, so `get_all_waveforms()` returns a list of `None`s and logs an error rather
       than raising.
       *static*
+
+### Outcome
+
+Before this pass, on a dummy driver: `SpectrumAnalyzer.refresh_state()`, `refresh_data()` and
+`apply_state()` **all three** raised `AttributeError`, `PowerSupply.refresh_data()` raised
+`AttributeError`, and `Oscilloscope.apply_state()` raised `TypeError` on the trigger source. All
+now complete with zero errors logged.
+
+Fixes applied:
+- `PowerSupply.set_current` / `set_output_enable` now read back `get_current` / `get_output_enable`
+  instead of `get_voltage`. Verified against a canned relay: `set_current` queries `:SOUR2:CURR?`
+  and no longer `:SOUR2:VOLT?`.
+- `PowerSupply.apply_state` calls `set_output_enable` (was `set_enable_output`), and its blanket
+  `try/except ... lowdebug` — which is *why* that typo stayed invisible — was narrowed: it now
+  skips unpopulated channels by an explicit `None` check and logs genuine failures via
+  `self.error()`.
+- `PowerSupply.refresh_data` calls `get_measured_output` (was `get_output_measurement`); the same
+  wrong name in a log message was corrected.
+- `SpectrumAnalyzer` gained a real category `get_trace_data`. The Siglent driver already
+  implemented one under `@superreturn`, but the category's was commented out, so the super lookup
+  raised `'super' object has no attribute 'get_trace_data'` on every call.
+- `SpectrumAnalyzer.refresh_state`/`refresh_data` call `get_trace_data(t_idx)`, not
+  `get_trace_data(self, t_idx)`.
+- `num_points` calls dropped from `SpectrumAnalyzer.refresh_state`/`apply_state`, with a comment
+  saying why — the accessors are commented out in the same file and the param isn't in
+  `__state_fields__`.
+- `Oscilloscope` gained `_parse_trigger_source()`, the inverse of `_format_trigger_source()`, so
+  `apply_state()` can turn the stored `"CHAN2"`/`"EXT"`/`"AC"` back into the keyword arguments
+  `set_trigger_source()` actually takes. All three forms now round-trip.
+- `get_all_waveforms()` only sends `_skip_run_management=True` to drivers whose `get_waveform()`
+  can accept it, detected by unwrapping the `superreturn` descriptor and inspecting the signature
+  for the named param or `**kwargs`.
+
+### Found while fixing P9
+
+- [x] **`SiglentSSA3000X.get_freq_end` took a `points:int` argument** the category's
+      `get_freq_end(self)` never passes. Since `superreturn` forwards args verbatim, every call
+      raised `TypeError`, which `superreturn` swallowed — so `get_freq_end()` silently returned
+      `None`. Signature corrected. *confirmed*
+
+Tests: **124 passed, 4 xfailed** (from 112/4). New coverage includes the readback-queries-the-
+right-parameter check against a canned relay, the parametrized trigger-source round trip,
+`_parse_trigger_source` as a proven inverse of `_format_trigger_source` plus its junk handling,
+and a `get_all_waveforms()` test using a driver whose `get_waveform()` takes no kwargs. All six
+dummy examples still run clean.
 
 ## Priority 10 — mixins
 
@@ -639,6 +685,64 @@ default.
       *static*
 
 ---
+
+## Priority 14 — feature gaps
+
+### Add a `num_points` (sweep points) field to the SpectrumAnalyzer category
+
+Not a bug — a missing feature. The scaffolding was written, then commented out everywhere, and
+P9 removed the dangling calls that referenced it. Adding it properly means touching four places:
+
+1. **`SpectrumAnalyzerState`** (`spectrum_analyzer_ctg.py`) — uncomment/restore
+   `self.add_param("num_points", unit="1")` and add `"num_points"` to `__state_fields__`.
+   Both are required; `validate()` warns if they disagree.
+2. **Category accessors** — `set_num_points(self, points:int)` and `get_num_points(self)`,
+   following the standard shape:
+   ```python
+   @abstractmethod
+   def set_num_points(self, points:int):
+       self.modify_state(self.get_num_points, ["num_points"], points)
+
+   @abstractmethod
+   def get_num_points(self):
+       return self.modify_state(None, ["num_points"], self._super_hint)
+   ```
+3. **Driver implementation** (`Siglent_SSA3000X_dvr.py`) — replace the two commented stubs with
+   real `@superreturn` methods that write/query the sweep-point count and `return` the parsed
+   value (drivers no longer assign `_super_hint`; see `docs/superreturn.md`).
+4. **Re-add the calls** to `SpectrumAnalyzer.refresh_state()` and `apply_state()`. Both currently
+   carry a `# NOTE: num_points is deliberately absent` comment marking the spot — delete those
+   comments when the feature lands.
+
+**Pitfalls in the existing commented-out code — do not just uncomment it:**
+
+- The commented getter is `get_num_points(self, channel:int=1)` while the commented setter is
+  `set_num_points(self, points:int)` — **mismatched signatures**. A spectrum analyzer has traces,
+  not channels, so neither should take `channel`. This is the same shape as the
+  `SiglentSSA3000X.get_freq_end(points:int)` bug fixed in P9, where `superreturn` forwards args
+  verbatim, the driver raises `TypeError`, and the decorator swallows it into a silent `None`.
+- The commented getter carries `@enabledummy`. Under the post-P3 rules it must **not** —
+  `num_points` maps to a plain state field, so `modify_state()` handles dummy mode generically.
+  See `docs/dummy_mode.md`.
+- The driver file has **two identical commented stubs both named `get_num_points`**; one was
+  clearly meant to be `set_num_points`.
+- Don't copy the VNA's version as a template — `BasicVectorNetworkAnalyzerCtg.set_num_points`
+  is *per-channel* (`["channels", "num_points"]`, `indices=[channel]`). The SA's is a single
+  instrument-wide value.
+
+**Open question to resolve first:** the original author's comment on the `add_param` line reads
+`# I think this doesnt actually exist`, i.e. there was doubt about whether the sweep-point count
+is settable at all on this instrument. Confirm against the Siglent SSA3000X programming guide
+before implementing (likely `[:SENSe]:SWEep:POINts`, **unverified**). If some spectrum analyzers
+expose it and others don't, that is what `FeatureUnavailable` (already defined in `base.py`) is
+for — raise it in drivers that can't support it rather than omitting the category method.
+
+- [ ] Confirm the SCPI command and whether sweep points is settable on the SSA3000X.
+- [ ] Add `num_points` to `SpectrumAnalyzerState` (`add_param` + `__state_fields__`).
+- [ ] Add category `set_num_points`/`get_num_points` with matching signatures, no `@enabledummy`.
+- [ ] Implement both in `Siglent_SSA3000X_dvr.py` (return the value, don't assign `_super_hint`).
+- [ ] Re-add the calls in `refresh_state()`/`apply_state()` and delete the two placeholder NOTEs.
+- [ ] Seed it in `SpectrumAnalyzer.init_dummy_state()` (currently empty — see the P3 follow-ups).
 
 ## Execution order (agreed)
 

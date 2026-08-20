@@ -102,9 +102,19 @@ class SpectrumAnalyzer(Driver):
 	# 	#TODO: Update trace state tracking model
 	# 	pass
 	
-	# @abstractmethod
-	# def get_trace_data(self, trace:int):
-	# 	pass
+	@abstractmethod
+	@enabledummy
+	def get_trace_data(self, trace:int, **kwargs):
+		''' Reads one trace back from the instrument and stores it in that trace's state.
+		
+		**kwargs absorbs driver-specific transfer options (e.g. use_ascii_transfer on the
+		Siglent SSA3000X) so a driver can extend this without a category signature change -
+		superreturn forwards whatever args/kwargs the driver-level call received.
+		
+		Trace data is measurement data rather than a setting, so this keeps @enabledummy: in
+		dummy mode there is nothing in state to read back until a trace has been synthesized.
+		'''
+		return self.modify_state(None, ["traces", "waveform"], self._super_hint, indices=[trace])
 	
 	@abstractmethod
 	def set_continuous_trigger(self, enable:bool):
@@ -137,7 +147,8 @@ class SpectrumAnalyzer(Driver):
 	def refresh_state(self):
 		self.get_freq_start()
 		self.get_freq_end()
-		self.get_num_points()
+		# NOTE: num_points is deliberately absent - set_num_points/get_num_points are
+		# commented out below and the parameter is not in __state_fields__.
 		self.get_res_bandwidth()
 		self.get_continuous_trigger()
 		self.get_ref_level()
@@ -145,17 +156,17 @@ class SpectrumAnalyzer(Driver):
 		
 		# iterate over all traces and get data
 		for t_idx in self.state.traces.get_populated():
-			self.get_trace_data(self, t_idx)
+			self.get_trace_data(t_idx)
 	
 	def refresh_data(self):
 		# iterate over all traces and get data
 		for t_idx in self.state.traces.get_populated():
-			self.get_trace_data(self, t_idx)
+			self.get_trace_data(t_idx)
 	
 	def apply_state(self):
 		self.set_freq_start(self.state.freq_start)
 		self.set_freq_end(self.state.freq_end)
-		self.set_num_points(self.state.num_points)
+		# NOTE: num_points deliberately absent - see refresh_state().
 		self.set_res_bandwidth(self.state.res_bw)
 		self.set_continuous_trigger(self.state.continuous_trig_en)
 		self.set_ref_level(self.state.ref_level)

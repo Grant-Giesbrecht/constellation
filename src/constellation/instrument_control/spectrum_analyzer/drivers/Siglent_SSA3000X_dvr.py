@@ -31,7 +31,7 @@ class SiglentSSA3000X(SpectrumAnalyzer):
 		self.write(f"SENS:FREQ:STOP {f_Hz}")
 	
 	@superreturn
-	def get_freq_end(self, points:int):
+	def get_freq_end(self):
 		return float(self.query(f"SENS:FREQ:STOP?"))
 	
 	# @superreturn

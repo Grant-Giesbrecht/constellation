@@ -781,3 +781,108 @@ def test_set_rejects_a_value_the_indexedlist_type_check_refuses():
 	st = _state()
 	assert st.set(["channels"], "not a channel state", indices=[1]) is False
 	assert isinstance(st.get(["channels"], indices=[1]), OscilloscopeChannelState)
+
+# ---------------------------------------------------------------------------
+# Wrong-name calls / signature mismatches (P9)
+# ---------------------------------------------------------------------------
+
+def test_power_supply_refresh_and_apply_do_not_raise():
+	""" refresh_data() called get_output_measurement (no such method); apply_state() called
+	set_enable_output (no such method, swallowed by a blanket try/except so output enable was
+	never restored on any channel). """
+	psu = RigolDP832("dummy", make_log(), dummy=True)
+	psu.refresh_state()
+	psu.refresh_data()
+	psu.apply_state()
+
+def test_power_supply_setters_persist_the_right_field():
+	psu = RigolDP832("dummy", make_log(), dummy=True)
+	psu.set_current(2, 0.33)
+	psu.set_output_enable(2, True)
+	assert psu.state.channels[2].current_set == 0.33
+	assert psu.state.channels[2].enable is True
+
+def test_power_supply_setters_read_back_the_right_parameter():
+	""" set_current and set_output_enable both passed `lambda: self.get_voltage(channel)` as
+	their readback, so on real hardware they queried VOLTage and left current_set/enable
+	unwritten while rewriting voltage_set. """
+	psu = RigolDP832("canned", make_log(), relay=_CannedRelay({
+		"*IDN?": "RIGOL TECHNOLOGIES,DP832", ":SOUR2:CURR?": "0.33", ":OUTP? CH2": "ON"}))
+
+	psu.relay.sent.clear()
+	psu.set_current(2, 0.33)
+	assert any("CURR?" in c for c in psu.relay.sent)
+	assert not any("VOLT?" in c for c in psu.relay.sent)
+
+	psu.relay.sent.clear()
+	psu.set_output_enable(2, True)
+	assert any("OUTP?" in c for c in psu.relay.sent)
+	assert not any("VOLT?" in c for c in psu.relay.sent)
+
+def test_spectrum_analyzer_refresh_and_apply_do_not_raise():
+	""" All three raised AttributeError: refresh_state/apply_state called get_num_points /
+	set_num_points (commented out in the same file), and refresh_state/refresh_data called
+	get_trace_data(self, idx) - passing self positionally, to a category method that was also
+	commented out. """
+	sa = SiglentSSA3000X("dummy", make_log(), dummy=True)
+	sa.refresh_state()
+	sa.refresh_data()
+	sa.apply_state()
+
+def test_spectrum_analyzer_category_defines_get_trace_data():
+	""" The driver implements get_trace_data under @superreturn, so the category must define it
+	or the super lookup raises "'super' object has no attribute 'get_trace_data'". """
+	from constellation.all import SpectrumAnalyzer
+	assert hasattr(SpectrumAnalyzer, "get_trace_data")
+
+@pytest.mark.parametrize("kwargs,expected", [
+	({"channel": 2},     "CHAN2"),
+	({"external": True}, "EXT"),
+	({"line": True},     "AC"),
+])
+def test_oscilloscope_trigger_source_survives_apply_state(kwargs, expected):
+	""" apply_state() fed the stored string ("CHAN2") into set_trigger_source(channel=...),
+	which expects an int -> _format_trigger_source did "CHAN2" < 1 -> TypeError. Restoring a
+	saved scope state always failed here. """
+	osc = make_dummy_osc()
+	osc.set_trigger_source(**kwargs)
+	assert osc.state.trigger_source == expected
+
+	osc.apply_state()
+	assert osc.state.trigger_source == expected
+
+def test_parse_trigger_source_is_the_inverse_of_format():
+	osc = make_dummy_osc()
+	for kwargs in ({"channel": 3}, {"external": True}, {"line": True}):
+		formatted = osc._format_trigger_source(**kwargs)
+		assert osc._parse_trigger_source(formatted) == kwargs
+
+def test_parse_trigger_source_rejects_junk():
+	osc = make_dummy_osc()
+	assert osc._parse_trigger_source(None) is None
+	assert osc._parse_trigger_source("NOT-A-SOURCE") is None
+	assert osc._parse_trigger_source("CHANx") is None
+
+def test_batch_hint_only_sent_to_drivers_that_accept_it():
+	""" get_all_waveforms() forced _skip_run_management=True onto every driver. RigolDS1000E's
+	get_waveform(self, channel) takes no kwargs, so it raised TypeError - swallowed by
+	superreturn - turning every waveform into None. """
+	osc = make_dummy_osc()
+	assert osc._get_waveform_accepts_batch_hint() is True
+
+	class NoKwargsScope(RigolDS1000Z):
+		def get_waveform(self, channel):     # mirrors RigolDS1000E's signature
+			return {"volt_V": [], "time_s": []}
+
+	narrow = NoKwargsScope("dummy", make_log(), dummy=True)
+	assert narrow._get_waveform_accepts_batch_hint() is False
+
+def test_get_all_waveforms_works_for_a_driver_without_kwargs():
+	class NoKwargsScope(RigolDS1000Z):
+		def get_waveform(self, channel):
+			return {"volt_V": [1.0], "time_s": [0.0], "channel": channel}
+
+	osc = NoKwargsScope("dummy", make_log(), dummy=True)
+	waves = osc.get_all_waveforms()
+	assert len(waves) > 0
+	assert all(w is not None for w in waves)

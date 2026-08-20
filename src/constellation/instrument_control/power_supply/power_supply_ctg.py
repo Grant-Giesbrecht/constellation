@@ -92,7 +92,7 @@ class PowerSupply(Driver):
 		
 	@abstractmethod
 	def set_current(self, channel:int, current:float):
-		self.modify_state(lambda: self.get_voltage(channel), ["channels", "current_set"], current, indices=[channel])
+		self.modify_state(lambda: self.get_current(channel), ["channels", "current_set"], current, indices=[channel])
 	
 	@abstractmethod
 	def get_current(self, channel:int):
@@ -100,7 +100,7 @@ class PowerSupply(Driver):
 	
 	@abstractmethod
 	def set_output_enable(self, channel:int, enable:bool):
-		self.modify_state(lambda: self.get_voltage(channel), ["channels", "enable"], enable, indices=[channel])
+		self.modify_state(lambda: self.get_output_enable(channel), ["channels", "enable"], enable, indices=[channel])
 	
 	@abstractmethod
 	def get_output_enable(self, channel:int):
@@ -114,7 +114,7 @@ class PowerSupply(Driver):
 			v_meas = self._super_hint[0]
 			i_meas = self._super_hint[1]
 		except Exception as e:
-			self.error(f"Failed to unpack data in get_output_measurement. ({e})")
+			self.error(f"Failed to unpack data in get_measured_output. ({e})")
 			return (None, None)
 			
 		self.modify_state(None, ["channels", "voltage_meas"], v_meas, indices=[channel])
@@ -131,13 +131,25 @@ class PowerSupply(Driver):
 	
 	def apply_state(self):
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
+			
+			chan = self.state.channels[ch]
+			
+			# Skip channels that have nothing stored yet. This used to be a blanket
+			# try/except logging at lowdebug, which silently swallowed a call to a
+			# nonexistent method (set_enable_output) for every channel - the state was never
+			# applied and nothing said so. Check for unpopulated values explicitly instead,
+			# so genuine failures below are visible.
+			if chan is None or chan.voltage_set is None:
+				self.lowdebug(f"Skipping apply_state for channel >{ch}<, not yet populated.")
+				continue
+			
 			try:
-				self.set_voltage(ch, self.state.channels[ch].voltage_set)
-				self.set_current(ch, self.state.channels[ch].current_set)
-				self.set_enable_output(ch, self.state.channels[ch].enable)
+				self.set_voltage(ch, chan.voltage_set)
+				self.set_current(ch, chan.current_set)
+				self.set_output_enable(ch, chan.enable)
 			except Exception as e:
-				self.lowdebug(f"Skipping apply state for channels not yet populated. ({e})")
+				self.error(f"Failed to apply state to channel >{ch}<. ({e})")
 	
 	def refresh_data(self):
 		for ch in range(self.first_channel, self.first_channel+self.max_channels):
-			self.get_output_measurement(ch)
+			self.get_measured_output(ch)

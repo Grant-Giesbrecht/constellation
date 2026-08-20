@@ -4,6 +4,7 @@ from abc import abstractmethod
 from constellation.base import InstrumentState, IndexedList, CommandRelay, Driver, enabledummy, protect_str
 # from constellation.networking.net_client import NetworkCommand, NetworkReply
 import numpy as np
+import inspect
 
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
@@ -235,6 +236,34 @@ class Oscilloscope(Driver):
 	def get_trigger_level(self):
 		return self.modify_state(None, ["trigger_level"], self._super_hint)
 	
+	def _parse_trigger_source(self, src_str:str):
+		''' Inverse of _format_trigger_source(): turns a stored source string back into the
+		(channel, external, line) keyword arguments set_trigger_source() expects. Needed by
+		apply_state(), which only has the stored string to work from.
+		
+		Returns:
+			dict: kwargs for set_trigger_source(), or None if the string isn't recognized.
+		'''
+		
+		if src_str is None:
+			return None
+		
+		src_str = str(src_str).strip().upper()
+		
+		if src_str.startswith("CHAN"):
+			try:
+				return {"channel": int(src_str[4:])}
+			except ValueError:
+				self.warning(f"Cannot parse trigger source >{src_str}<, unreadable channel number.")
+				return None
+		elif src_str == "EXT":
+			return {"external": True}
+		elif src_str == "AC":
+			return {"line": True}
+		
+		self.warning(f"Cannot parse unrecognized trigger source >{src_str}<.")
+		return None
+	
 	def _format_trigger_source(self, channel:int=None, external:bool=False, line:bool=False):
 		''' Converts the three-input trigger source argument format into an approp.
 		formatted string. Returns None on error
@@ -331,7 +360,9 @@ class Oscilloscope(Driver):
 			self.set_bandwidth_limit(ch, self.state.get(["channels", "bw_limit"], indices=[ch]))
 			self.set_probe_attenuation(ch, self.state.get(["channels", "attenuation"], indices=[ch]))
 		self.set_trigger_mode(self.state.trigger_mode)
-		self.set_trigger_source(self.state.trigger_source)
+		trig_kwargs = self._parse_trigger_source(self.state.trigger_source)
+		if trig_kwargs is not None:
+			self.set_trigger_source(**trig_kwargs)
 		self.set_trigger_level(self.state.trigger_level)
 		
 		self.apply_mixins()
@@ -357,14 +388,38 @@ class Oscilloscope(Driver):
 
 		batch_state = self._begin_waveform_batch(**kwargs)
 		try:
+			# _skip_run_management is an opt-in hint for drivers that manage acquisition per
+			# batch (RigolDS1000Z). Drivers whose get_waveform() takes no **kwargs - e.g.
+			# RigolDS1000E - would raise TypeError on it, which superreturn swallows, silently
+			# turning every waveform into None. Only send it where it's accepted.
+			batch_kwargs = dict(kwargs)
+			if self._get_waveform_accepts_batch_hint():
+				batch_kwargs["_skip_run_management"] = True
+
 			waveform_list = []
 			for ch in range(self.state.first_channel, self.state.num_channels+self.state.first_channel):
 				if self.get_chan_enable(ch):
-					waveform_list.append(self.get_waveform(ch, _skip_run_management=True, **kwargs))
+					waveform_list.append(self.get_waveform(ch, **batch_kwargs))
 
 			return waveform_list
 		finally:
 			self._end_waveform_batch(batch_state, **kwargs)
+
+	def _get_waveform_accepts_batch_hint(self) -> bool:
+		''' True if this driver's get_waveform() can accept the _skip_run_management hint,
+		either by naming it or by absorbing it via **kwargs. '''
+
+		try:
+			# Unwrap the superreturn descriptor to inspect the driver's own function
+			raw = getattr(type(self), "get_waveform")
+			func = getattr(raw, "func", raw)
+			params = inspect.signature(func).parameters
+		except (TypeError, ValueError):
+			return False
+
+		if "_skip_run_management" in params:
+			return True
+		return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 	
 	def refresh_data(self):
 		_ = self.get_all_waveforms()
