@@ -1153,3 +1153,107 @@ def test_driver_write_binary_refuses_when_offline():
 	osc = make_real_osc()
 	osc.online = False
 	assert osc.write_binary(":ARB:DATA ", [1, 2, 3]) is False
+
+# ---------------------------------------------------------------------------
+# IndexedList cleanup (P6)
+# ---------------------------------------------------------------------------
+
+from constellation.base import ChannelList
+from stardust.serializer import to_serial_dict, from_serial_dict
+
+def test_validate_type_survives_serialization():
+	""" Regression: validate_type was deliberately excluded from __state_fields__, and stardust
+	rebuilds via cls.__new__(cls) without calling __init__ - so the attribute simply didn't exist
+	on a restored object and EVERY write raised AttributeError. """
+	il = IndexedList(1, 4, validate_type=OscilloscopeChannelState)
+	il[1] = OscilloscopeChannelState(log=make_log())
+
+	restored = from_serial_dict(to_serial_dict(il))
+
+	assert restored.validate_type is OscilloscopeChannelState
+	restored[2] = OscilloscopeChannelState(log=make_log())     # must not raise
+	with pytest.raises(TypeError):
+		restored[3] = 12345
+
+def test_indexed_list_without_validate_type_survives_serialization():
+	il = IndexedList(1, 3)
+	il[1] = 5
+	restored = from_serial_dict(to_serial_dict(il))
+	assert restored.validate_type is None
+	restored[2] = "anything"          # no type checking configured, so anything goes
+	assert restored[2] == "anything"
+
+def test_append_works_after_a_state_restore(tmp_path):
+	""" The concrete consequence of the bug above: MeasurementsMixin.add_measurement uses
+	IndexedList.append(), so adding a measurement after restore_state() blew up. """
+	osc = make_dummy_osc()
+	fn = str(tmp_path / "state.hdf")
+	osc.dump_state(fn)
+	osc.restore_state(fn)
+
+	assert osc.add_measurement(1, MeasurementsMixin.MEAS_VPP) is True
+
+def test_summarize_handles_non_instrumentstate_values():
+	""" Regression: summarize() called .state_str() unconditionally, so a list of plain values
+	raised AttributeError. validate_type is optional, so nothing prevents such a list. """
+	il = IndexedList(1, 3)
+	il[1] = 3.14
+	il[2] = "text"
+	out = il.summarize()
+	assert "3.14" in out
+	assert "text" in out
+
+def test_summarize_still_formats_instrumentstate_values():
+	il = IndexedList(1, 2, validate_type=OscilloscopeChannelState)
+	il[1] = OscilloscopeChannelState(log=make_log())
+	assert "div_volt" in il.summarize()
+
+def test_summarize_empty_list():
+	assert "Empty" in IndexedList(1, 3).summarize()
+
+def test_append_allow_expand_grows_a_full_list():
+	""" Regression: allow_expand was accepted and ignored (a TODO in the body), so a full list
+	returned False even when the caller explicitly permitted growth. """
+	il = IndexedList(0, 2)
+	assert il.append("a") is True
+	assert il.append("b") is True
+
+	assert il.append("c") is False                      # default: refuse to grow
+	assert il.num_indices == 2
+
+	assert il.append("c", allow_expand=True) is True    # explicit: grow by one
+	assert il.num_indices == 3
+	assert il[2] == "c"
+	assert list(il.populated_items()) == [(0, "a"), (1, "b"), (2, "c")]
+
+def test_append_allow_expand_type_checks_before_growing():
+	""" A rejected value must not leave the list permanently one slot larger and empty. """
+	il = IndexedList(0, 1, validate_type=str)
+	il.append("x")
+	with pytest.raises(TypeError):
+		il.append(999, allow_expand=True)
+	assert il.num_indices == 1
+
+def test_get_and_set_idx_val_are_aliases_not_copies():
+	""" The pairs used to be independent implementations of the same logic. They must now agree
+	on every case, including out-of-range and unpopulated. """
+	il = IndexedList(1, 4, validate_type=str)
+	il.set_idx_val(2, "b")
+
+	assert il[2] == il.get_idx_val(2) == "b"
+	assert il[3] is il.get_idx_val(3) is None
+
+	for call in (lambda: il[99], lambda: il.get_idx_val(99)):
+		with pytest.raises(KeyError):
+			call()
+	for call in (lambda: il.__setitem__(99, "x"), lambda: il.set_idx_val(99, "x")):
+		with pytest.raises(KeyError):
+			call()
+	for call in (lambda: il.__setitem__(1, 5), lambda: il.set_idx_val(1, 5)):
+		with pytest.raises(TypeError):
+			call()
+
+def test_channellist_is_an_alias_not_a_subclass():
+	""" It must be the same class object - a subclass would register a second name in stardust's
+	registry and break deserialization of anything already stored as an "IndexedList". """
+	assert ChannelList is IndexedList

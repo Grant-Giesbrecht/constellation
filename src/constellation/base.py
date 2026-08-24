@@ -13,7 +13,7 @@ from socket import getaddrinfo, gethostname
 import ipaddress
 import fnmatch
 import matplotlib.pyplot as plt
-from stardust.serializer import Serializable, to_serial_dict, from_serial_dict
+from stardust.serializer import Serializable, to_serial_dict, from_serial_dict, SERIALIZABLE_CLASS_REGISTRY
 from stardust.io import hdf_to_dict, dict_to_hdf
 import datetime
 import numbers
@@ -232,7 +232,13 @@ class IndexedList(Serializable):
 	
 	#TODO: Add some validation to the value type. I think they need to be JSON-serializable.
 	
-	__state_fields__ = ("first_index", "num_indices", "index_data")
+	__state_fields__ = ("first_index", "num_indices", "index_data", "validate_type_name")
+	
+	# Class-level defaults. stardust reconstructs via `cls.__new__(cls)` and never calls
+	# __init__, so anything not in __state_fields__ simply does not exist on a restored object.
+	# Without these, a restored IndexedList raised AttributeError on every write.
+	_validate_type = None
+	validate_type_name = ""
 	
 	def __init__(self, first_index:int, num_indices:int, validate_type=None, log:plf.LogPile=None):
 		super().__init__()
@@ -240,9 +246,72 @@ class IndexedList(Serializable):
 		self.first_index = first_index
 		self.num_indices = num_indices
 		self.index_data = {}
-
-		#TODO: Save this as a string and add it to __stat_fields__
+		
 		self.validate_type = validate_type
+	
+	@property
+	def validate_type(self):
+		''' The class stored values must be instances of, or None for no checking.
+		
+		Held as a class *name* in `validate_type_name` (which is what gets serialized) and
+		resolved back to the class on demand via stardust's SERIALIZABLE_CLASS_REGISTRY - a
+		class object itself can't be written to JSON/HDF. Resolution is lazy and cached, so a
+		restored IndexedList regains its type checking the first time it's used.
+		
+		SCOPE - what this does and does not protect (measured, not assumed):
+		
+		This guards exactly one operation: *assigning a value into a slot of this list*. It is a
+		container-level guard, not a schema validator. It answers "what kind of object lives in
+		this list", and says nothing about the contents of those objects.
+		
+		Enforced:
+		  - `lst[2] = value`
+		  - `lst.set_idx_val(2, value)`   (a one-line delegate to __setitem__)
+		  - `lst.append(value)` / `append(value, allow_expand=True)`
+		  - `InstrumentState.set(params, value, indices=...)` *when the list slot itself is the
+		    final target* - but note set() catches the TypeError, logs it, and returns False. It
+		    is a soft failure with a log line, not a raised exception.
+		
+		NOT enforced:
+		  - `InstrumentState.set(("channels", "div_volt"), v, indices=(2, None))` - i.e. walking
+		    *through* the list to an attribute on the element. This terminates in a plain
+		    setattr() and never touches __setitem__. This is the shape of nearly every real state
+		    write in the codebase, so in practice validate_type sees very little traffic.
+		  - direct pokes at `lst.index_data["idx-2"]`
+		  - mutating an element in place (`lst[1].some_field = <anything>`)
+		  - deserialization: stardust restores `index_data` wholesale without re-checking.
+		
+		Instrumenting a full construction + refresh_state()/apply_state() cycle across three
+		drivers produced 13 calls to _check_type and 0 rejections; 12 of the 13 were a category
+		__init__ pre-filling channel slots with objects it had just built itself. Treat this as
+		documentation of intended element type (which is now serialized alongside the data) more
+		than as a runtime safety net. See todo_list.md P16 for the proposal to extend add_param()
+		into the checking that would actually cover the setattr path.
+		'''
+		
+		if self._validate_type is not None:
+			return self._validate_type
+		
+		name = getattr(self, "validate_type_name", "")
+		if name:
+			info = SERIALIZABLE_CLASS_REGISTRY.get(name)
+			if info is not None:
+				self._validate_type = info.cls
+				return self._validate_type
+		
+		return None
+	
+	@validate_type.setter
+	def validate_type(self, value):
+		self._validate_type = value
+		self.validate_type_name = value.__name__ if value is not None else ""
+	
+	def _check_type(self, value):
+		''' Raises TypeError if `value` isn't an acceptable type for this list. '''
+		
+		expected = self.validate_type
+		if expected is not None and not isinstance(value, expected):
+			raise TypeError(f"Expected value of type '{expected}' but received value of type '{type(value)}'.")
 	
 	def clear(self):
 		self.index_data = {}
@@ -264,27 +333,20 @@ class IndexedList(Serializable):
 		return populated_list
 	
 	def __getitem__(self, key:int):
+		''' Returns the value at `key`, or None if that index has no value yet.
+		Raises KeyError if `key` is outside [first_index, first_index+num_indices).
+		'''
 		
-		if key < self.first_index or key >= self.first_index + self.num_indices:
-			raise KeyError(f"Index {key} out of range.")
-		
-		try:
-			if not self.idx_is_populated(key):
-				return None
-			else:
-				return self.index_data[f"idx-{key}"]
-		except:
-			raise KeyError(f"Index '{key}' not found.")
+		self.get_valid_idx(key)
+		return self.index_data.get(f"idx-{key}")
 	
 	def __setitem__(self, key:int, value):
+		''' Stores `value` at `key`. Raises KeyError if the index is out of range, or
+		TypeError if `validate_type` is set and `value` isn't an instance of it.
+		'''
 		
-		if self.validate_type is not None:
-			if not isinstance(value, self.validate_type):
-				raise TypeError(f"Expected value of type '{self.validate_type}' but received value of type '{type(value)}'.")
-		
-		if key < self.first_index or key >= self.first_index + self.num_indices:
-			raise KeyError(f"Index {key} out of range.")
-		
+		self._check_type(value)
+		self.get_valid_idx(key)
 		self.index_data[f"idx-{key}"] = value
 	
 	def summarize(self, indent:str=""):
@@ -292,13 +354,19 @@ class IndexedList(Serializable):
 		out = ""
 		
 		found_none = True
-		for ch in range(self.first_index, self.first_index+self.num_indices):
-			if self.idx_is_populated(ch):
-				found_none = False
-				if ch != self.first_index:
-					out = out + "\n"
-				out += f"{indent}index {ch}:\n"
-				out += self.get_idx_val(ch).state_str(indent=indent+"    ")
+		for ch, val in self.populated_items():
+			found_none = False
+			if ch != self.first_index:
+				out = out + "\n"
+			out += f"{indent}index {ch}:\n"
+			
+			# Values are usually InstrumentState objects, which know how to format themselves -
+			# but nothing requires that (validate_type is optional), so fall back to a plain
+			# repr rather than raising AttributeError on e.g. a float.
+			if hasattr(val, "state_str"):
+				out += val.state_str(indent=indent+"    ")
+			else:
+				out += plf.markdown(f"{indent}    >:a{protect_str(val, limit=40)}<") + "\n"
 		
 		if found_none:
 			out += f"{indent}[>:qEmpty IndexedList<]"
@@ -312,15 +380,18 @@ class IndexedList(Serializable):
 		return out
 	
 	def get_valid_idx(self, index:int) -> int:
-		''' Checks if a given index number is valid. If not, returns
-		closest valid index.
+		''' Validates that `index` is within this list's range, raising KeyError if not.
 		
 		Args:
-			index (int): Index value to validate. Zero-indexed.
+			index (int): Index value to validate. Indices run from `first_index` (commonly 1,
+				to match instrument channel numbering) up to first_index+num_indices-1 - they
+				are NOT necessarily zero-based.
 		
 		Returns:
-			int: Validated index number.
+			int: The validated index number, unchanged.
 		
+		Raises:
+			KeyError: If the index is outside the list's range.
 		'''
 		if index >= self.first_index+self.num_indices:
 			raise KeyError(f"Max index exceeded")
@@ -330,43 +401,37 @@ class IndexedList(Serializable):
 			return index
 	
 	def set_idx_val(self, index:int, value) -> None:
-		''' Sets the value assigned to the specified index. 
+		''' Alias for `self[index] = value`. Kept because it reads more clearly at call sites
+		that pass a computed index (e.g. InstrumentState.set). Deliberately a one-line delegate
+		rather than a second implementation - the two used to be independent copies of the same
+		logic, which is how behaviour drifts.
 		
 		Args:
-			index (int): Index number, zero-indexed.
+			index (int): Index number. Indices run from first_index, which is often 1 to match
+				instrument channel numbering - not necessarily 0.
 			value (any): Value to assign to index.
 		
 		Returns:
 			None
 		'''
-		
-		if self.validate_type is not None:
-			if not isinstance(value, self.validate_type):
-				raise TypeError(f"Expected value of type '{self.validate_type}' but received value of type '{type(value)}'.")
-		
-		chan = self.get_valid_idx(index)
-		self.index_data[f"idx-{chan}"] = value
+		self[index] = value
 	
 	def get_idx_val(self, index:int):
-		''' Get the value assigned to the index.
+		''' Alias for `self[index]`. See set_idx_val() for why this delegates.
 		
 		Args:
-			index (int): Index to get, zero-indexed.
+			index (int): Index to get. Runs from first_index, not necessarily 0.
 		
 		Returns:
-			Value assigned to index. Any type. Returns None if value
-			has not been assigned to index yet.
+			Value assigned to index, or None if nothing has been assigned there yet.
 		'''
-		chan = self.get_valid_idx(index)
-		if not self.idx_is_populated(chan):
-			return None
-		return self.index_data[f"idx-{chan}"]
+		return self[index]
 	
 	def idx_is_populated(self, index:int):
 		''' Checks if the specified index has been assigned a value.
 		
 		Args:
-			index (int): Index to get, zero-indexed.
+			index (int): Index to check. Runs from first_index, not necessarily 0.
 		
 		Returns:
 			bool: True if index has been assigned a value.
@@ -392,23 +457,45 @@ class IndexedList(Serializable):
 				yield idx, self.index_data[f"idx-{idx}"]
 	
 	def append(self, value, allow_expand:bool=False) -> bool:
-		''' Adds value to the next non-populated index. Returns False if all 
-		slots are filled.
+		''' Adds `value` to the lowest unpopulated index.
+		
+		Args:
+			value: Value to store.
+			allow_expand (bool): If True and every slot is already filled, grow num_indices by
+				one and store the value in the new slot. If False (default), a full list is left
+				untouched and False is returned.
+		
+		Returns:
+			bool: True if the value was stored.
 		'''
 		
-		#TODO: Implement allow_expand
-		
 		# Scan over all indices, assign to first
-		for ch in range(self.first_index, self.first_index+self.num_indices):
+		for ch in self.get_range():
 			if not self.idx_is_populated(ch):
-				self.set_idx_val(ch, value)
+				self[ch] = value
 				return True
+		
+		# Every slot is taken. Grow by one if the caller allows it.
+		if allow_expand:
+			# Type-check BEFORE mutating num_indices, so a rejected value can't leave the list
+			# permanently one slot larger with nothing in it.
+			self._check_type(value)
+			new_idx = self.first_index + self.num_indices
+			self.num_indices += 1
+			self.index_data[f"idx-{new_idx}"] = value
+			return True
 		
 		return False
 	
 	def get_range(self):
 		return range(self.first_index, self.first_index+self.num_indices)
 	
+# Readability alias. Per-channel state is by far the most common use of IndexedList, and
+# `ChannelList(1, 4, ...)` reads better than `IndexedList(1, 4, ...)` at those call sites. It is
+# the same class, not a subclass - subclassing would create a second name in stardust's registry
+# and break deserialization of anything already stored as an "IndexedList".
+ChannelList = IndexedList
+
 class InstrumentState(Serializable):
 	""" Used to describe the state of a Driver or instrument.
 	"""

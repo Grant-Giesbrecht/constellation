@@ -5,6 +5,11 @@ Manual:
 
 from constellation.base import *
 from constellation.instrument_control.categories.lock_in_amplifier_ctg import *
+# NOTE: `zhinst` is deliberately NOT a dependency of constellation-core - it was removed from
+# pyproject.toml because this file is the only importer and it is not exported from all.py, so
+# nothing reachable used it. If this driver is migrated, it belongs in its own repo alongside the
+# other niche-dependency drivers rather than pulling zhinst back into core (see todo_list.md P15).
+# Until then, `pip install zhinst` manually to use this file.
 import zhinst.utils
 
 def bool_to_int(x:bool):

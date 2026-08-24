@@ -19,7 +19,8 @@ after the P4 pass: 95 passed, 5 xfailed;
 after the P5 pass: 112 passed, 4 xfailed;
 after the P9 pass: 124 passed, 4 xfailed;
 after the P8 pass: 135 passed, 4 xfailed;
-after write_binary: **150 passed, 4 xfailed**).
+after write_binary: 150 passed, 4 xfailed;
+after the P6 pass: **160 passed, 4 xfailed**).
 
 ---
 
@@ -70,8 +71,37 @@ after write_binary: **150 passed, 4 xfailed**).
       first time. *confirmed*
 - [ ] **`RigolDS1000E` cannot be instantiated** — doesn't implement 16 of `Oscilloscope`'s abstract
       methods (`set_coupling`, `get_coupling`, trigger mode/level/source, probe attenuation,
-      bandwidth limit, run/stop acquisition, single/force trigger). Pre-existing; the driver is
-      half-migrated. *confirmed*
+      bandwidth limit, run/stop acquisition, single/force trigger). *confirmed*
+
+      **CORRECTION (owner, 2026-08-20): this driver is NOT "half-migrated" and must not be
+      "completed".** The DS1000E hardware has genuinely incomplete remote-access capability —
+      some critical parameters cannot be read or set over SCPI at all. It exists both because the
+      instrument is in active use, and deliberately as the worked example of *how Constellation
+      represents an instrument that cannot be fully category-compliant*.
+
+      So the task is not "implement the missing SCPI". It is: **decide and demonstrate the
+      partial-compliance pattern**, then apply it here. Right now the driver is un-instantiable,
+      which is the worst of both worlds — the unsupported methods are invisible until Python
+      refuses to construct the class, and the useful 80% of the driver is unreachable.
+
+      `FeatureUnavailable(RuntimeError)` already exists in `base.py` for exactly this and is
+      **never raised anywhere** — it looks like the intended mechanism, abandoned before use.
+
+      - [ ] Decide the pattern. Leading candidate: the driver *does* override every abstract
+            method, and the genuinely impossible ones raise `FeatureUnavailable` with a message
+            naming the hardware limitation. That makes the class constructible, keeps the
+            supported majority usable, and turns an un-constructible class into a clear runtime
+            error at the exact unsupported call.
+      - [ ] Consider a declarative form so capability is introspectable *before* calling — e.g.
+            a `@feature_unavailable("DS1000E cannot read trigger level over SCPI")` decorator, or
+            a `supported_features()` query. A GUI wants to grey out a control, not catch an
+            exception after the user clicks it.
+      - [ ] Decide what `refresh_state()`/`apply_state()` do when some getters/setters are
+            unavailable — they currently call everything unconditionally, so one
+            `FeatureUnavailable` would abort the whole sweep. Probably: skip and log at debug.
+      - [ ] Apply the pattern to `RigolDS1000E` and document it as the reference example.
+      - [ ] Document the pattern in `CLAUDE.md` / a doc page, since "not all instruments can do
+            everything" is a general truth about lab hardware, not a DS1000E quirk.
 - [x] Removed the now-obsolete `xfail(strict=True)` on
       `test_relay_default_argument_is_not_shared_between_instances` (it XPASSed once P2 landed).
 - [x] Added regression tests: relay `read()`/`query()` return values for both relay types, plus
@@ -286,12 +316,12 @@ sweep of 8 invalid paths asserting neither method raises, state-left-untouched o
 unpopulated-element reporting, type-rejection, and `test_set_and_get_agree_on_what_is_a_valid_path`
 which asserts the two methods accept exactly the same path set.
 
-## Priority 6 — IndexedList
+## Priority 6 — IndexedList — **DONE**
 
 Keep the class — sparse allocation, arbitrary base index, and `"idx-N"` string keys for HDF5
 survival all earn their place (all three verified). These are cleanups and bugs, not a redesign.
 
-- [ ] **`validate_type` does not survive serialization.** Left out of `__state_fields__` (existing
+- [x] **`validate_type` does not survive serialization.** Left out of `__state_fields__` (existing
       TODO). After a round trip the attribute is *gone*, so `__setitem__`/`set_idx_val` raise
       `AttributeError: 'IndexedList' object has no attribute 'validate_type'`. A restored
       IndexedList is write-broken. Doesn't affect `state.set(["channels","div_volt"], ...)` (that
@@ -299,23 +329,87 @@ survival all earn their place (all three verified). These are cleanups and bugs,
       `append()`, hence `MeasurementsMixin.add_measurement` after any `restore_state()`.
       Fix: store the type name as a string in `__state_fields__`, and `getattr`-guard the check.
       *confirmed*
-- [ ] **`summarize()` assumes every value is an `InstrumentState`** — calls `.state_str()`
+- [x] **`summarize()` assumes every value is an `InstrumentState`** — calls `.state_str()`
       unconditionally, so an IndexedList of plain scalars raises
       `AttributeError: 'float' object has no attribute 'state_str'`. Nothing stores scalars in one
       today, but `validate_type` is optional so nothing prevents it.
       *confirmed*
-- [ ] **`append(value, allow_expand=False)`** — `allow_expand` is accepted and ignored (TODO in
+- [x] **`append(value, allow_expand=False)`** — `allow_expand` is accepted and ignored (TODO in
       body); still returns `False` past capacity even with `allow_expand=True`. Implement or drop
       the parameter.
       *confirmed*
-- [ ] **Collapse duplicate method pairs.** `get_idx_val`/`__getitem__` and
+- [x] **Collapse duplicate method pairs.** `get_idx_val`/`__getitem__` and
       `set_idx_val`/`__setitem__` are independent reimplementations that happen to be behaviorally
       identical (verified: same value populated, same `None` unpopulated, same `KeyError` out of
       range). Make one pair a thin alias for the other so they can't drift.
-- [ ] `get_valid_idx()`'s docstring says "zero-indexed" but the whole point of `first_index` is
+- [x] `get_valid_idx()`'s docstring says "zero-indexed" but the whole point of `first_index` is
       that it needn't be. Same wording in `set_idx_val`/`get_idx_val`/`idx_is_populated`.
       *static*
-- [ ] Consider a `ChannelList` alias for readability at channel-shaped call sites.
+- [x] Consider a `ChannelList` alias for readability at channel-shaped call sites.
+
+### Outcome
+
+- **`validate_type` now survives serialization.** The class object itself can't be written to
+  JSON/HDF, so the *name* is stored in `validate_type_name` (added to `__state_fields__`) and
+  resolved back through stardust's `SERIALIZABLE_CLASS_REGISTRY` by a lazy, caching property.
+  Class-level defaults (`_validate_type = None`, `validate_type_name = ""`) cover the fact that
+  stardust rebuilds via `cls.__new__(cls)` and never calls `__init__` — which was the actual
+  mechanism of the bug. Verified: a restored list accepts valid writes and still rejects wrong
+  types, and `add_measurement()` works after `restore_state()`.
+- **`summarize()`** falls back to a plain repr for values that aren't `InstrumentState`, instead
+  of calling `.state_str()` unconditionally. It also now iterates `populated_items()` rather than
+  re-deriving indices.
+- **`append(allow_expand=True)`** is implemented: a full list grows by one slot. The type check
+  runs *before* `num_indices` is mutated, so a rejected value can't leave the list permanently
+  one slot larger and empty.
+- **Duplicate pairs collapsed.** `__getitem__`/`__setitem__` are the single implementation;
+  `get_idx_val`/`set_idx_val` are one-line delegates. A test asserts they agree on populated,
+  unpopulated, out-of-range and wrong-type cases.
+- **Docstrings corrected** — `get_valid_idx`/`idx_is_populated`/`set_idx_val`/`get_idx_val` said
+  "zero-indexed", contradicting the entire point of `first_index` (usually 1, to match instrument
+  channel numbering).
+- **`ChannelList` added** as an alias — deliberately `ChannelList = IndexedList`, not a subclass,
+  since a subclass would register a second name in stardust's registry and break deserialization
+  of anything already stored as an `"IndexedList"`.
+
+Tests: **160 passed, 4 xfailed** (from 150/4).
+
+### Note — what `validate_type` actually protects (surveyed 2026-08-24)
+
+Asked during review: how automatic, and how circumventable, is the type checking? Measured
+rather than assumed. It guards exactly one operation — *assigning a value into a slot of the
+list*. It is a container-level guard ("what kind of object lives in this list"), not a schema
+validator, and says nothing about the contents of those objects.
+
+Enforced:
+
+- `lst[2] = value`
+- `lst.set_idx_val(2, value)` (a one-line delegate to `__setitem__`)
+- `lst.append(value)` and `append(value, allow_expand=True)`
+- `InstrumentState.set(params, value, indices=...)` **when the list slot itself is the final
+  target** — but `set()` catches the `TypeError`, logs `Cannot set state. Rejected value for
+  ...`, and returns `False`. A soft failure with a log line, not a raised exception. Callers that
+  ignore the return value see nothing.
+
+Not enforced:
+
+- `InstrumentState.set(("channels", "div_volt"), v, indices=(2, None))` — walking *through* the
+  list to an attribute on the element. Terminates in a plain `setattr()` and never touches
+  `__setitem__`. **This is the shape of nearly every real state write in the codebase**, which is
+  why the guard sees almost no traffic.
+- direct pokes at `lst.index_data["idx-2"]`
+- mutating an element in place (`lst[1].some_field = <anything>`)
+- deserialization — stardust restores `index_data` wholesale without re-checking.
+
+Instrumenting construction plus a full `refresh_state()`/`apply_state()` cycle across three
+drivers gave 13 calls to `_check_type` and **0 rejections**; 12 of the 13 were a category
+`__init__` pre-filling channel slots with objects it had just constructed itself. Corroborating
+evidence that it was catching nothing: it was silently absent after *every* `restore_state()`
+until the P6 fix above, and nobody noticed.
+
+Verdict: keep it — it costs nothing and, now that `validate_type_name` serializes, a stored state
+file documents what each list is meant to hold. But do not rely on it as a safety net. The gap
+that matters (the `setattr` path) needs a different mechanism — see **P16**.
 
 ## Priority 7 — `add_param` / `__state_fields__` / `validate()`
 
@@ -868,6 +962,109 @@ for — raise it in drivers that can't support it rather than omitting the categ
 - [ ] Implement both in `Siglent_SSA3000X_dvr.py` (return the value, don't assign `_super_hint`).
 - [ ] Re-add the calls in `refresh_state()`/`apply_state()` and delete the two placeholder NOTEs.
 - [ ] Seed it in `SpectrumAnalyzer.init_dummy_state()` (currently empty — see the P3 follow-ups).
+
+## Priority 15 — planned: split niche-dependency drivers into separate repos
+
+**Owner's stated direction (2026-08-20), not yet scheduled.** `constellation-core` should carry
+only `pyvisa`- and `pyserial`-based drivers. Anything needing a niche or proprietary package
+(`pyvicp`, `PyDAQmx`/`nidaqmx`, `zhinst`, ...) moves to its own repo, so users don't install a pile
+of vendor bloat they'll never load.
+
+Recording this because it changes what "stable" means for the relay layer — don't invest in
+polishing `VICPDirectSCPIRelay` in-place, and don't add new hard dependencies to `pyproject.toml`
+without checking against this plan.
+
+### Current footprint (surveyed 2026-08-20)
+
+`pyproject.toml` declares 13 hard dependencies. The niche ones and who actually imports them:
+
+| package | imported by | note |
+|---|---|---|
+| `pyvicp` | `relay.py` only | `from pyvicp import Client` at module top — **unconditional** |
+| `zhinst >= 24.0.0` | `to_reformat/ZurichInstruments_MFLI_dvr.py` only | **already dead weight** |
+| `PyDAQmx` / `nidaqmx` | nothing | not a dependency; `data_acquisition/drivers/` is empty |
+| `pyserial` | nothing | not a dependency yet, and no serial driver exists |
+| `PyQt6` | `ui.py`, `widgets.py`, 3 `*_gui.py` | heavy; same optional-extra question |
+| `matplotlib` | `base.py:15`, `ui.py`, `oscilloscope_ctg.py`, ... | **ACCEPTED as a hard dependency** — not in scope for the split (see below) |
+
+Two findings worth acting on ahead of the full split:
+
+- [x] **`zhinst` dropped from `pyproject.toml`** (2026-08-20). A note was left at the import
+      site in the unmigrated MFLI driver explaining why, and that it belongs in its own repo.
+      Original finding: Its only importer is an unmigrated
+      driver in `to_reformat/` that isn't exported from `all.py`, so nothing reachable uses it.
+      Every user currently installs it for nothing. This is a one-line change independent of the
+      repo split. *confirmed*
+- [ ] **`pyvicp` can't become optional while `relay.py` imports it at module scope.** Either move
+      `VICPDirectSCPIRelay` out to the new repo (the stated plan) or make the import lazy/guarded
+      so `relay.py` still imports on a machine without `pyvicp`. Worth doing the lazy-import
+      version first if the repo split is far off — it decouples the two changes. *confirmed*
+
+### Design questions to settle before splitting
+
+- [ ] **Mechanism**: `[project.optional-dependencies]` extras in one repo
+      (`pip install constellation-core[vicp]`) vs genuinely separate distributions
+      (`constellation-vicp`). Extras are far less work and keep drivers discoverable; separate
+      repos give independent release cadence and keep vendor licensing out of the core tree.
+      The stated plan is separate repos — worth confirming that's still preferred over extras.
+- [ ] **What the satellite repos depend on**: they need `Driver`, `CommandRelay`,
+      `InstrumentState` from core, so core's public API becomes a real compatibility surface
+      rather than something freely refactorable. Several open items in this file
+      (`_super_hint`/`superreturn`, `IndexedList` cleanup) are easier *before* that hardens.
+- [ ] **Driver discovery**: `instrument_control/all.py` currently `import *`s every driver.
+      Out-of-tree drivers need a registration path — entry points, or explicit user imports.
+- [-] ~~Should `matplotlib` become optional?~~ **Decided 2026-08-20: no.** It's ubiquitous enough
+      that requiring it is not a burden, unlike vendor-specific packages. Keep it a hard
+      dependency; don't re-raise this. The split is about *niche/proprietary* packages, not about
+      minimising the dependency count generally.
+- [ ] **Should `PyQt6` become optional?** Still open — unlike `matplotlib` it is genuinely heavy
+      and only used by `ui.py`/`widgets.py`/the `*_gui.py` modules, none of which a headless or
+      script-only user touches. Distinct from the driver split, but the same mechanism would
+      serve it.
+
+### Related cleanup
+
+- [ ] **`examples/serial_demo.py` is misnamed and broken.** Despite the name it has nothing to do
+      with serial ports — it's a *serialization* demo, and it imports `stateclass`, `serializer`
+      and `base` as top-level modules, none of which exist. Rename or delete; it's misleading
+      when scanning for existing serial support. *confirmed*
+
+## Priority 16 — far-future: extend `add_param()` into real type checking
+
+Low priority, no urgency, listed here so the analysis behind it isn't lost. Do not start this
+before the higher-priority items are cleared.
+
+**The gap.** `IndexedList.validate_type` only fires on writes into a list *slot*, and essentially
+every real state write in the codebase instead walks *through* a list to an attribute on the
+element and lands in a plain `setattr()` (see the note under P6 for the measured breakdown). So
+today nothing stops `state.set(("channels", "div_volt"), "0.5 volts")` from storing a string
+where a float belongs. That value then propagates into `apply_state()`, into serialized state
+files, and into whatever plot or SCPI command consumes it — the failure surfaces far from the
+write that caused it.
+
+**Why `add_param` is the right lever.** It is already the per-instance registry that every state
+parameter passes through, and it already carries `unit` and `is_data` metadata. Adding an
+expected type (and possibly a range) there keeps one declaration site per parameter rather than
+introducing a third parallel list. `InstrumentState.set()` would consult it before the
+`setattr()`, closing the path `validate_type` structurally cannot reach.
+
+- [ ] **Decide whether this augments or replaces `validate_type`.** If `add_param` gains type
+      checking, the IndexedList guard becomes redundant for anything registered as a param —
+      though it would still cover raw `lst[i] = v` writes and `append()`, which `add_param` never
+      sees. Leaning augment (keep both, different scopes), but that is not settled.
+- [ ] **Decide the failure mode: raise or log-and-return-False?** `InstrumentState.set()`
+      currently swallows the `TypeError` and returns `False`, which is consistent with the rest of
+      that method's error handling but easy to ignore. A hard raise would catch driver bugs
+      immediately, at the cost of a driver returning a slightly-off type from a getter being able
+      to take down a `refresh_state()` mid-sweep. Possibly a per-Driver strictness flag.
+- [ ] **Decide how strict is useful.** `int` where a `float` is expected, numpy scalars, and
+      `None` for "not yet read" all have to be acceptable, or the check will be turned off within
+      a week. Probably `numbers.Real` style abstract types rather than concrete ones.
+- [ ] **Check the interaction with `validate()`** (P7) — that method already cross-checks
+      `add_param` against `__state_fields__`; a type declaration is naturally checked in the same
+      place.
+- [ ] Retrofit the existing `add_param` call sites across all category classes once the shape is
+      settled. Large mechanical change; worth doing in one pass, not incrementally.
 
 ## Execution order (agreed)
 
