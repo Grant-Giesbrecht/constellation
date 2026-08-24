@@ -1257,3 +1257,130 @@ def test_channellist_is_an_alias_not_a_subclass():
 	""" It must be the same class object - a subclass would register a second name in stardust's
 	registry and break deserialization of anything already stored as an "IndexedList". """
 	assert ChannelList is IndexedList
+
+# ---------------------------------------------------------------------------------------------
+# Partial category compliance: @feature_unavailable (todo P2)
+#
+# Not every instrument can implement every method of its category. RigolDS1000E is the reference
+# case: its SCPI interface has no timebase control at all, so before this mechanism existed the
+# class was missing abstract methods and could not be constructed - one hardware gap made the
+# entire driver unusable.
+# ---------------------------------------------------------------------------------------------
+
+from constellation.base import FeatureUnavailable, feature_unavailable
+from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000E_dvr import RigolDS1000E
+
+def make_dummy_ds1000e():
+	return RigolDS1000E("DUMMY", make_log(), relay=DirectSCPIRelay(), dummy=True)
+
+def test_partially_compliant_driver_is_constructible():
+	""" The whole point: a driver with genuine hardware gaps must still be instantiable, so the
+	majority of it that does work is reachable. """
+	d = make_dummy_ds1000e()
+	assert isinstance(d, Oscilloscope)
+	assert RigolDS1000E.__abstractmethods__ == frozenset()
+
+def test_unavailable_feature_raises_when_called_directly():
+	d = make_dummy_ds1000e()
+	with pytest.raises(FeatureUnavailable) as excinfo:
+		d.get_div_time()
+	msg = str(excinfo.value)
+	# The message must name both the method and the hardware reason - "unsupported" alone sends
+	# the reader back to the source to find out why.
+	assert "get_div_time" in msg
+	assert "timebase" in msg
+
+def test_unavailable_feature_raises_in_dummy_mode_too():
+	""" Dummy mode simulates THIS instrument, and this instrument cannot do it. A dummy that
+	quietly succeeded would hide the failure until hardware day. """
+	d = make_dummy_ds1000e()
+	assert d.dummy
+	with pytest.raises(FeatureUnavailable):
+		d.set_div_time(1e-3)
+
+def test_unavailable_feature_does_not_write_state():
+	""" The old implementation warned and then fell through to the category method, which wrote
+	the requested value into self.state - so the tracker claimed a timebase the instrument had
+	never been told about. """
+	d = make_dummy_ds1000e()
+	with pytest.raises(FeatureUnavailable):
+		d.set_div_time(42e-3)
+	assert d.state.get(["div_time"]) != 42e-3
+
+def test_capability_is_introspectable_before_calling():
+	""" A GUI wants to grey out a control, not catch an exception after the user clicks it. """
+	d = make_dummy_ds1000e()
+
+	assert d.feature_is_available("get_div_volt") is True
+	assert d.feature_is_available("get_div_time") is False
+	# A name the driver doesn't have at all also can't be called.
+	assert d.feature_is_available("no_such_method") is False
+
+	unavailable = d.unavailable_features()
+	assert "get_div_time" in unavailable
+	assert "get_div_volt" not in unavailable
+	assert "timebase" in unavailable["get_div_time"]
+
+def test_fully_compliant_driver_reports_no_unavailable_features():
+	d = make_dummy_osc()
+	assert d.unavailable_features() == {}
+	assert d.feature_is_available("get_div_time") is True
+
+def test_state_sweeps_skip_unavailable_features_instead_of_aborting():
+	""" refresh_state/apply_state call every getter/setter unconditionally, so one
+	FeatureUnavailable would abort the sweep partway through and leave the rest of the state
+	stale. Inside a sweep they're skipped. """
+	d = make_dummy_ds1000e()
+
+	d.refresh_state()
+	d.apply_state()
+	d.refresh_data()
+
+	# The supported parameters were still swept despite the unavailable ones in the same loop.
+	assert d.state.get(["channels", "div_volt"], indices=[1, None]) is not None
+
+def test_sweep_suppression_is_scoped_to_the_sweep():
+	""" Suppression must not leak: a direct call after a sweep still raises. """
+	d = make_dummy_ds1000e()
+	d.refresh_state()
+	assert d._state_sweep_depth == 0
+	with pytest.raises(FeatureUnavailable):
+		d.get_div_time()
+
+def test_sweep_depth_unwinds_when_the_sweep_raises():
+	""" The depth counter is decremented in a finally block, so an unrelated failure mid-sweep
+	can't leave the driver permanently suppressing FeatureUnavailable. """
+	d = make_dummy_ds1000e()
+
+	def boom():
+		raise ValueError("unrelated failure")
+
+	d.refresh_state = d._as_state_sweep(boom)
+	with pytest.raises(ValueError):
+		d.refresh_state()
+
+	assert d._state_sweep_depth == 0
+	with pytest.raises(FeatureUnavailable):
+		d.get_div_time()
+
+def test_dummy_waveforms_survive_a_missing_timebase():
+	""" init_dummy_state() seeds defaults through the setters, so on a scope with no timebase
+	div_time stays None. remake_dummy_waves() must fall back rather than raising TypeError. """
+	d = make_dummy_ds1000e()
+	assert d.state.get(["div_time"]) is None
+
+	wave = d.state.get(["channels", "waveform"], indices=[1, None])
+	assert len(wave["volt_V"]) > 0
+	assert len(wave["time_s"]) == len(wave["volt_V"])
+
+def test_feature_unavailable_marker_is_readable_on_the_class():
+	""" Introspection must work without instantiating - unavailable_features() reads the class,
+	and tooling may want the same before a driver is connected. """
+	reason = getattr(RigolDS1000E.get_div_time, "__feature_unavailable__", None)
+	assert reason is not None
+	assert "timebase" in reason
+
+def test_feature_unavailable_preserves_the_method_signature():
+	""" functools.wraps keeps the name and docstring, so introspection and help() still work. """
+	assert RigolDS1000E.set_div_volt.__name__ == "set_div_volt"
+	assert RigolDS1000E.get_div_time.__name__ == "get_div_time"

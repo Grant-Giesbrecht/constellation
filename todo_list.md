@@ -20,7 +20,8 @@ after the P5 pass: 112 passed, 4 xfailed;
 after the P9 pass: 124 passed, 4 xfailed;
 after the P8 pass: 135 passed, 4 xfailed;
 after write_binary: 150 passed, 4 xfailed;
-after the P6 pass: **160 passed, 4 xfailed**).
+after the P6 pass: 160 passed, 4 xfailed;
+after the P2 partial-compliance pass: **172 passed, 4 xfailed**).
 
 ---
 
@@ -87,21 +88,57 @@ after the P6 pass: **160 passed, 4 xfailed**).
       `FeatureUnavailable(RuntimeError)` already exists in `base.py` for exactly this and is
       **never raised anywhere** — it looks like the intended mechanism, abandoned before use.
 
-      - [ ] Decide the pattern. Leading candidate: the driver *does* override every abstract
-            method, and the genuinely impossible ones raise `FeatureUnavailable` with a message
-            naming the hardware limitation. That makes the class constructible, keeps the
-            supported majority usable, and turns an un-constructible class into a clear runtime
-            error at the exact unsupported call.
-      - [ ] Consider a declarative form so capability is introspectable *before* calling — e.g.
-            a `@feature_unavailable("DS1000E cannot read trigger level over SCPI")` decorator, or
-            a `supported_features()` query. A GUI wants to grey out a control, not catch an
-            exception after the user clicks it.
-      - [ ] Decide what `refresh_state()`/`apply_state()` do when some getters/setters are
-            unavailable — they currently call everything unconditionally, so one
-            `FeatureUnavailable` would abort the whole sweep. Probably: skip and log at debug.
-      - [ ] Apply the pattern to `RigolDS1000E` and document it as the reference example.
-      - [ ] Document the pattern in `CLAUDE.md` / a doc page, since "not all instruments can do
-            everything" is a general truth about lab hardware, not a DS1000E quirk.
+      - [x] Decide the pattern. **Chosen: the leading candidate.** The driver overrides every
+            abstract method, and the genuinely impossible ones are marked
+            `@feature_unavailable("<why>")`, which raises `FeatureUnavailable` naming the method
+            and the hardware limitation. Class becomes constructible; the supported majority
+            stays usable; the failure moves from construction time to the exact unsupported call.
+      - [x] Declarative form implemented, so capability is introspectable *before* calling:
+            `Driver.feature_is_available(name)` and `Driver.unavailable_features()` (name ->
+            reason). Both read the class via `inspect.getattr_static`, so they neither bind
+            methods nor trigger properties, and work without a connection.
+      - [x] `refresh_state()`/`apply_state()`/`refresh_data()`/`init_dummy_state()` now skip
+            unavailable features and log at debug instead of aborting the sweep. Implemented in
+            `Driver._wrap_state_sweeps()`, called once from `Driver.__init__`, which wraps the
+            *instance's* bound methods in a `_state_sweep_depth` counter that
+            `@feature_unavailable` consults. Wrapped centrally rather than per-category because
+            all four are abstract on `Driver` and every category (including future ones) writes
+            its own. Instance-level shadowing keeps `super().refresh_state()` chains working and
+            un-double-wrapped; the counter unwinds in a `finally`.
+      - [x] Applied to `RigolDS1000E`; it is constructible for the first time.
+      - [x] Documented in `docs/partial_compliance.md` (with mermaid diagrams) and pointed to
+            from `CLAUDE.md`.
+      - [ ] **Verify the 16 "unimplemented" methods against the hardware.** `set/get_coupling`,
+            `set/get_probe_attenuation`, `set/get_bandwidth_limit`, `set/get_trigger_mode`,
+            `set/get_trigger_level`, `set/get_trigger_source`, `run_acquisition`,
+            `stop_acquisition`, `do_single_trigger`, `do_force_trigger` are currently marked
+            `@feature_unavailable` with the reason *"not yet implemented — SCPI support
+            unverified on hardware"*, deliberately worded differently from the timebase entries.
+            They were never established as hardware limitations — they simply had no DS1000E
+            implementation, and marking them was what made the class constructible. The DS1000E
+            programming guide appears to document commands for most of them. **Needs a bench
+            check by the owner**, since it's a hardware fact, not something readable from the
+            source. Converting one is a single-method edit: delete the decorator, add
+            `@superreturn` and the SCPI body.
+      - [ ] Replace the file's header link — it currently points at the DS1000**Z** programming
+            guide, carried over when the file was copied from that driver.
+
+      ### Found while implementing this
+
+      - [x] `Oscilloscope.remake_dummy_waves()` raised `TypeError` on a scope with no timebase.
+            `init_dummy_state()` seeds defaults through the setters, so with `set_div_time`
+            unavailable `div_time`/`offset_time` stay `None` and `ndiv_horiz * None` blew up.
+            Now falls back to a nominal timebase — which mirrors the hardware, since the real
+            DS1000E driver returns sample index rather than seconds for the same reason.
+      - [x] The old warn-and-continue stubs were actively harmful, not merely useless: with
+            `@superreturn` they fell through to the category method, which wrote the requested
+            value into `self.state`. The tracker reported a timebase the instrument had never
+            been told about and `get_div_time()` handed it back as if read from hardware. A test
+            (`test_unavailable_feature_does_not_write_state`) pins this.
+      - [ ] **`FeatureUnavailable` is now raised, but nothing catches it.** Worth deciding
+            whether any of the higher-level helpers (`get_all_waveforms`, the GUI widgets,
+            `DriverStateBroadcaster`) should handle it specially, or whether the sweep
+            suppression covers every case that matters. No evidence yet that it doesn't.
 - [x] Removed the now-obsolete `xfail(strict=True)` on
       `test_relay_default_argument_is_not_shared_between_instances` (it XPASSed once P2 landed).
 - [x] Added regression tests: relay `read()`/`query()` return values for both relay types, plus

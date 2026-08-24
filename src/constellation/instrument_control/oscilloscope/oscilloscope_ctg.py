@@ -107,9 +107,22 @@ class Oscilloscope(Driver):
 			freq = 40*(channel+1) # Hz
 			npoints = 101
 			
-			# Create time series
-			t_span = self.state.get(["ndiv_horiz"]) * self.state.get(["div_time"])
-			t_start = -1*t_span/2+self.state.get(["offset_time"])
+			# Create time series.
+			# A partially-compliant scope may have no timebase at all - RigolDS1000E cannot read
+			# or set it over SCPI, so set_div_time() is marked @feature_unavailable, is skipped
+			# during init_dummy_state(), and div_time/offset_time stay None. Fall back to a
+			# nominal timebase so dummy mode still yields a plausible waveform rather than
+			# raising TypeError on None. (Such an instrument's real waveforms have no meaningful
+			# time axis either - the DS1000E driver returns sample index instead of seconds.)
+			div_time = self.state.get(["div_time"])
+			offset_time = self.state.get(["offset_time"])
+			if div_time is None:
+				div_time = 1e-3
+			if offset_time is None:
+				offset_time = 0.0
+			
+			t_span = self.state.get(["ndiv_horiz"]) * div_time
+			t_start = -1*t_span/2 + offset_time
 			t_series = np.linspace(t_start, t_start + t_span, npoints)
 			
 			# Create waveform

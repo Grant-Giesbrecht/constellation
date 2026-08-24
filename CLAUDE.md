@@ -52,6 +52,15 @@ and follows the same three-layer pattern:
 New drivers should only need to translate SCPI commands in the driver file — the category class and
 `Driver` base handle state tracking, logging, online-status checks, and dummy-mode plumbing.
 
+Not every instrument can do everything its category declares — a Rigol DS1000E has no SCPI
+timebase control at all. Such a driver still defines **every** abstract method, marking the
+impossible ones `@feature_unavailable("<what the hardware can't do>")` (never combined with
+`@superreturn`, since no value is produced to track). The class stays constructible, a direct call
+raises `FeatureUnavailable`, `Driver.unavailable_features()`/`feature_is_available()` report the
+gaps before they're called, and `refresh_state`/`apply_state`/`refresh_data`/`init_dummy_state`
+skip them instead of aborting the sweep. `RigolDS1000E` is the reference example; see
+`docs/partial_compliance.md`.
+
 ### State tracking (`src/constellation/base.py`)
 
 - `InstrumentState` (Serializable, from `stardust`) holds all tracked parameters for a driver/category.
@@ -129,6 +138,8 @@ connected instruments.
 - `examples/` — runnable scripts demonstrating dummy-mode and hardware usage per category
   (`*_dummy_demo.py`, `*_hardware_demo.py`), plus networking and state-serialization examples.
 - `docs/dummy_mode.md` — how dummy dispatch works and when `@enabledummy` is warranted.
+- `docs/partial_compliance.md` — `@feature_unavailable`: how a driver whose hardware can't do
+  everything its category declares stays constructible and introspectable.
 - `docs/superreturn.md` — how drivers hand parsed values up to their category class.
 - `docs/networking_data_paths.md` — RPC vs DataBank: which channel bulk data should take, and why
   binary on the RPC path is base64.

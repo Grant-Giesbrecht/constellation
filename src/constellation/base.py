@@ -845,6 +845,68 @@ class FeatureUnavailable(RuntimeError):
 	the given driver.'''
 	pass
 
+def feature_unavailable(reason:str):
+	''' Decorator marking a category method that THIS instrument genuinely cannot do.
+
+	Not every instrument can implement every method of its category - real lab hardware has
+	gaps. A Rigol DS1000E, for instance, cannot read or set its timebase over SCPI at all. The
+	category class still declares those methods `@abstractmethod`, so a driver that simply omits
+	them is not instantiable and the *entire* driver becomes unusable over one missing feature.
+
+	Use this instead:
+
+		@feature_unavailable("DS1000E cannot read the timebase over SCPI")
+		def get_div_time(self):
+			pass
+
+	The decorated method satisfies the abstract method (the class becomes constructible), and
+	calling it raises `FeatureUnavailable` naming both the method and the hardware reason. The
+	body is never executed and is conventionally `pass`.
+
+	Do NOT stack this with `@superreturn`: the point is that no driver body runs and nothing is
+	written into `self.state`, since there is no value to track.
+
+	Two further behaviours make this usable in practice:
+
+	 - **Introspectable before the call.** `Driver.feature_is_available("get_div_time")` and
+	   `Driver.unavailable_features()` report the marked methods and their reasons, so a GUI can
+	   grey out a control instead of catching an exception after the user clicks it.
+	 - **Skipped during state sweeps.** `refresh_state()`/`apply_state()`/`refresh_data()` call
+	   every getter/setter unconditionally, so one `FeatureUnavailable` would abort the whole
+	   sweep. Inside a sweep the marked method logs at debug and returns None instead of raising.
+	   Direct calls still raise - silence is only appropriate when the caller is iterating over
+	   everything rather than asking for this feature specifically.
+
+	It raises in dummy mode too. Dummy mode simulates *this instrument*, and this instrument
+	cannot do this - a dummy that quietly succeeded would hide the failure until hardware day.
+
+	Args:
+		reason (str): Human-readable hardware limitation, quoted in the exception and returned by
+			`unavailable_features()`. Say what the hardware can't do, not just "unsupported".
+	'''
+
+	def decorator(func):
+
+		@functools.wraps(func)
+		def wrapper(self, *args, **kwargs):
+
+			detail = f"{type(self).__name__}.{func.__name__}() is unavailable: {reason}"
+
+			# During a full-state sweep, skip rather than abort the sweep.
+			if getattr(self, "_state_sweep_depth", 0) > 0:
+				self.debug(f"Skipping unavailable feature >:a{func.__name__}<. ({reason})")
+				return None
+
+			raise FeatureUnavailable(detail)
+
+		# The marker the introspection helpers look for. Set on the wrapper, which is what ends
+		# up as the class attribute.
+		wrapper.__feature_unavailable__ = reason
+
+		return wrapper
+
+	return decorator
+
 class CheckOnline(Enum):
 	''' Contains possible values for the Driver.check_online_on_error parameter.
 	How check_online_on_error is set controls how a driver handles updating online
@@ -921,9 +983,85 @@ class Driver(ABC):
 		
 		self.discover_mixins()
 		
+		# Depth counter consulted by @feature_unavailable - see _wrap_state_sweeps().
+		self._state_sweep_depth = 0
+		self._wrap_state_sweeps()
+		
 		#TODO: Automatically reconnect
 		# Connect instrument
 		self.connect()
+	
+	def _wrap_state_sweeps(self):
+		''' Wraps this instance's refresh_state/apply_state/refresh_data so that methods marked
+		`@feature_unavailable` are skipped inside them instead of aborting the sweep.
+		
+		Done here, once, rather than by editing every category's refresh_state/apply_state,
+		because those three methods are abstract on Driver and every category writes its own -
+		including categories that don't exist yet. Wrapping at __init__ means a new category gets
+		the behavior for free and can't forget it.
+		
+		The wrapper is set as an *instance* attribute, which shadows the class method for normal
+		calls but leaves the class attribute untouched - so `super().refresh_state()` chains
+		inside category/driver code still resolve normally and are not double-wrapped.
+		'''
+		
+		# init_dummy_state() belongs in this list for the same reason: it seeds defaults by
+		# calling every setter in turn, so an unavailable one would abort construction.
+		for name in ("refresh_state", "apply_state", "refresh_data", "init_dummy_state"):
+			
+			bound = getattr(self, name, None)
+			if bound is None:
+				continue
+			
+			setattr(self, name, self._as_state_sweep(bound))
+	
+	def _as_state_sweep(self, bound):
+		''' Returns `bound` wrapped so `_state_sweep_depth` is raised for its duration. '''
+		
+		@functools.wraps(bound)
+		def sweep(*args, **kwargs):
+			self._state_sweep_depth += 1
+			try:
+				return bound(*args, **kwargs)
+			finally:
+				self._state_sweep_depth -= 1
+		
+		return sweep
+	
+	def unavailable_features(self) -> dict:
+		''' Returns {method_name: reason} for every method this driver has marked
+		`@feature_unavailable` - i.e. every part of its category API the hardware cannot do.
+		
+		Intended for capability introspection *before* calling: a GUI can grey out a control, and
+		a script can branch, rather than catching `FeatureUnavailable` after the fact.
+		'''
+		
+		out = {}
+		
+		for name in dir(type(self)):
+			
+			# getattr on the class, not the instance: avoids binding and avoids triggering
+			# properties.
+			attr = inspect.getattr_static(type(self), name, None)
+			
+			reason = getattr(attr, "__feature_unavailable__", None)
+			if reason is not None:
+				out[name] = reason
+		
+		return out
+	
+	def feature_is_available(self, name:str) -> bool:
+		''' True if `name` is a method this driver can actually perform.
+		
+		Returns False both for features explicitly marked `@feature_unavailable` and for names
+		the driver doesn't have at all, since neither can be called.
+		'''
+		
+		attr = inspect.getattr_static(type(self), name, None)
+		if attr is None:
+			return False
+		
+		return getattr(attr, "__feature_unavailable__", None) is None
 	
 	def connect(self, check_id:bool=True) -> bool:
 		''' Attempts to establish a connection to the instrument. Updates
