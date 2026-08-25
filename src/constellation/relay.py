@@ -349,6 +349,30 @@ class DirectSCPIRelay(CommandRelay):
 
 		return True
 
+# Soft ceiling on a single base64-over-RPC binary payload, in bytes of *encoded* payload.
+#
+# The RPC path is strictly JSON (labmesh.util.dumps is json.dumps), so bytes can only cross it
+# base64'd, in one message, held whole in memory on both ends - there is no chunking and no
+# integrity check. A 250k-point waveform measures ~326 KB encoded and is entirely fine. Several
+# megabytes is a different animal, and that traffic belongs in the labmesh DataBank, which has a
+# native chunked binary protocol with SHA-256 verification. See docs/networking_data_paths.md.
+#
+# Deliberately a warning, not an error: the limit is about which channel is *appropriate*, not
+# about what will physically work, and a driver author mid-experiment should not be blocked by a
+# guess at where "too big" starts.
+RPC_BINARY_WARN_BYTES = 2 * 1024 * 1024
+
+def warn_if_oversize_rpc_binary(log, direction:str, n_bytes:int, address:str) -> None:
+	''' Logs a warning if a single base64 RPC binary payload exceeds RPC_BINARY_WARN_BYTES. '''
+
+	if n_bytes <= RPC_BINARY_WARN_BYTES:
+		return
+
+	log.warning(
+		f"Large binary payload ({n_bytes/1024/1024:.1f} MB) {direction} relay >{address}< over the RPC path.",
+		detail=f"The RPC path base64s the block into a single JSON message with no chunking and no integrity check, held whole in memory on both ends. Above ~{RPC_BINARY_WARN_BYTES/1024/1024:.0f} MB, bulk data belongs in the labmesh DataBank instead - see docs/networking_data_paths.md."
+	)
+
 class RemoteTextCommandRelayClient(CommandRelay):
 	''' A CommandRelay that tunnels write/read/query calls over labmesh to a remote
 	instrument-adjacent process (a RemoteTextCommandRelayListener wrapped in a
@@ -445,12 +469,37 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		return True
 
 	def close(self) -> None:
-		''' Drops the connection. labmesh sockets aren't explicitly closed on the happy path
-		(matches labmesh's own convention of running until killed); the background event-loop
-		thread is a daemon thread so it won't block process exit. '''
+		''' Drops the connection and shuts down this relay's background event loop.
+
+		labmesh sockets aren't explicitly closed on the happy path (matches labmesh's own
+		convention of running until killed). The event loop, though, must be stopped: it used to
+		be left running, and since _ensure_loop() starts a fresh one on the next call, repeated
+		open/close cycles accumulated one live thread and one ZMQ-capable loop each. Daemon
+		threads meant the process still exited, so this only showed up as creeping resource use
+		in exactly the long-running supervisor processes the mesh exists for.
+		'''
 
 		self.relay_client = None
 		self.director = None
+
+		if self._loop is not None:
+			try:
+				self._loop.call_soon_threadsafe(self._loop.stop)
+			except RuntimeError as e:
+				# Loop already closed/stopped - nothing to tear down.
+				self.log.lowdebug(f"RemoteTextCommandRelayClient event loop was already stopped. ({e})")
+
+		if self._loop_thread is not None:
+			# Bounded join: a hung loop must not wedge close(). The thread is a daemon, so the
+			# worst case is one thread outliving close() rather than blocking process exit.
+			self._loop_thread.join(timeout=2.0)
+			if self._loop_thread.is_alive():
+				self.log.warning(f"RemoteTextCommandRelayClient event-loop thread did not stop within 2s.")
+
+		# Cleared unconditionally so _ensure_loop() builds a fresh loop if this relay is
+		# reconnected, rather than handing out a stopped one.
+		self._loop = None
+		self._loop_thread = None
 
 	def write(self, cmd:str) -> bool:
 		''' Sends a SCPI command to the remote relay for it to write to the instrument.
@@ -550,6 +599,8 @@ class RemoteTextCommandRelayClient(CommandRelay):
 			self.log.error(f"RemoteTextCommandRelayClient: remote relay >{self.address}< reported failure for query_binary.")
 			return False, []
 
+		warn_if_oversize_rpc_binary(self.log, "read from", len(payload), self.address)
+
 		try:
 			raw = base64.b64decode(payload)
 			item_size = struct.calcsize(f"<{datatype}")
@@ -592,6 +643,8 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		except Exception as e:
 			self.log.error(f"RemoteTextCommandRelayClient failed to pack {len(values)} values as '{datatype}'. ({e})")
 			return False
+
+		warn_if_oversize_rpc_binary(self.log, "written to", len(payload), self.address)
 
 		try:
 			ok = self._run(
@@ -677,8 +730,11 @@ class RemoteTextCommandRelayListener:
 			self.log.error(f"RemoteTextCommandRelayListener failed to pack {len(values)} values as '{datatype}'. ({e})")
 			return [False, ""]
 
+		encoded = base64.b64encode(packed).decode("ascii")
+		warn_if_oversize_rpc_binary(self.log, "relayed from", len(encoded), getattr(self.local_relay, "address", "local"))
+
 		self.log.lowdebug(f"RemoteTextCommandRelayListener relaying binary block: >:a{len(values)} values, {len(packed)} bytes<")
-		return [True, base64.b64encode(packed).decode("ascii")]
+		return [True, encoded]
 
 	def write_binary(self, cmd:str, payload:str, datatype:str='B') -> bool:
 		''' Decodes a base64 binary block from the client and hands it to the local relay.

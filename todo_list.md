@@ -22,7 +22,8 @@ after the P8 pass: 135 passed, 4 xfailed;
 after write_binary: 150 passed, 4 xfailed;
 after the P6 pass: 160 passed, 4 xfailed;
 after the P2 partial-compliance pass: 172 passed, 4 xfailed;
-after the P7 auto-validate pass: **181 passed, 4 xfailed**).
+after the P7 auto-validate pass: 181 passed, 4 xfailed;
+after the P8 bug batch: **189 passed, 3 xfailed**).
 
 ---
 
@@ -563,25 +564,22 @@ What remains is documentation and detritus:
       Fix: base64 the block in `RemoteTextCommandRelayListener.query_binary`, decode client-side
       (the listener already returns lists-not-tuples for JSON's sake, so the convention exists).
       *static*
-- [ ] **`RemoteTextCommandRelayClient.close()` leaks the event-loop thread.** Nulls `director`
-      and `relay_client` but never stops `self._loop` or joins `_loop_thread`. Daemon threads mean
-      the process still exits, but open/close cycles accumulate loops. Add
-      `self._loop.call_soon_threadsafe(self._loop.stop)`.
-      *static*
+- [x] **`RemoteTextCommandRelayClient.close()` leaked the event-loop thread.** Now stops the
+      loop, joins the thread with a bounded 2 s timeout (a hung loop must not wedge `close()`),
+      and clears both handles so `_ensure_loop()` builds a fresh loop on reconnect rather than
+      handing out a stopped one.
 - [ ] **No reconnection path.** `Driver.check_online()`'s AUTO branch queries `*IDN?`; over a
       network relay a transient broker/relay hiccup marks the driver offline permanently, and
       `Driver.write`/`query` then early-return on `if not self.online`. Nothing recovers short of
       a manual `connect()`. Needs a retry/reconnect policy — the whole point of the mesh is
       long-running unattended nodes.
       *static*
-- [ ] **`Driver.connect()` references an undefined `e`** — the failure `else:` branch
-      f-string interpolates `{e}` with no `except` in scope, so reporting a connection failure
-      raises `NameError`. Hits the networking path hardest since that's where connects fail.
-      *static*
-- [ ] **`Driver.check_online()`'s AUTO branch doesn't skip the query for non-SCPI instruments** —
-      warns and sets `online = False`, but no `return`/`elif`, so it falls through to an
-      unconditional `relay.query("*IDN?")` that immediately overwrites `online`.
-      *confirmed — `docs/dummy_and_state_review.md` bug #5*
+- [x] **`Driver.connect()` referenced an undefined `e`** — fixed. There is no exception to
+      report at that point: the relay connected and `query_id()` then cleared `self.online`
+      because the instrument didn't answer `*IDN?`, so the message now says that.
+- [x] **`Driver.check_online()`'s AUTO branch didn't skip the query for non-SCPI instruments** —
+      added the missing `return`. The `xfail(strict=True)` on
+      `test_check_online_skips_query_for_non_scpi_instrument` XPASSed and was removed.
 
 ### P8 outcome (query_binary + pyfrost doc cleanup) — **DONE**
 
@@ -641,11 +639,13 @@ and a check that the binary timeout exceeds the text timeout.
       JSON (`labmesh.util.dumps` is `json.dumps`, so base64 is the only way to carry bytes),
       while the DataBank has a native chunked binary protocol with SHA-256. Control traffic
       belongs on RPC; captured datasets belong in the bank.
-- [ ] **No size guard on `query_binary`/`write_binary`.** Base64-over-JSON has no chunking and no
-      integrity check, and the whole payload is one JSON message held in memory on both ends.
-      It is fine at the ~326 KB measured for a 250k-point waveform, but nothing warns a caller
-      pushing several MB through it — which should be using the DataBank instead. Add a threshold
-      warning pointing at `docs/networking_data_paths.md`.
+- [x] **Size guard added on `query_binary`/`write_binary`.** `RPC_BINARY_WARN_BYTES` (2 MB of
+      *encoded* payload) with `warn_if_oversize_rpc_binary()`, called on both the client's read
+      and write paths and on the listener side too, so the warning also lands in the bench
+      machine's log where the data originates. Deliberately a warning, not an error: the limit is
+      about which channel is *appropriate*, not about what physically works, and a driver author
+      mid-experiment shouldn't be blocked by a guess at where "too big" starts. Verified it does
+      not fire on the 250k-point waveform the feature was built for.
 - [ ] **`VICPDirectSCPIRelay` still has no `query_binary`** (pyvicp provides no block parser, so
       reading would mean hand-parsing the `#<n><count>` header off the raw stream). `write_binary`
       is implemented for VICP; the read direction is not. LeCroy scopes therefore can't do binary
@@ -705,6 +705,16 @@ just numeric ones.
       `split(",")` parsing.
 - [ ] Separately: raise generic payload compression as an issue in the **labmesh** repo (option 2).
       Not a Constellation change.
+
+### Found while fixing the P8 bug batch
+
+- [x] **`query_id()` declared a silent instrument ONLINE.** It tested
+      `if self.id.idn_model is not None:` — but `Driver.query()` returns `""` on *every* failure
+      path (offline, relay error, empty reply) and never `None`, so the check could not fail. An
+      instrument that answered nothing at all was marked online and merely flagged as failing
+      hardware verification, and the driver then went on issuing commands to it. Found because
+      the regression test written for the `connect()` `NameError` couldn't get `connect()` to
+      return `False`. Now tests for actual content. *confirmed*
 
 ### Networking optimizations
 

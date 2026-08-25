@@ -202,13 +202,6 @@ class _AlwaysRespondsRelay(DirectSCPIRelay):
 	def query(self, cmd):
 		return True, "some-non-scpi-response"
 
-@pytest.mark.xfail(strict=True, reason=(
-	"BUG: Driver.check_online()'s CheckOnline.AUTO branch warns 'Cannot use CheckOnline.AUTO "
-	"for non-SCPI instruments. Defaulting to OFFLINE.' and sets self.online = False, but then "
-	"falls through (no return/elif) and unconditionally calls self.relay.query('*IDN?') anyway, "
-	"immediately overwriting self.online based on that query's result - defeating the guard "
-	"and querying hardware that was just declared unable to handle SCPI."
-))
 def test_check_online_skips_query_for_non_scpi_instrument():
 	osc = make_dummy_osc()
 	osc.is_scpi = False
@@ -1548,3 +1541,146 @@ def test_working_drivers_validate_cleanly():
 	SiglentSSA3000X("DUMMY", log, relay=DirectSCPIRelay(), dummy=True)
 
 	assert warnings == []
+
+# ---------------------------------------------------------------------------------------------
+# P8 networking fixes: connect() error path, check_online() guard, event-loop teardown,
+# oversize-payload guard
+# ---------------------------------------------------------------------------------------------
+
+def test_connect_reports_a_failed_id_check_without_raising():
+	""" Regression: the failure branch's f-string interpolated `{e}` with no `except` in scope,
+	so *reporting* a failed connection raised NameError - worst on the networking path, which is
+	exactly where connects fail. """
+
+	class _SilentInstrumentRelay(CommandRelay):
+		""" Connects fine, but the instrument never answers *IDN? - the shape of a mesh relay
+		that reaches a powered-off instrument. """
+		def connect(self):
+			return True
+		def close(self):
+			pass
+		def write(self, cmd):
+			return True
+		def read(self):
+			return True, ""
+		def query(self, cmd):
+			return True, ""
+
+	log = make_log()
+	errors = []
+	original = log.error
+	log.error = lambda message, detail="": (errors.append(message), original(message, detail))
+
+	scope = RigolDS1000Z("DUMMY", log=log, relay=_SilentInstrumentRelay(), dummy=True)
+	# Leave dummy mode so connect() takes the real path.
+	scope.dummy = False
+
+	assert scope.connect() is False        # must not raise NameError
+	assert any("*IDN?" in e for e in errors)
+
+def test_check_online_teardown_of_loop_is_idempotent():
+	""" close() on a client that never connected must not raise - it's the ordinary path when
+	construction fails partway. """
+	client = RemoteTextCommandRelayClient()
+	client.configure("relay-1", make_log())
+	client.close()
+	assert client._loop is None
+
+def test_close_stops_the_event_loop_thread():
+	""" Regression: close() nulled the labmesh handles but left the loop running, and
+	_ensure_loop() starts a fresh one on the next call - so repeated open/close cycles
+	accumulated one live thread and one ZMQ-capable loop each. """
+	client = RemoteTextCommandRelayClient()
+	client.configure("relay-1", make_log())
+
+	client._ensure_loop()
+	thread = client._loop_thread
+	assert thread.is_alive()
+
+	client.close()
+
+	assert thread.is_alive() is False
+	# Cleared so a reconnect builds a fresh loop rather than reusing a stopped one.
+	assert client._loop is None
+	assert client._loop_thread is None
+
+def test_reopening_after_close_gets_a_working_loop():
+	client = RemoteTextCommandRelayClient()
+	client.configure("relay-1", make_log())
+
+	client._ensure_loop()
+	first = client._loop
+	client.close()
+
+	client._ensure_loop()
+	assert client._loop is not None
+	assert client._loop is not first
+	assert client._loop_thread.is_alive()
+
+	client.close()
+
+def test_oversize_binary_payload_warns_but_still_transfers():
+	""" The RPC path base64s the block into one JSON message with no chunking and no integrity
+	check. Past a few MB that traffic belongs in the DataBank - but the limit is about which
+	channel is appropriate, not about what physically works, so it warns rather than failing. """
+	from constellation.relay import RPC_BINARY_WARN_BYTES
+
+	# Enough bytes that the base64 of it clears the threshold.
+	n_values = int(RPC_BINARY_WARN_BYTES) + 1024
+	values = [7] * n_values
+
+	log = make_log()
+	warnings = []
+	original = log.warning
+	log.warning = lambda message, detail="": (warnings.append(message), original(message, detail))
+
+	listener = RemoteTextCommandRelayListener("addr", log, local_relay=_BinaryCapableRelay(values))
+	client = _LoopbackBinaryClient(listener)
+	client.configure("relay-1", log)
+
+	ok, received = client.query_binary(":WAV:DATA?", datatype="B")
+
+	assert ok is True
+	assert received == values              # the warning must not interfere with the transfer
+	assert any("DataBank" in w or "Large binary payload" in w for w in warnings)
+
+def test_normal_sized_binary_payload_does_not_warn():
+	""" A 250k-point waveform measures ~326 KB encoded and is entirely fine - the guard must not
+	fire on the case the feature was built for. """
+	log = make_log()
+	warnings = []
+	original = log.warning
+	log.warning = lambda message, detail="": (warnings.append(message), original(message, detail))
+
+	listener = RemoteTextCommandRelayListener("addr", log, local_relay=_BinaryCapableRelay([1] * 250_000))
+	client = _LoopbackBinaryClient(listener)
+	client.configure("relay-1", log)
+
+	ok, _ = client.query_binary(":WAV:DATA?", datatype="B")
+
+	assert ok is True
+	assert warnings == []
+
+def test_query_id_treats_an_empty_idn_as_offline():
+	""" Regression: query_id() tested `self.id.idn_model is not None`, but Driver.query()
+	returns "" on every failure path and never None - so the check could not fail, and an
+	instrument that answered nothing was declared ONLINE (merely failing hardware
+	verification). """
+
+	class _SilentInstrumentRelay(CommandRelay):
+		def connect(self):
+			return True
+		def close(self):
+			pass
+		def write(self, cmd):
+			return True
+		def read(self):
+			return True, ""
+		def query(self, cmd):
+			return True, ""
+
+	scope = RigolDS1000Z("DUMMY", log=make_log(), relay=_SilentInstrumentRelay(), dummy=True)
+	scope.dummy = False
+
+	scope.query_id()
+	assert scope.online is False

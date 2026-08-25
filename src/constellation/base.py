@@ -1148,7 +1148,12 @@ class Driver(ABC):
 		if self.online:
 			self.debug(f"Connected to address >{self.address}<.", detail=f"{self.id}")
 		else:
-			self.error(f"Failed to connect to address: {self.address}. ({e})", detail=f"{self.id}")
+			# NOTE: this used to interpolate `{e}` with no `except` in scope, so *reporting* a
+			# failed connection raised NameError - worst on the networking path, which is where
+			# connects actually fail. There is no exception here to report: the relay connected
+			# and query_id() then cleared self.online because the instrument didn't answer
+			# *IDN?, so say that instead.
+			self.error(f"Connected to address >{self.address}<, but the instrument did not respond to >*IDN?<.", detail=f"{self.id}")
 		
 		return self.online
 	
@@ -1205,10 +1210,15 @@ class Driver(ABC):
 			
 			self.debug(f">Driver.check_online()<: Performing automatic online status check.")
 			
-			# Verify is a SCPI instrument
+			# Verify is a SCPI instrument.
+			# NOTE: this branch used to set self.online = False and then fall straight through
+			# to the *IDN?* query below, which immediately overwrote it - so the "cannot use
+			# AUTO for non-SCPI instruments" warning was followed by doing exactly that. The
+			# return is the fix.
 			if not self.is_scpi:
 				self.warning(f"Cannot use CheckOnline.AUTO for non-SCPI instruments. Defaulting to OFFLINE.")
 				self.online = False
+				return
 			
 			# Check if instrument is online
 			_, rv = self.relay.query("*IDN?") # Note we don't call self.relay() to avoid an infinite loop
@@ -1248,7 +1258,11 @@ class Driver(ABC):
 		# Query IDN model
 		self.id.idn_model = self.query("*IDN?").strip()
 		
-		if self.id.idn_model is not None:
+		# NOTE: this used to test `is not None`, but Driver.query() returns "" on every failure
+		# path (offline, relay error, empty reply) and never None - so the check could not fail,
+		# and an instrument that answered nothing at all was declared ONLINE and merely failed
+		# hardware verification. Test for actual content instead.
+		if self.id.idn_model:
 			self.online = True
 			self.debug(f"Connection state: >ONLINE<")
 			
