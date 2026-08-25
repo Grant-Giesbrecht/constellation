@@ -1955,3 +1955,171 @@ def test_error_kind_is_cleared_at_the_start_of_each_operation():
 	relay.inst = _FakeVisaInstrument()
 	relay.query("*IDN?")
 	assert relay.last_error_kind == RelayErrorKind.NONE
+
+# ---------------------------------------------------------------------------------------------
+# Two-level connection tracking + remote error classification (todo P8)
+#
+# "Offline" collapses two genuinely different failures whenever the instrument is remote: the
+# controlling process losing the bench machine, and the bench machine losing the instrument.
+# They want different diagnoses and different recoveries - reconnecting the mesh link is useless
+# if the scope is what's unplugged.
+# ---------------------------------------------------------------------------------------------
+
+class _ListenerLoopback(_LoopbackBinaryClient):
+	""" A client wired straight into a listener, whose link can be cut on demand. """
+
+	def __init__(self, listener):
+		super().__init__(listener)
+		self.link_up = True
+
+		def _call(name, kw):
+			if not self.link_up:
+				raise ConnectionResetError("mesh link down")
+			return getattr(self.listener, name)(**kw)
+
+		self.relay_client = _types.SimpleNamespace(call=_call)
+
+class _DeadInstrumentRelay(CommandRelay):
+	""" A bench-side local relay whose instrument has stopped answering. """
+
+	def connect(self):
+		self.note_failure(ConnectionResetError("instrument unplugged"))
+		return False
+
+	def close(self):
+		pass
+
+	def _fail(self):
+		self.note_success()
+		try:
+			raise ConnectionResetError("instrument unplugged")
+		except Exception as e:
+			self.note_failure(e)
+			return False, ""
+
+	def write(self, cmd):
+		return self._fail()[0]
+
+	def read(self):
+		return self._fail()
+
+	def query(self, cmd):
+		return self._fail()
+
+def make_remote_pair(local_relay):
+	log = make_log()
+	listener = RemoteTextCommandRelayListener("addr", log, local_relay=local_relay)
+	client = _ListenerLoopback(listener)
+	client.configure("relay-1", log)
+	return listener, client
+
+def test_local_relay_reports_link_online_and_no_separate_instrument_state():
+	""" There's no network hop, so the distinction doesn't exist - instrument_online falls back
+	to the driver's own online flag. """
+	scope = make_dummy_osc()
+
+	assert scope.link_online is True
+	assert scope.instrument_online == scope.online
+
+def test_bench_side_failure_keeps_the_link_online():
+	""" The listener answers status(), so the mesh is provably fine and the fault is at the
+	instrument end. """
+	listener, client = make_remote_pair(_DeadInstrumentRelay())
+
+	ok, _ = client.query("*IDN?")
+
+	assert ok is False
+	assert client.link_online is True
+	assert client.instrument_online is False
+
+def test_bench_side_failure_classification_crosses_the_mesh():
+	""" Regression: no exception crosses the RPC boundary, so the client used to be left with
+	last_error_kind == NONE and the driver fell back to UNKNOWN for every networked failure. It
+	now adopts the classification the bench-side relay actually recorded. """
+	listener, client = make_remote_pair(_DeadInstrumentRelay())
+
+	client.query("*IDN?")
+
+	assert client.last_error_kind == RelayErrorKind.TRANSPORT
+	assert listener.instrument_online is False
+
+def test_a_dead_mesh_link_is_distinguished_from_a_dead_instrument():
+	""" The status() probe fails too, so the link is what's broken and the instrument's state is
+	honestly unknown rather than guessed at. """
+	listener, client = make_remote_pair(_BinaryCapableRelay([1, 2, 3]))
+	client.link_up = False
+
+	ok, _ = client.query("*IDN?")
+
+	assert ok is False
+	assert client.link_online is False
+	assert client.instrument_online is None      # unknown, not False
+	assert client.last_error_kind == RelayErrorKind.TRANSPORT
+
+def test_a_successful_call_marks_both_levels_healthy():
+	listener, client = make_remote_pair(_BinaryCapableRelay([1, 2, 3]))
+	client.link_online = False
+	client.instrument_online = False
+
+	ok, values = client.query_binary(":WAV:DATA?", datatype="B")
+
+	assert ok is True
+	assert client.link_online is True
+	assert client.instrument_online is True
+
+def test_listener_status_reports_bench_side_health():
+	listener, client = make_remote_pair(_DeadInstrumentRelay())
+	assert listener.status() == [True, {"instrument_online": None, "last_error_kind": "none"}]
+
+	listener.query("*IDN?")
+
+	ok, payload = listener.status()
+	assert ok is True
+	assert payload["instrument_online"] is False
+	assert payload["last_error_kind"] == "transport"
+
+def test_listener_status_survives_a_response_level_failure():
+	""" An INSTRUMENT-class failure means the link worked and the exchange didn't, so the bench
+	side must not declare the instrument unreachable. """
+
+	class _GarbledRelay(CommandRelay):
+		def connect(self):
+			return True
+		def close(self):
+			pass
+		def write(self, cmd):
+			return True
+		def read(self):
+			return True, ""
+		def query(self, cmd):
+			self.note_success()
+			try:
+				raise ValueError("unparseable reply")
+			except Exception as e:
+				self.note_failure(e)
+				return False, ""
+
+	listener, client = make_remote_pair(_GarbledRelay())
+	listener.query("*IDN?")
+
+	_, payload = listener.status()
+	assert payload["instrument_online"] is None      # never declared dead
+	assert payload["last_error_kind"] == "instrument"
+
+def test_connection_summary_diagnoses_each_case():
+	scope = make_dummy_osc()
+
+	summary = scope.connection_summary()
+	assert summary["online"] is True
+	assert "Connected" in summary["diagnosis"]
+
+	# Simulate a dead mesh link behind the driver.
+	scope.online = False
+	scope.relay.link_online = False
+	scope.relay.instrument_online = None
+	assert "link to the relay process" in scope.connection_summary()["diagnosis"]
+
+	# Simulate a reachable relay that can't talk to the instrument.
+	scope.relay.link_online = True
+	scope.relay.instrument_online = False
+	assert "cannot talk to the instrument" in scope.connection_summary()["diagnosis"]

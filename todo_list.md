@@ -25,7 +25,8 @@ after the P2 partial-compliance pass: 172 passed, 4 xfailed;
 after the P7 auto-validate pass: 181 passed, 4 xfailed;
 after the P8 bug batch: 189 passed, 3 xfailed;
 after ReconnectPolicy: 200 passed, 3 xfailed;
-after error classification: **216 passed, 3 xfailed**).
+after error classification: 216 passed, 3 xfailed;
+after two-level connection tracking: **224 passed, 3 xfailed**).
 
 ---
 
@@ -618,22 +619,44 @@ What remains is documentation and detritus:
       Timeouts are deliberately classified TRANSPORT: from the driver's side "no answer came
       back" is indistinguishable from a dead link, and it's the case retrying most often rescues.
 
-- [ ] **The remote client can't classify a bench-side failure.** When
-      `RemoteTextCommandRelayListener` reports `ok=False`, no exception crosses the mesh, so
-      `RemoteTextCommandRelayClient.last_error_kind` stays `NONE` and the driver falls back to
-      `UNKNOWN`. The listener knows the real classification (its local relay recorded one) and
-      could return it alongside the failure. This is the same wire that the two-online-states
-      item below needs, so do them together.
-- [ ] **Track two independent online states: Driver→instrument and client→relay.** With a
-      networked driver, "offline" currently collapses two genuinely different failures. If a GUI
-      on machine 1 drives an instrument on machine 2, the questions "is the GUI still talking to
-      the relay process?" and "is the relay process still talking to the hardware?" have
-      different answers, different recoveries, and different things to show the user. A single
-      `self.online` bool cannot express "mesh is fine, the scope is unplugged" or "the scope is
-      fine, the bench machine dropped off the network". Needs a second tracked status, a way for
-      `RemoteTextCommandRelayListener` to report *its* local relay's health back over RPC, and
-      the reconnect policy to act on the right one — reconnecting the mesh link is useless if the
-      instrument is what's unplugged.
+- [x] **The remote client couldn't classify a bench-side failure** — fixed together with
+      two-level tracking below, since both ride the same wire. The client now adopts the
+      classification the bench-side relay actually recorded, instead of falling back to
+      `UNKNOWN` for every networked failure.
+- [x] **Track two independent online states: Driver→instrument and client→relay** — done.
+
+      `CommandRelay` now carries `link_online` (can this process reach whatever holds the
+      instrument?) and `instrument_online` (is that thing actually talking to the instrument?).
+      A local relay has no network hop, so `link_online` is trivially True and
+      `instrument_online` stays `None`, meaning "no separate answer" — `Driver.instrument_online`
+      then falls back to `self.online`, which for a local relay means the same thing.
+      `Driver.connection_summary()` returns both plus a human-readable `diagnosis`, which is what
+      a GUI indicator should render.
+
+      **How the two are told apart, without a wire-format change.** The listener gained a cheap
+      `status()` RPC reporting its own `instrument_online` and its local relay's
+      `last_error_kind`. On any failure the client calls it, and the probe's own outcome is the
+      signal: if `status()` *answers*, the mesh link is provably fine and the fault is bench-side
+      (adopt the reported classification and instrument state); if `status()` *also* fails, the
+      link is what's broken and the instrument's state is honestly `None` — unknown — rather than
+      guessed at. The extra round trip only happens on failure, and no existing return format
+      changed, so a listener too old to implement `status()` degrades to local classification
+      instead of breaking.
+
+      The listener tracks bench-side health with the same rule the Driver uses: only a
+      TRANSPORT/UNKNOWN failure marks the instrument unreachable, so a reply that wouldn't parse
+      doesn't declare a working instrument dead.
+
+- [ ] **The reconnect policy doesn't yet act on which link failed.** `ReconnectPolicy` still
+      sees one composite `online`. Now that the two levels exist, reconnect-on-use could
+      distinguish them: a dead mesh link wants the labmesh client to re-resolve its `relay_id`
+      (cheap, likely to work), while a dead instrument wants the *bench side* to reopen its VISA
+      session — which the client can't do at all today, and which would need a `reconnect()` RPC
+      on the listener. Worth doing; not required for the tracking itself to be useful.
+- [ ] **The GUI doesn't surface the distinction yet.** `TrackedControl`'s `stale` state and
+      `connection_changed(bool)` are both still single-valued. `connection_summary()` gives the
+      widget layer everything it needs. **Design sketched by the owner — see P17
+      ("Connection-path indicator widget") for the full description.**
 - [ ] **Retried writes are not guaranteed idempotent.** A retried write can reach the instrument
       twice if the failure happened after delivery but before acknowledgement. Nearly all SCPI
       setters are idempotent so this is normally harmless, but an *action* command (a trigger, a
@@ -1244,10 +1267,45 @@ container all exist in `ui.py`, with widgets registered for `Oscilloscope`, `Pow
 - [ ] `widgets.py` (54 lines, `StatusPushButton`) is the pre-`a2c552c` prototype and predates the
       current architecture. Fold anything still wanted into `ui.py` and delete it, or say in the
       file what it's still for.
-- [ ] **`TrackedControl` can't distinguish "the mesh dropped" from "the instrument is unplugged"**
-      — the same single-`online`-bool limitation logged under the P8 reconnection follow-ups.
-      Those two failures want different indicators and different user guidance, so whatever
-      two-level online tracking gets built there needs a matching indicator state here.
+- [ ] **Connection-path indicator widget** (owner's design, 2026-08-25). The two-level tracking
+      it needs now exists — `Driver.connection_summary()` returns `online`, `link_online`,
+      `instrument_online` and a human-readable `diagnosis`, and `RemoteTextCommandRelayClient`
+      keeps both halves current. This is the widget that renders it.
+
+      **The graphic: show the path, not a status word.** Three icons in a row — instrument,
+      relay node, client — with arrows between them. Each link is drawn as healthy or struck
+      through with an X, so the display says *where* the break is, not merely that something is
+      wrong:
+
+      ```
+      [instrument] ──✓──> [relay node] ──✗──> [client]      mesh link down
+      [instrument] ──✗──> [relay node] ──✓──> [client]      instrument unreachable
+      ```
+
+      Element highlighting distinguishes the healthy from the affected segments. For a local
+      (non-networked) driver the relay node and client collapse into one, since there is no hop
+      — `instrument_online` reports `None` for exactly that reason.
+
+      **Two levels of detail on demand:**
+      - **hover** → tooltip with the helper text: the `diagnosis` string plus the last error
+        message, so the immediate question ("what broke?") is answered without a click.
+      - **click** → popup window with full connection info, *available even when everything is
+        online*: IP addresses, the labmesh relay_id/broker addresses, the VISA resource string,
+        per-level online status, last error kind, time since last successful exchange. This is
+        the "why isn't this connecting" panel, and it's most useful before anything has visibly
+        failed.
+
+      Notes for whoever builds it:
+      - It's a general widget, not a category widget — it belongs in `ui.py` beside
+        `IndicatorButton`, and every `InstrumentWidget` should be able to show one.
+      - `InstrumentBridge.connection_changed` currently emits a bare `bool`. It needs to carry
+        the summary dict instead (or gain a second signal), or the widget has no way to learn
+        which link failed.
+      - `ObserverBridge` has a *third* path to represent — it doesn't own a Driver at all, it
+        subscribes to a broadcaster's PUB feed, so "is my subscription live" is a distinct
+        question from either of the Driver's two links.
+      - Much of the popup's content isn't exposed anywhere yet (time since last successful
+        exchange, in particular). Adding it to `connection_summary()` is the natural home.
 
 ## Execution order (agreed)
 

@@ -1303,6 +1303,67 @@ class Driver(ABC):
 			
 			self.debug(f">Driver.check_online()<: self.online --\\> {self.online}")
 	
+	@property
+	def link_online(self) -> bool:
+		''' Can this process reach whatever is holding the instrument?
+		
+		For a local relay there is no network hop, so this is trivially True whenever the driver
+		is usable. For a `RemoteTextCommandRelayClient` it answers "is the mesh link to the bench
+		machine alive", independently of whether that machine can still talk to the instrument.
+		
+		See `instrument_online` and `connection_summary()`.
+		'''
+		
+		return getattr(self.relay, "link_online", True)
+	
+	@property
+	def instrument_online(self) -> bool:
+		''' Is the process holding the instrument actually talking to it?
+		
+		Only a networked relay can answer this separately - it asks the bench side. A local relay
+		reports None ("no separate answer"), in which case this falls back to `self.online`,
+		which for a local relay means exactly the same thing.
+		'''
+		
+		reported = getattr(self.relay, "instrument_online", None)
+		if reported is None:
+			return self.online
+		
+		return reported
+	
+	def connection_summary(self) -> dict:
+		''' Both halves of the connection, plus a human-readable diagnosis.
+		
+		"Offline" collapses two genuinely different failures whenever the instrument is remote:
+		the GUI losing the bench machine, and the bench machine losing the instrument. They need
+		different diagnoses, different recoveries, and different things shown to the user -
+		reconnecting the mesh link is useless if the scope is what's unplugged. A single bool
+		cannot express either one, so this returns both.
+		
+		Returns:
+			dict: keys `online` (the driver's overall usability), `link_online`,
+				`instrument_online`, and `diagnosis` (a short human-readable string).
+		'''
+		
+		link = self.link_online
+		instrument = self.instrument_online
+		
+		if self.online:
+			diagnosis = "Connected."
+		elif not link:
+			diagnosis = "Lost the link to the relay process - the instrument's state is unknown from here."
+		elif not instrument:
+			diagnosis = "The relay process is reachable, but it cannot talk to the instrument."
+		else:
+			diagnosis = "Offline, but both links report healthy - the last failure was not a connection failure."
+		
+		return {
+			"online": self.online,
+			"link_online": link,
+			"instrument_online": instrument,
+			"diagnosis": diagnosis,
+		}
+	
 	def _ensure_online(self, operation:str) -> bool:
 		''' Gate every relay operation goes through. Returns True if the call may proceed.
 		

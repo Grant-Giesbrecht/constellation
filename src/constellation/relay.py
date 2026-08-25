@@ -108,6 +108,20 @@ class CommandRelay:
 		# Relays swallow their own exceptions and return a bare success flag, so this is the only
 		# channel by which the failure's *nature* reaches the Driver.
 		self.last_error_kind = RelayErrorKind.NONE
+		
+		# Two-level connection tracking. A networked setup has two links that can fail
+		# independently - this process to the relay process, and the relay process to the
+		# instrument - and they want different diagnoses and different recoveries. Reconnecting
+		# the mesh link is useless if the scope is what's unplugged.
+		#
+		#  link_online:       can this process reach whatever is holding the instrument?
+		#  instrument_online: is that thing actually talking to the instrument?
+		#
+		# For a local relay there is no network hop, so link_online is trivially True and
+		# instrument_online stays None, meaning "no separate answer - ask the Driver". Only
+		# RemoteTextCommandRelayClient fills both in.
+		self.link_online = True
+		self.instrument_online = None
 	
 	def note_failure(self, e:Exception) -> RelayErrorKind:
 		''' Records the kind of a failure. Call from a relay method's except block.
@@ -636,6 +650,59 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		self._loop = None
 		self._loop_thread = None
 
+	def _note_remote_failure(self, operation:str, exception:Exception=None) -> RelayErrorKind:
+		''' Works out what actually failed, and records it.
+		
+		A failed RPC on its own does not say whether the mesh link died or the instrument did.
+		So ask: call the listener's cheap `status()` RPC.
+		
+		 - It answers   -> the mesh link is fine, so the fault is bench-side. Adopt the
+		                   classification the listener's own local relay recorded, and take its
+		                   view of whether the instrument is reachable.
+		 - It also fails -> the link itself is what's broken. TRANSPORT, link_online False, and
+		                   the instrument's state is simply unknown from here.
+		
+		This is why the failure returns did not need a wire-format change: the extra round trip
+		happens only on failure, and its own success or failure is the signal.
+		
+		Args:
+			operation (str): Name of the operation that failed, for log messages.
+			exception (Exception): The local exception, if the RPC raised rather than returning
+				a failure. A local exception is classified locally first.
+		
+		Returns:
+			RelayErrorKind: The recorded classification.
+		'''
+		
+		try:
+			ok, payload = self._run(self.relay_client.call("status", {}), timeout_s=self.timeout_s)
+		except Exception as probe_error:
+			self.link_online = False
+			self.instrument_online = None
+			self.last_error_kind = RelayErrorKind.TRANSPORT
+			self.log.error(f"RemoteTextCommandRelayClient lost the link to relay >{self.address}< during >{operation}<. ({probe_error})", detail="The status probe also failed, so this is the mesh link, not the instrument.")
+			return self.last_error_kind
+		
+		# The link is alive.
+		self.link_online = True
+		
+		if not ok or not isinstance(payload, dict):
+			# A listener too old to implement status() - the link works, but it can tell us
+			# nothing more. Classify locally if we have an exception, otherwise give up honestly.
+			self.last_error_kind = classify_relay_exception(exception) if exception is not None else RelayErrorKind.UNKNOWN
+			return self.last_error_kind
+		
+		self.instrument_online = payload.get("instrument_online")
+		
+		try:
+			self.last_error_kind = RelayErrorKind(payload.get("last_error_kind", RelayErrorKind.UNKNOWN.value))
+		except ValueError:
+			self.last_error_kind = RelayErrorKind.UNKNOWN
+		
+		self.log.debug(f"RemoteTextCommandRelayClient: >{operation}< failed bench-side (>:q{self.last_error_kind.value}<); mesh link to >{self.address}< is healthy.")
+		
+		return self.last_error_kind
+	
 	def write(self, cmd:str) -> bool:
 		''' Sends a SCPI command to the remote relay for it to write to the instrument.
 
@@ -654,13 +721,19 @@ class RemoteTextCommandRelayClient(CommandRelay):
 
 		try:
 			ok = self._run(self.relay_client.call("write", {"cmd": cmd}))
-			if ok:
-				self.log.lowdebug(f"RemoteTextCommandRelayClient wrote to relay: >@:LOCK{cmd}@:UNLOCK<.")
-			return bool(ok)
 		except Exception as e:
-			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to write via relay >{self.address}<. ({e})")
+			self._note_remote_failure("write", e)
 			return False
+
+		if not ok:
+			self._note_remote_failure("write")
+			return False
+
+		self.link_online = True
+		self.instrument_online = True
+		self.log.lowdebug(f"RemoteTextCommandRelayClient wrote to relay: >@:LOCK{cmd}@:UNLOCK<.")
+		return True
 
 	def read(self) -> tuple:
 		''' Reads data as a string from the instrument, via the remote relay.
@@ -676,13 +749,19 @@ class RemoteTextCommandRelayClient(CommandRelay):
 
 		try:
 			ok, rv = self._run(self.relay_client.call("read", {}))
-			if ok:
-				self.log.lowdebug(f"RemoteTextCommandRelayClient read from relay: >:a{rv}<")
-			return bool(ok), rv
 		except Exception as e:
-			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to read via relay >{self.address}<. ({e})")
+			self._note_remote_failure("read", e)
 			return False, ""
+
+		if not ok:
+			self._note_remote_failure("read")
+			return False, ""
+
+		self.link_online = True
+		self.instrument_online = True
+		self.log.lowdebug(f"RemoteTextCommandRelayClient read from relay: >:a{rv}<")
+		return True, rv
 
 	def query(self, cmd:str) -> tuple:
 		''' Queries data as a string from the instrument, via the remote relay.
@@ -701,13 +780,19 @@ class RemoteTextCommandRelayClient(CommandRelay):
 
 		try:
 			ok, rv = self._run(self.relay_client.call("query", {"cmd": cmd}))
-			if ok:
-				self.log.lowdebug(f"RemoteTextCommandRelayClient queried via relay: >:a{rv}<")
-			return bool(ok), rv
 		except Exception as e:
-			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to query via relay >{self.address}<. ({e})")
+			self._note_remote_failure("query", e)
 			return False, ""
+
+		if not ok:
+			self._note_remote_failure("query")
+			return False, ""
+
+		self.link_online = True
+		self.instrument_online = True
+		self.log.lowdebug(f"RemoteTextCommandRelayClient queried via relay: >:a{rv}<")
+		return True, rv
 
 	def query_binary(self, cmd:str, datatype:str='B') -> tuple:
 		''' Queries a binary block from the instrument via the remote relay.
@@ -738,13 +823,17 @@ class RemoteTextCommandRelayClient(CommandRelay):
 				timeout_s=self.binary_timeout_s,
 			)
 		except Exception as e:
-			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to query_binary via relay >{self.address}<. ({e})")
+			self._note_remote_failure("query_binary", e)
 			return False, []
 
 		if not ok:
 			self.log.error(f"RemoteTextCommandRelayClient: remote relay >{self.address}< reported failure for query_binary.")
+			self._note_remote_failure("query_binary")
 			return False, []
+
+		self.link_online = True
+		self.instrument_online = True
 
 		warn_if_oversize_rpc_binary(self.log, "read from", len(payload), self.address)
 
@@ -803,13 +892,18 @@ class RemoteTextCommandRelayClient(CommandRelay):
 				timeout_s=self.binary_timeout_s,
 			)
 		except Exception as e:
-			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to write_binary via relay >{self.address}<. ({e})")
+			self._note_remote_failure("write_binary", e)
 			return False
 
-		if ok:
-			self.log.lowdebug(f"RemoteTextCommandRelayClient wrote binary block via relay: >:a{len(values)} values<")
-		return bool(ok)
+		if not ok:
+			self._note_remote_failure("write_binary")
+			return False
+
+		self.link_online = True
+		self.instrument_online = True
+		self.log.lowdebug(f"RemoteTextCommandRelayClient wrote binary block via relay: >:a{len(values)} values<")
+		return True
 
 class RemoteTextCommandRelayListener:
 	''' Wraps a local CommandRelay (DirectSCPIRelay or VICPDirectSCPIRelay) and exposes plain
@@ -832,23 +926,63 @@ class RemoteTextCommandRelayListener:
 		self.local_relay = local_relay if local_relay is not None else DirectSCPIRelay()
 		self.local_relay.configure(address, log)
 
+		# Whether the *bench-side* half of the path is working: this process to the instrument.
+		# Distinct from whether a client can reach this process, which only the client can know.
+		# None until the first operation tells us something.
+		self.instrument_online = None
+
+	def _record(self, ok:bool):
+		''' Updates bench-side instrument health from the outcome of a local relay operation.
+
+		Only a transport-class failure means the instrument is unreachable - a reply that
+		wouldn't parse says the link is fine and the exchange wasn't, exactly as on the Driver
+		side. See RelayErrorKind.
+		'''
+
+		if ok:
+			self.instrument_online = True
+		elif self.local_relay.last_error_kind in (RelayErrorKind.TRANSPORT, RelayErrorKind.UNKNOWN):
+			self.instrument_online = False
+
+		return ok
+
+	def status(self) -> list:
+		''' Reports the bench side's own view of the instrument, for a client to ask about.
+
+		This is the second half of two-level connection tracking. A client that gets a failure
+		cannot tell from the failure alone whether the mesh link died or the instrument did -
+		but it can ask. If this call *answers*, the mesh link is fine and the problem is
+		bench-side; if this call also fails, the link is what's broken. That is the whole
+		mechanism, and it needs no change to any existing return format.
+
+		Returns:
+			list: [True, {"instrument_online": bool|None, "last_error_kind": str}]
+		'''
+
+		return [True, {
+			"instrument_online": self.instrument_online,
+			"last_error_kind": self.local_relay.last_error_kind.value,
+		}]
+
 	def connect(self) -> bool:
-		return self.local_relay.connect()
+		return self._record(self.local_relay.connect())
 
 	def close(self) -> None:
 		self.local_relay.close()
 
 	def write(self, cmd:str) -> bool:
-		return self.local_relay.write(cmd)
+		return self._record(self.local_relay.write(cmd))
 
 	def read(self) -> list:
 		''' Returns [success:bool, value:str] - a list rather than a tuple since this return
 		value crosses the network as JSON, which has no tuple type. '''
-		return list(self.local_relay.read())
+		ok, rv = self.local_relay.read()
+		return [self._record(ok), rv]
 
 	def query(self, cmd:str) -> list:
 		''' Returns [success:bool, value:str] - see read(). '''
-		return list(self.local_relay.query(cmd))
+		ok, rv = self.local_relay.query(cmd)
+		return [self._record(ok), rv]
 
 	def query_binary(self, cmd:str, datatype:str='B') -> list:
 		''' Reads a binary block from the instrument and returns it as
@@ -873,7 +1007,7 @@ class RemoteTextCommandRelayListener:
 			self.log.error(f"RemoteTextCommandRelayListener failed to query binary block. ({e})")
 			return [False, ""]
 
-		if not ok:
+		if not self._record(ok):
 			return [False, ""]
 
 		try:
@@ -910,7 +1044,7 @@ class RemoteTextCommandRelayListener:
 			return False
 
 		try:
-			ok = self.local_relay.write_binary(cmd, values, datatype=datatype)
+			ok = self._record(self.local_relay.write_binary(cmd, values, datatype=datatype))
 		except NotImplementedError as e:
 			self.log.error(f"RemoteTextCommandRelayListener: local relay does not support write_binary. ({e})")
 			return False

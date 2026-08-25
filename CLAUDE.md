@@ -122,6 +122,13 @@ Swapping `DirectSCPIRelay()` for `RemoteTextCommandRelayClient(...)` (and passin
 `address` instead of a VISA resource string) is the *only* difference between local and networked use —
 every driver takes `relay=` for exactly this reason.
 
+A networked setup has two links that fail independently, so `CommandRelay` tracks both:
+`link_online` (can this process reach the relay process?) and `instrument_online` (is that process
+talking to the instrument?). `Driver.connection_summary()` returns both plus a diagnosis. They're
+told apart by the listener's `status()` RPC: on a failure the client calls it, and if it answers,
+the mesh is fine and the fault is bench-side; if it also fails, the link is what broke. Local
+relays leave `instrument_online` as `None` (no separate answer) and fall back to `Driver.online`.
+
 Relays swallow their own exceptions and return a bare success flag, so each one records *why* it
 failed on itself (`relay.last_error_kind`, a `RelayErrorKind`) for the Driver to act on:
 `TRANSPORT` is retried and marks the driver offline, `INSTRUMENT` (a reply that wouldn't parse) is
