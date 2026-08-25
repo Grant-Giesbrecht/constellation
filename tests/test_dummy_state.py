@@ -1684,3 +1684,155 @@ def test_query_id_treats_an_empty_idn_as_offline():
 
 	scope.query_id()
 	assert scope.online is False
+
+# ---------------------------------------------------------------------------------------------
+# ReconnectPolicy (todo P8)
+# ---------------------------------------------------------------------------------------------
+
+from constellation.base import ReconnectPolicy, DEFAULT_RECONNECT_POLICY
+
+class _FlakyRelay(CommandRelay):
+	""" Fails its first `fail_times` operations, then succeeds. Models a transient mesh blip. """
+
+	def __init__(self, fail_times=0, raise_instead=False):
+		super().__init__()
+		self.fail_times = fail_times
+		self.raise_instead = raise_instead
+		self.attempts = 0
+		self.connect_calls = 0
+		self.connect_succeeds = True
+
+	def _next(self):
+		self.attempts += 1
+		if self.attempts <= self.fail_times:
+			if self.raise_instead:
+				raise ConnectionError("transient mesh failure")
+			return False, ""
+		return True, "OK"
+
+	def connect(self):
+		self.connect_calls += 1
+		return self.connect_succeeds
+
+	def close(self):
+		pass
+
+	def write(self, cmd):
+		return self._next()[0]
+
+	def read(self):
+		return self._next()
+
+	def query(self, cmd):
+		return self._next()
+
+def make_flaky_scope(relay, policy=None):
+	scope = RigolDS1000Z("DUMMY", log=make_log(), relay=relay, dummy=True, reconnect_policy=policy)
+	scope.dummy = False       # leave dummy so calls actually reach the relay
+	scope.online = True
+	return scope
+
+def test_default_policy_retries_and_does_not_reconnect_on_use():
+	policy = ReconnectPolicy()
+	assert policy.retry_enabled is True
+	assert policy.total_attempts() == 3        # first attempt + 2 retries
+	assert policy.reconnect_on_use is False    # opt-in
+
+def test_each_driver_gets_its_own_policy_copy():
+	""" A module-level default shared by reference would mean tuning one instrument's retries
+	silently retuned every other driver - the same shared-mutable-default trap the relay=
+	argument used to have. """
+	a = make_dummy_osc()
+	b = make_dummy_osc()
+
+	assert a.reconnect_policy is not b.reconnect_policy
+	assert a.reconnect_policy is not DEFAULT_RECONNECT_POLICY
+
+	a.reconnect_policy.num_retries = 99
+	assert b.reconnect_policy.num_retries != 99
+	assert DEFAULT_RECONNECT_POLICY.num_retries != 99
+
+def test_drivers_can_carry_different_policies():
+	patient = ReconnectPolicy(num_retries=5, retry_pause_s=0)
+	impatient = ReconnectPolicy(retry_enabled=False)
+
+	a = RigolDS1000Z("DUMMY", log=make_log(), relay=DirectSCPIRelay(), dummy=True, reconnect_policy=patient)
+	b = RigolDS1000Z("DUMMY", log=make_log(), relay=DirectSCPIRelay(), dummy=True, reconnect_policy=impatient)
+
+	assert a.reconnect_policy.total_attempts() == 6
+	assert b.reconnect_policy.total_attempts() == 1
+
+@pytest.mark.parametrize("raise_instead", [False, True], ids=["relay_reports_failure", "relay_raises"])
+def test_in_call_retry_recovers_from_a_transient_failure(raise_instead):
+	""" The virtue of retry is that the driver never goes offline at all, so nothing downstream
+	has to recover. Both failure shapes must retry: a relay that returns ok=False and one that
+	raises. """
+	relay = _FlakyRelay(fail_times=1, raise_instead=raise_instead)
+	scope = make_flaky_scope(relay, ReconnectPolicy(num_retries=2, retry_pause_s=0))
+
+	assert scope.query("*IDN?") == "OK"
+	assert relay.attempts == 2
+	assert scope.online is True
+
+def test_retry_gives_up_after_the_configured_attempts():
+	relay = _FlakyRelay(fail_times=99)
+	scope = make_flaky_scope(relay, ReconnectPolicy(num_retries=2, retry_pause_s=0))
+
+	assert scope.query("*IDN?") == ""
+	# 1 + 2 retries, then one more from check_online()'s *IDN? probe after the driver is marked
+	# offline - that probe is check_online()'s whole job, not a fourth retry.
+	assert relay.attempts == 4
+	assert scope.online is False
+
+def test_retry_can_be_disabled():
+	""" With retry off, the same single transient failure that retry would have absorbed costs
+	the caller the whole query. (check_online()'s probe then finds the instrument responsive
+	again, so the driver isn't left offline - but the data is already lost.) """
+	relay = _FlakyRelay(fail_times=1)
+	scope = make_flaky_scope(relay, ReconnectPolicy(retry_enabled=False))
+
+	assert scope.query("*IDN?") == ""
+	assert relay.attempts == 2       # the single attempt, plus check_online()'s probe
+
+def test_offline_driver_does_not_reconnect_when_the_option_is_off():
+	""" Default behaviour: an offline driver stays offline until someone calls connect(). """
+	relay = _FlakyRelay()
+	scope = make_flaky_scope(relay, ReconnectPolicy(reconnect_on_use=False))
+	scope.online = False
+
+	assert scope.query("*IDN?") == ""
+	assert relay.connect_calls == 0
+	assert relay.attempts == 0       # never even reached the relay
+
+def test_reconnect_on_use_recovers_an_offline_driver():
+	relay = _FlakyRelay()
+	scope = make_flaky_scope(relay, ReconnectPolicy(reconnect_on_use=True, retry_pause_s=0))
+	scope.online = False
+
+	assert scope.query("*IDN?") == "OK"
+	assert relay.connect_calls == 1
+	assert scope.online is True
+
+def test_reconnect_on_use_respects_the_cooldown():
+	""" The cooldown is the half-open probe of a circuit breaker: a permanently dead instrument
+	costs one reconnect attempt per cooldown period, not one per call. """
+	relay = _FlakyRelay()
+	relay.connect_succeeds = False
+	scope = make_flaky_scope(relay, ReconnectPolicy(reconnect_on_use=True, reconnect_cooldown_s=60.0))
+	scope.online = False
+
+	for _ in range(5):
+		scope.query("*IDN?")
+
+	assert relay.connect_calls == 1
+
+def test_reconnect_is_attempted_again_once_the_cooldown_expires():
+	relay = _FlakyRelay()
+	relay.connect_succeeds = False
+	scope = make_flaky_scope(relay, ReconnectPolicy(reconnect_on_use=True, reconnect_cooldown_s=0.0))
+	scope.online = False
+
+	scope.query("*IDN?")
+	scope.query("*IDN?")
+
+	assert relay.connect_calls == 2

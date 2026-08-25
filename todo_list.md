@@ -23,7 +23,8 @@ after write_binary: 150 passed, 4 xfailed;
 after the P6 pass: 160 passed, 4 xfailed;
 after the P2 partial-compliance pass: 172 passed, 4 xfailed;
 after the P7 auto-validate pass: 181 passed, 4 xfailed;
-after the P8 bug batch: **189 passed, 3 xfailed**).
+after the P8 bug batch: 189 passed, 3 xfailed;
+after ReconnectPolicy: **200 passed, 3 xfailed**).
 
 ---
 
@@ -568,12 +569,69 @@ What remains is documentation and detritus:
       loop, joins the thread with a bounded 2 s timeout (a hung loop must not wedge `close()`),
       and clears both handles so `_ensure_loop()` builds a fresh loop on reconnect rather than
       handing out a stopped one.
-- [ ] **No reconnection path.** `Driver.check_online()`'s AUTO branch queries `*IDN?`; over a
-      network relay a transient broker/relay hiccup marks the driver offline permanently, and
-      `Driver.write`/`query` then early-return on `if not self.online`. Nothing recovers short of
-      a manual `connect()`. Needs a retry/reconnect policy — the whole point of the mesh is
-      long-running unattended nodes.
-      *static*
+- [x] **No reconnection path** — fixed with `ReconnectPolicy`. One policy object per Driver,
+      passed as `reconnect_policy=`, so a scope on a flaky mesh link and a PSU on local USB can
+      behave differently. Two independent mechanisms:
+      **in-call retry** (`retry_enabled`, default ON; `num_retries=2`, `retry_pause_s=0.25`),
+      which absorbs the sub-second blip so the driver never goes offline at all; and
+      **reconnect-on-use** (`reconnect_on_use`, default OFF; `reconnect_cooldown_s=5.0`), where
+      an offline driver attempts a full `connect()` on next use, at most once per cooldown — a
+      circuit breaker whose cooldown is the half-open probe. A Driver built without a policy gets
+      a *copy* of module-level `DEFAULT_RECONNECT_POLICY` (change its fields at startup to shift
+      the default application-wide) — a copy, not the object, so tuning one instrument doesn't
+      silently retune every other driver.
+
+      **The underlying problem was a deadlock, not just a missing retry.** `write`/`read`/`query`
+      all early-return when `self.online` is False, and `check_online()` — the only thing that
+      sets it back to True — is called *exclusively* from inside those methods' `except` blocks,
+      which sit after that guard. So the code that could restore `online` was unreachable once
+      `online` was False. Nothing self-healed, at any timescale, however brief the hiccup.
+      `reconnect_on_use` is the explicit way out; it defaults OFF, which means **an offline
+      driver still has no automatic path back unless the option is enabled** — the default
+      in-call retry is what keeps transient failures from marking it offline to begin with.
+
+### Reconnection follow-ups
+
+- [ ] **Distinguish offline-errors from other errors.** Today *any* exception out of a relay call
+      marks the driver offline and triggers reconnect/retry machinery. A malformed SCPI command
+      and a dead socket are completely different events, and only the second should provoke
+      reconnection — otherwise a driver bug produces an endless reconnect loop, and retrying
+      makes it worse by sending the bad command three times. Needs an error classification
+      (transport/connection vs. instrument/protocol vs. programming error), probably by
+      exception type at the relay boundary: pyvisa's `VisaIOError` subtypes and labmesh's
+      transport errors are the connection-shaped ones; a parse failure in a driver's response
+      handling is not. Retry and reconnect-on-use should only fire for the transport class.
+- [ ] **Track two independent online states: Driver→instrument and client→relay.** With a
+      networked driver, "offline" currently collapses two genuinely different failures. If a GUI
+      on machine 1 drives an instrument on machine 2, the questions "is the GUI still talking to
+      the relay process?" and "is the relay process still talking to the hardware?" have
+      different answers, different recoveries, and different things to show the user. A single
+      `self.online` bool cannot express "mesh is fine, the scope is unplugged" or "the scope is
+      fine, the bench machine dropped off the network". Needs a second tracked status, a way for
+      `RemoteTextCommandRelayListener` to report *its* local relay's health back over RPC, and
+      the reconnect policy to act on the right one — reconnecting the mesh link is useless if the
+      instrument is what's unplugged.
+- [ ] **Retried writes are not guaranteed idempotent.** A retried write can reach the instrument
+      twice if the failure happened after delivery but before acknowledgement. Nearly all SCPI
+      setters are idempotent so this is normally harmless, but an *action* command (a trigger, a
+      relay toggle, an output enable) is not, and `_relay_attempt()` doesn't distinguish them.
+      Options: a per-call `retry=False` opt-out, or marking action methods. Noted in the
+      `_relay_attempt` docstring.
+- [ ] **A reconnected instrument is not the instrument you left.** A scope that power-cycled
+      comes back at factory defaults; silently resuming a sweep against it produces data that
+      looks fine and is wrong. Wants an `on_reconnect` companion policy — `NOTHING` /
+      `REFRESH_STATE` (re-read hardware so the tracker is at least honest) / `APPLY_STATE` (push
+      the tracked state back, restoring the setup). `APPLY_STATE` is what an unattended run
+      wants, and is also the one that can drive an instrument, so it shouldn't be the default.
+- [ ] **`DriverStateBroadcaster` publishes stale state when its driver is offline.** It polls
+      every `state_interval` regardless; `refresh_state()` "succeeds", every getter returns `""`,
+      and subscribers see stale values with no indication they're stale. Should publish the
+      online status alongside the state, or skip publishing while offline.
+- [ ] **Consider a background supervisor** that probes offline drivers and reconnects before the
+      next user call, rather than making that call pay for it. Better for unattended bench nodes,
+      but it introduces concurrent relay access — and `DriverStateBroadcaster` already drives
+      `poll()` from its own thread — so it needs a relay lock that doesn't exist today. Hold
+      until something demands it.
 - [x] **`Driver.connect()` referenced an undefined `e`** — fixed. There is no exception to
       report at that point: the relay connected and `query_id()` then cleared `self.online`
       because the instrument didn't answer `*IDN?`, so the message now says that.

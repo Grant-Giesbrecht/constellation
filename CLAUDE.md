@@ -122,6 +122,15 @@ Swapping `DirectSCPIRelay()` for `RemoteTextCommandRelayClient(...)` (and passin
 `address` instead of a VISA resource string) is the *only* difference between local and networked use —
 every driver takes `relay=` for exactly this reason.
 
+How a driver reacts to a failed relay call is a per-driver `ReconnectPolicy`, passed as
+`reconnect_policy=`: **in-call retry** (default ON) absorbs the sub-second blip so the driver
+never goes offline, and **reconnect-on-use** (default OFF) lets an offline driver attempt a full
+`connect()` on next use, at most once per cooldown. Without a policy a driver gets a *copy* of
+`DEFAULT_RECONNECT_POLICY` — a copy, so tuning one instrument doesn't retune the rest. Note that
+with reconnect-on-use off, an offline driver has no automatic path back: `write`/`read`/`query`
+early-return on `not self.online`, and `check_online()` is only reachable from inside those
+methods' `except` blocks.
+
 `src/constellation/networking/labmesh_net.py` covers the other half: `DriverStateBroadcaster` runs a
 `labmesh.RelayAgent` around an already-connected `Driver` in a background thread, so *other* (non-owning)
 clients can subscribe to its state without controlling the instrument.

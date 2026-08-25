@@ -961,6 +961,74 @@ def feature_unavailable(reason:str):
 
 	return decorator
 
+class ReconnectPolicy:
+	''' How a Driver responds when communication with its instrument fails.
+
+	One policy object per Driver, passed as `reconnect_policy=` at construction. Different
+	instruments in the same script can carry different policies - a scope on a flaky mesh link
+	and a power supply on local USB have genuinely different needs.
+
+	Two independent mechanisms:
+
+	 - **In-call retry** (`retry_enabled`, default ON). A failed write/read/query is retried a few
+	   times before the driver concludes anything is wrong. This is for the sub-second blip - a
+	   broker restart, a dropped ZMQ frame - and its virtue is that the driver never goes offline
+	   in the first place, so nothing downstream has to recover.
+
+	 - **Reconnect-on-use** (`reconnect_on_use`, default OFF). Once a driver *is* offline, the
+	   next call attempts a full `connect()` before giving up, at most once per
+	   `reconnect_cooldown_s`. This is a circuit breaker: the cooldown is the half-open probe, so
+	   a permanently dead instrument costs one attempt per cooldown period rather than one per
+	   call.
+
+	They compose. Retry handles being briefly wrong; reconnect-on-use recovers from having
+	concluded the instrument is gone.
+
+	Note what reconnect-on-use switches on. `Driver.write/read/query` all early-return when
+	`self.online` is False, and `check_online()` - the only thing that sets it back to True - is
+	called exclusively from inside those methods' `except` blocks, which sit *after* that guard.
+	So with `reconnect_on_use=False`, an offline driver has no path back short of a manual
+	`connect()`. That's why the default in-call retry matters: it keeps transient failures from
+	marking the driver offline at all.
+
+	Args:
+		retry_enabled (bool): Retry a failed relay operation before treating it as a failure.
+		num_retries (int): Additional attempts after the first. 2 means up to 3 total.
+		retry_pause_s (float): Seconds to wait between attempts.
+		reconnect_on_use (bool): When offline, attempt a full reconnect on the next call.
+		reconnect_cooldown_s (float): Minimum seconds between reconnect attempts.
+	'''
+
+	def __init__(self, retry_enabled:bool=True, num_retries:int=2, retry_pause_s:float=0.25, reconnect_on_use:bool=False, reconnect_cooldown_s:float=5.0):
+
+		self.retry_enabled = retry_enabled
+		self.num_retries = num_retries
+		self.retry_pause_s = retry_pause_s
+
+		self.reconnect_on_use = reconnect_on_use
+		self.reconnect_cooldown_s = reconnect_cooldown_s
+
+	def total_attempts(self) -> int:
+		''' Number of times a relay operation is tried, including the first. '''
+
+		if not self.retry_enabled:
+			return 1
+
+		return 1 + max(0, self.num_retries)
+
+	def __repr__(self):
+		return (f"ReconnectPolicy(retry_enabled={self.retry_enabled}, num_retries={self.num_retries}, "
+			f"retry_pause_s={self.retry_pause_s}, reconnect_on_use={self.reconnect_on_use}, "
+			f"reconnect_cooldown_s={self.reconnect_cooldown_s})")
+
+# Template used by any Driver constructed without an explicit `reconnect_policy=`. Change its
+# fields at startup to shift the default for a whole application.
+#
+# Drivers get a *copy*, never this object itself - sharing one mutable policy across every driver
+# would mean tuning one instrument's retries silently retuned all of them, which is the same
+# shared-mutable-default trap that the relay= argument used to have.
+DEFAULT_RECONNECT_POLICY = ReconnectPolicy()
+
 class CheckOnline(Enum):
 	''' Contains possible values for the Driver.check_online_on_error parameter.
 	How check_online_on_error is set controls how a driver handles updating online
@@ -981,7 +1049,7 @@ class CheckOnline(Enum):
 class Driver(ABC):
 	
 	#TODO: Modify all category and drivers to pass kwargs to super
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay, state:InstrumentState, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, dummy:bool=False, first_channel_num:int=1, first_trace_num:int=1):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay, state:InstrumentState, expected_idn:str="", is_scpi:bool=True, remote_id:str=None, host_id:HostID=None, dummy:bool=False, first_channel_num:int=1, first_trace_num:int=1, reconnect_policy:ReconnectPolicy=None):
 		
 		self.address = address
 		self.log = log
@@ -1002,6 +1070,12 @@ class Driver(ABC):
 		
 		# Configure relay with address and log
 		self.relay.configure(self.address, self.log)
+		
+		# How this driver responds to communication failures. Per-driver, so a scope on a flaky
+		# mesh link and a PSU on local USB can behave differently. A copy of the module default
+		# rather than the default object itself - see DEFAULT_RECONNECT_POLICY.
+		self.reconnect_policy = reconnect_policy if reconnect_policy is not None else copy.copy(DEFAULT_RECONNECT_POLICY)
+		self._last_reconnect_attempt = None
 		
 		# State tracking parameters
 		self.dummy = False
@@ -1229,6 +1303,100 @@ class Driver(ABC):
 			
 			self.debug(f">Driver.check_online()<: self.online --\\> {self.online}")
 	
+	def _ensure_online(self, operation:str) -> bool:
+		''' Gate every relay operation goes through. Returns True if the call may proceed.
+		
+		When the driver is offline and `reconnect_policy.reconnect_on_use` is set, attempts a
+		full reconnect first - at most once per `reconnect_cooldown_s`, so a permanently dead
+		instrument costs one attempt per cooldown period instead of one per call.
+		
+		Args:
+			operation (str): Name of the operation being attempted, for log messages.
+		
+		Returns:
+			bool: True if online (possibly after reconnecting), False if the call should abort.
+		'''
+		
+		if self.online:
+			return True
+		
+		policy = self.reconnect_policy
+		
+		if not policy.reconnect_on_use:
+			self.warning(f"Cannot {operation} when offline.")
+			return False
+		
+		# Cooldown gate: the "half-open" probe of a circuit breaker.
+		now = time.time()
+		if self._last_reconnect_attempt is not None and (now - self._last_reconnect_attempt) < policy.reconnect_cooldown_s:
+			remaining = policy.reconnect_cooldown_s - (now - self._last_reconnect_attempt)
+			self.warning(f"Cannot {operation} when offline. Next reconnect attempt in >{remaining:.1f}s<.")
+			return False
+		
+		self._last_reconnect_attempt = now
+		self.debug(f"Offline - attempting reconnect before >{operation}<.")
+		
+		if self.connect():
+			self.info(f"Reconnected to >{self.address}<.")
+			return True
+		
+		self.warning(f"Cannot {operation} - reconnect attempt failed.")
+		return False
+	
+	def _relay_attempt(self, operation:str, call:callable, failure_value):
+		''' Runs a single relay operation under the driver's ReconnectPolicy, retrying a failed
+		attempt before concluding the instrument is unreachable.
+		
+		Retry exists for the sub-second blip - a broker restart, a dropped ZMQ frame - where the
+		virtue is that the driver never goes offline at all, so nothing downstream has to
+		recover. Only the final failed attempt updates `self.online` and calls `check_online()`.
+		
+		NOTE on retrying writes: a retried write can reach the instrument twice if the failure
+		happened after delivery but before acknowledgement. Nearly all SCPI setters are
+		idempotent, so this is normally harmless - but an action command (a trigger, a relay
+		toggle) is not, and this does not currently distinguish them. See todo_list.md P8.
+		
+		Args:
+			operation (str): Name of the operation, for log messages.
+			call (callable): Zero-argument callable returning (ok:bool, value).
+			failure_value: What to return if every attempt fails.
+		
+		Returns:
+			tuple: (ok, value) - value is `failure_value` if every attempt failed.
+		'''
+		
+		policy = self.reconnect_policy
+		attempts = policy.total_attempts()
+		
+		for attempt in range(attempts):
+			
+			is_last = (attempt == attempts - 1)
+			
+			try:
+				ok, value = call()
+				if ok:
+					return True, value
+				reason = "relay reported failure"
+			except Exception as e:
+				reason = f"{e}"
+			
+			if not is_last:
+				self.debug(f"Attempt >{attempt+1}</>{attempts}< to {operation} failed ({reason}). Retrying in >{policy.retry_pause_s}s<.")
+				if policy.retry_pause_s > 0:
+					time.sleep(policy.retry_pause_s)
+				continue
+			
+			# Final attempt failed - now it counts.
+			if attempts > 1:
+				self.error(f"Failed to {operation} on instrument {self.address} after >{attempts}< attempts. ({reason})")
+			else:
+				self.error(f"Failed to {operation} on instrument {self.address}. ({reason})")
+			
+			self.online = False
+			self.check_online()
+		
+		return False, failure_value
+	
 	def preset(self) -> None:
 		''' Presets an instrument. Only valid for SCPI instruments.'''
 		
@@ -1342,9 +1510,8 @@ class Driver(ABC):
 			self.error(f"Cannot use default write() function, instrument does recognize SCPI commands.")
 			return
 		
-		# Abort if offline
-		if not self.online:
-			self.warning(f"Cannot write when offline.")
+		# Abort if offline (may reconnect first, per the driver's ReconnectPolicy)
+		if not self._ensure_online("write"):
 			return
 		
 		# Spoof if dummy
@@ -1352,14 +1519,11 @@ class Driver(ABC):
 			self.lowdebug(f"Writing to dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
 			return
 		
-		# Attempt write
-		try:
-			self.online = self.relay.write(cmd)
-			if self.online:
-				self.lowdebug(f"Wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
-		except Exception as e:
-			self.error(f"Failed to write to instrument {self.address}. ({e})")
-			self.check_online()
+		# Attempt write. relay.write returns a bare bool, so it's adapted to the (ok, value)
+		# shape _relay_attempt works in.
+		ok, _ = self._relay_attempt("write", lambda: (self.relay.write(cmd), None), None)
+		if ok:
+			self.lowdebug(f"Wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
 	
 	def read(self) -> str:
 		''' Reads via the relay. Updates self.online with read success/
@@ -1374,9 +1538,8 @@ class Driver(ABC):
 			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
 			return ""
 		
-		# Abort if offline
-		if not self.online:
-			self.warning(f"Cannot write when offline. ()")
+		# Abort if offline (may reconnect first, per the driver's ReconnectPolicy)
+		if not self._ensure_online("read"):
 			return ""
 		
 		# Spoof if dummy
@@ -1385,17 +1548,11 @@ class Driver(ABC):
 			return ""
 		
 		# Attempt to read
-		try:
-			self.online, rv = self.relay.read()
-			if self.online:
-				self.lowdebug(f"Read from instrument: >:a{rv}<")
-				return rv
-			else:
-				return ""
-		except Exception as e:
-			self.error(f"Failed to read from instrument {self.address}. ({e})")
-			self.check_online()
-			return ""
+		ok, rv = self._relay_attempt("read", lambda: self.relay.read(), "")
+		if ok:
+			self.lowdebug(f"Read from instrument: >:a{rv}<")
+		
+		return rv
 	
 	def query(self, cmd:str) -> str:
 		''' Queries via the relay. Updates self.online with read success/
@@ -1413,9 +1570,8 @@ class Driver(ABC):
 			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
 			return ""
 		
-		# Abort if offline
-		if not self.online:
-			self.warning(f"Cannot query when offline. ()")
+		# Abort if offline (may reconnect first, per the driver's ReconnectPolicy)
+		if not self._ensure_online("query"):
 			return ""
 		
 		# Spoof if dummy
@@ -1424,22 +1580,11 @@ class Driver(ABC):
 			return ""
 		
 		# Attempt to read
-		try:
-			self.online, rv = self.relay.query(cmd)
-			if self.online:
-				self.lowdebug(f"Read from instrument: >:a{rv}<")
-				return rv
-			else:
-				
-				# If insturment was switched to offline, check if true
-				if not self.online:
-					self.check_online()
-				
-				return ""
-		except Exception as e:
-			self.error(f"Failed to read from instrument {self.address}. ({e})")
-			self.check_online()
-			return ""
+		ok, rv = self._relay_attempt("query", lambda: self.relay.query(cmd), "")
+		if ok:
+			self.lowdebug(f"Read from instrument: >:a{rv}<")
+		
+		return rv
 
 	def query_binary(self, cmd:str, datatype:str='B') -> list:
 		''' Queries a binary block via the relay (see CommandRelay.query_binary). Only relays
@@ -1460,9 +1605,8 @@ class Driver(ABC):
 			self.error(f"Cannot use default query_binary() function, instrument does recognize SCPI commands.")
 			return []
 
-		# Abort if offline
-		if not self.online:
-			self.warning(f"Cannot query_binary when offline.")
+		# Abort if offline (may reconnect first, per the driver's ReconnectPolicy)
+		if not self._ensure_online("query_binary"):
 			return []
 
 		# Spoof if dummy
@@ -1471,18 +1615,11 @@ class Driver(ABC):
 			return []
 
 		# Attempt to read
-		try:
-			self.online, rv = self.relay.query_binary(cmd, datatype=datatype)
-			if self.online:
-				self.lowdebug(f"Read binary block from instrument: >:a{len(rv)} values<")
-				return rv
-			else:
-				self.check_online()
-				return []
-		except Exception as e:
-			self.error(f"Failed to query binary block from instrument {self.address}. ({e})")
-			self.check_online()
-			return []
+		ok, rv = self._relay_attempt("query binary block", lambda: self.relay.query_binary(cmd, datatype=datatype), [])
+		if ok:
+			self.lowdebug(f"Read binary block from instrument: >:a{len(rv)} values<")
+
+		return rv
 
 	def write_binary(self, cmd:str, values:list, datatype:str='B') -> bool:
 		''' Writes a SCPI command followed by an IEEE 488.2 binary block via the relay (see
@@ -1509,9 +1646,8 @@ class Driver(ABC):
 			self.error(f"Cannot use default write_binary() function, instrument does recognize SCPI commands.")
 			return False
 
-		# Abort if offline
-		if not self.online:
-			self.warning(f"Cannot write_binary when offline.")
+		# Abort if offline (may reconnect first, per the driver's ReconnectPolicy)
+		if not self._ensure_online("write_binary"):
 			return False
 
 		# Spoof if dummy
@@ -1520,15 +1656,11 @@ class Driver(ABC):
 			return True
 
 		# Attempt write
-		try:
-			self.online = self.relay.write_binary(cmd, values, datatype=datatype)
-			if self.online:
-				self.lowdebug(f"Wrote binary block to instrument: >@:LOCK{cmd}@:UNLOCK< (>:a{len(values)} values<).")
-			return self.online
-		except Exception as e:
-			self.error(f"Failed to write binary block to instrument {self.address}. ({e})")
-			self.check_online()
-			return False
+		ok, _ = self._relay_attempt("write binary block", lambda: (self.relay.write_binary(cmd, values, datatype=datatype), None), None)
+		if ok:
+			self.lowdebug(f"Wrote binary block to instrument: >@:LOCK{cmd}@:UNLOCK< (>:a{len(values)} values<).")
+
+		return ok
 
 	def dummy_responder(self, func_name:str, *args, **kwargs):
 		''' Function expected to behave as the "real" equivalents. ie. write commands don't
