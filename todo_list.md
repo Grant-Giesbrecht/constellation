@@ -24,7 +24,8 @@ after the P6 pass: 160 passed, 4 xfailed;
 after the P2 partial-compliance pass: 172 passed, 4 xfailed;
 after the P7 auto-validate pass: 181 passed, 4 xfailed;
 after the P8 bug batch: 189 passed, 3 xfailed;
-after ReconnectPolicy: **200 passed, 3 xfailed**).
+after ReconnectPolicy: 200 passed, 3 xfailed;
+after error classification: **216 passed, 3 xfailed**).
 
 ---
 
@@ -592,15 +593,37 @@ What remains is documentation and detritus:
 
 ### Reconnection follow-ups
 
-- [ ] **Distinguish offline-errors from other errors.** Today *any* exception out of a relay call
-      marks the driver offline and triggers reconnect/retry machinery. A malformed SCPI command
-      and a dead socket are completely different events, and only the second should provoke
-      reconnection — otherwise a driver bug produces an endless reconnect loop, and retrying
-      makes it worse by sending the bad command three times. Needs an error classification
-      (transport/connection vs. instrument/protocol vs. programming error), probably by
-      exception type at the relay boundary: pyvisa's `VisaIOError` subtypes and labmesh's
-      transport errors are the connection-shaped ones; a parse failure in a driver's response
-      handling is not. Retry and reconnect-on-use should only fire for the transport class.
+- [x] **Distinguish offline-errors from other errors** — done, via `RelayErrorKind` and
+      `classify_relay_exception()` in `relay.py`.
+
+      The structural obstacle: every relay method catches its own exceptions and returns a bare
+      success flag, so by the time the Driver saw a failure the exception was already gone and
+      there was nothing left to classify. Relays now record the *kind* of their last failure on
+      themselves (`relay.last_error_kind`, set by `note_failure()` in each `except` block and
+      cleared at the start of every operation so a stale classification can't outlive the failure
+      that produced it), and `Driver._relay_attempt()` acts on that.
+
+      | kind | retried? | marks offline? |
+      |---|---|---|
+      | `TRANSPORT` — socket dropped, connection lost, timeout, invalid session | yes | yes |
+      | `INSTRUMENT` — link worked, exchange didn't (unparseable reply, malformed block) | yes | **no** |
+      | `USAGE` — unsupported operation, bad arguments | **no** | **no** |
+      | `UNKNOWN` — unclassified | yes | yes (conservative: matches pre-classification behaviour) |
+
+      Two concrete behaviours this fixes: calling `query_binary` on a relay that has none (VICP)
+      no longer burns three attempts on a `NotImplementedError` and then declares the instrument
+      offline; and a reply that won't parse no longer strands a driver offline on a perfectly
+      good connection — permanently, with `reconnect_on_use` off.
+
+      Timeouts are deliberately classified TRANSPORT: from the driver's side "no answer came
+      back" is indistinguishable from a dead link, and it's the case retrying most often rescues.
+
+- [ ] **The remote client can't classify a bench-side failure.** When
+      `RemoteTextCommandRelayListener` reports `ok=False`, no exception crosses the mesh, so
+      `RemoteTextCommandRelayClient.last_error_kind` stays `NONE` and the driver falls back to
+      `UNKNOWN`. The listener knows the real classification (its local relay recorded one) and
+      could return it alongside the failure. This is the same wire that the two-online-states
+      item below needs, so do them together.
 - [ ] **Track two independent online states: Driver→instrument and client→relay.** With a
       networked driver, "offline" currently collapses two genuinely different failures. If a GUI
       on machine 1 drives an instrument on machine 2, the questions "is the GUI still talking to
@@ -1184,6 +1207,47 @@ introducing a third parallel list. `InstrumentState.set()` would consult it befo
       place.
 - [ ] Retrofit the existing `add_param` call sites across all category classes once the shape is
       settled. Large mechanical change; worth doing in one pass, not incrementally.
+
+## Priority 17 — GUI layer
+
+Numbered last only because it was added last; these are ordinary near-term items, not deferred
+like P16. The architecture itself is settled and built — see `docs/gui_architecture_proposal.md`,
+`docs/gui_authoring_guide.md`, and commit `a2c552c`. `InstrumentBridge`/`OwningBridge`/
+`ObserverBridge`, `TrackedControl`/`IndicatorButton`, `register_gui()` and the `QDockWidget`
+container all exist in `ui.py`, with widgets registered for `Oscilloscope`, `PowerSupply` and
+`DataAcquisition`.
+
+- [ ] **No test coverage for `ui.py` at all.** The suite is 200 tests of state/dummy/networking
+      and zero touching the GUI layer. Both of the pieces most worth testing are testable
+      headless — Qt's `offscreen` platform plugin needs no display:
+      - the **bridge threading contract**: `request()` returns immediately; a slow driver call
+        stalls only its own bridge's queue and not other bridges; `command_result` fires with
+        `success=False` and the exception when a driver method raises; `stop()` actually ends the
+        worker thread.
+      - the **`TrackedControl` status state machine** (confirmed / pending / mismatch / stale).
+        This is pure logic over signal inputs, needs no rendering, and is exactly the kind of
+        thing that rots silently — a wrong indicator doesn't crash, it just quietly lies about
+        whether the instrument did what you asked.
+      Neither needs a real instrument; a dummy-mode driver plus a fake bridge is enough.
+- [ ] **Protect the data-race guard in `OwningBridge._poll_and_emit()`.** It deliberately
+      reconstructs a fresh `InstrumentState` with `from_serial_dict(state_dict)` rather than
+      emitting `self.driver.state` directly. That is *not* a redundant allocation: Qt signals
+      pass Python object references across threads, and the worker thread keeps mutating
+      `self.driver.state` in place on every subsequent poll — emitting it would hand the GUI
+      thread an object that changes underneath it. It looks exactly like something worth
+      "optimizing away", and the resulting corruption would be intermittent and awful to
+      diagnose. There is a comment explaining it; there is no test that would fail if someone
+      removed it. Add one (assert the emitted object is not `bridge.driver.state`, and that a
+      subsequent poll doesn't mutate the previously emitted object).
+- [ ] Categories still without a registered widget: vector network analyzer, digital multimeter,
+      spectrum analyzer, arbitrary waveform generator. Per-category work now, not framework work.
+- [ ] `widgets.py` (54 lines, `StatusPushButton`) is the pre-`a2c552c` prototype and predates the
+      current architecture. Fold anything still wanted into `ui.py` and delete it, or say in the
+      file what it's still for.
+- [ ] **`TrackedControl` can't distinguish "the mesh dropped" from "the instrument is unplugged"**
+      — the same single-`online`-bool limitation logged under the P8 reconnection follow-ups.
+      Those two failures want different indicators and different user guidance, so whatever
+      two-level online tracking gets built there needs a matching indicator state here.
 
 ## Execution order (agreed)
 

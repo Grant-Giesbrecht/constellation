@@ -122,6 +122,12 @@ Swapping `DirectSCPIRelay()` for `RemoteTextCommandRelayClient(...)` (and passin
 `address` instead of a VISA resource string) is the *only* difference between local and networked use —
 every driver takes `relay=` for exactly this reason.
 
+Relays swallow their own exceptions and return a bare success flag, so each one records *why* it
+failed on itself (`relay.last_error_kind`, a `RelayErrorKind`) for the Driver to act on:
+`TRANSPORT` is retried and marks the driver offline, `INSTRUMENT` (a reply that wouldn't parse) is
+retried but leaves it online, `USAGE` (unsupported operation, bad arguments) is neither retried nor
+treated as a connection failure. New relay `except` blocks must call `self.note_failure(e)`.
+
 How a driver reacts to a failed relay call is a per-driver `ReconnectPolicy`, passed as
 `reconnect_policy=`: **in-call retry** (default ON) absorbs the sub-second blip so the driver
 never goes offline, and **reconnect-on-use** (default OFF) lets an offline driver attempt a full

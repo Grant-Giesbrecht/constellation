@@ -8,6 +8,88 @@ import asyncio
 import threading
 from labmesh import DirectorClientAgent
 from labmesh.util import prompt_network_password
+from enum import Enum
+
+class RelayErrorKind(Enum):
+	''' Why a relay operation failed.
+
+	Every relay method catches its own exceptions and returns a bare success flag, so by the time
+	the Driver sees a failure the exception is gone. Relays therefore record the *kind* of the
+	last failure on themselves (`relay.last_error_kind`), and the Driver's ReconnectPolicy acts
+	on that rather than on the raw exception.
+
+	The distinction matters because retrying and reconnecting are only ever appropriate for the
+	transport class. Without it, a malformed SCPI command in a driver takes the instrument
+	"offline" and gets resent three times on the way there, and an unsupported operation (e.g.
+	VICPDirectSCPIRelay has no query_binary) is retried repeatedly even though it can never
+	succeed.
+
+	NONE: no failure recorded.
+	TRANSPORT: the link itself failed - socket dropped, connection lost, timeout, session
+		invalid. Retryable, and a persistent one means the driver really is offline.
+	INSTRUMENT: the link worked and the instrument answered, but the exchange was bad - an
+		unparseable response, a malformed binary block. Retrying may help (a garbled read can
+		succeed on a second attempt) but it does NOT mean the instrument is unreachable.
+	USAGE: the call itself was wrong or impossible - an unsupported operation, bad arguments.
+		Never retryable; retrying is pure waste and the connection is fine.
+	UNKNOWN: unclassified. Treated like TRANSPORT, which is the conservative choice - it
+		preserves the behaviour everything had before classification existed.
+	'''
+
+	NONE = "none"
+	TRANSPORT = "transport"
+	INSTRUMENT = "instrument"
+	USAGE = "usage"
+	UNKNOWN = "unknown"
+
+# VISA status codes that mean the link is gone, rather than the instrument misbehaving.
+_VISA_TRANSPORT_CODES = (
+	pv.errors.VI_ERROR_CONN_LOST,
+	pv.errors.VI_ERROR_TMO,
+	pv.errors.VI_ERROR_RSRC_NFOUND,
+	pv.errors.VI_ERROR_INV_OBJECT,
+	pv.errors.VI_ERROR_IO,
+)
+
+def classify_relay_exception(e:Exception) -> RelayErrorKind:
+	''' Maps an exception raised inside a relay operation onto a RelayErrorKind.
+
+	Args:
+		e (Exception): The exception the relay caught.
+
+	Returns:
+		RelayErrorKind: What sort of failure this was.
+	'''
+
+	# Unsupported operation - the relay simply can't do this, ever. Retrying is pure waste.
+	if isinstance(e, NotImplementedError):
+		return RelayErrorKind.USAGE
+
+	# pyvisa. VisaIOError carries a status code that says which of the two it is; a timeout is
+	# counted as transport, since from the driver's side "no answer came back" is indistinguishable
+	# from a dead link and is the case retrying most often rescues.
+	if isinstance(e, pv.errors.VisaIOError):
+		if e.error_code in _VISA_TRANSPORT_CODES:
+			return RelayErrorKind.TRANSPORT
+		return RelayErrorKind.INSTRUMENT
+
+	if isinstance(e, pv.errors.InvalidSession):
+		return RelayErrorKind.TRANSPORT
+
+	# Sockets, and pyvicp/labmesh failures, which surface as plain OSError subclasses.
+	# TimeoutError is an OSError subclass in Python 3.10+, so it's covered here too.
+	if isinstance(e, (ConnectionError, OSError)):
+		return RelayErrorKind.TRANSPORT
+
+	# Response-shaped problems: a reply that couldn't be parsed, unpacked, or decoded.
+	if isinstance(e, (ValueError, struct.error, UnicodeDecodeError)):
+		return RelayErrorKind.INSTRUMENT
+
+	# Wrong arguments, wrong types - a bug in the calling code, not a hardware event.
+	if isinstance(e, (TypeError, AttributeError, KeyError)):
+		return RelayErrorKind.USAGE
+
+	return RelayErrorKind.UNKNOWN
 
 class CommandRelay:
 	''' Class used to relay commands from a "driver" (which defines the content of the
@@ -21,6 +103,29 @@ class CommandRelay:
 		
 		self.address = ""
 		self.log = None
+		
+		# Why the most recent operation failed, for the Driver's ReconnectPolicy to act on.
+		# Relays swallow their own exceptions and return a bare success flag, so this is the only
+		# channel by which the failure's *nature* reaches the Driver.
+		self.last_error_kind = RelayErrorKind.NONE
+	
+	def note_failure(self, e:Exception) -> RelayErrorKind:
+		''' Records the kind of a failure. Call from a relay method's except block.
+		
+		Args:
+			e (Exception): The exception that was caught.
+		
+		Returns:
+			RelayErrorKind: The classification, for logging.
+		'''
+		
+		self.last_error_kind = classify_relay_exception(e)
+		return self.last_error_kind
+	
+	def note_success(self) -> None:
+		''' Clears any recorded failure. Call from a relay method that succeeded. '''
+		
+		self.last_error_kind = RelayErrorKind.NONE
 	
 	def configure(self, address:str, log:plf.LogPile):
 		''' Configures the Relay with the appropriate address and log. Note
@@ -131,10 +236,13 @@ class VICPDirectSCPIRelay(CommandRelay):
 			bool: Success status of write.
 		'''
 		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+		
 		try:
 			self.inst.send(cmd.encode())
 			self.log.lowdebug(f"VICPDirectSCPIRelay wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"VICPDirectSCPIRelay failed to write to instrument {self.address}. ({e})")
 			return False
 		
@@ -147,10 +255,13 @@ class VICPDirectSCPIRelay(CommandRelay):
 			tuple: Element 0 = success status of read, element 1 = read string.
 		'''
 		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+		
 		try:
 			rv = self.inst.receive().decode()
 			self.log.lowdebug(f"VICPDirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"VICPDirectSCPIRelay failed to read from instrument {self.address}. ({e})")
 			return False, ""
 		
@@ -166,11 +277,14 @@ class VICPDirectSCPIRelay(CommandRelay):
 			tuple: Element 0 = success status of read, element 1 = read string.
 		'''
 		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+		
 		try:
 			self.inst.send(cmd.encode())
 			rv = self.inst.receive().decode()
 			self.log.lowdebug(f"VICPDirectSCPIRelay queried from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"VICPDirectSCPIRelay failed to query instrument {self.address}. ({e})")
 			return False, ""
 		
@@ -189,6 +303,8 @@ class VICPDirectSCPIRelay(CommandRelay):
 		Returns:
 			bool: Success status of the write.
 		'''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		try:
 			payload = struct.pack(f"<{len(values)}{datatype}", *values)
@@ -197,6 +313,7 @@ class VICPDirectSCPIRelay(CommandRelay):
 			self.inst.send(header + payload)
 			self.log.lowdebug(f"VICPDirectSCPIRelay wrote binary block to instrument: >:a{len(values)} values<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"VICPDirectSCPIRelay failed to write binary block to instrument {self.address}. ({e})")
 			return False
 
@@ -260,10 +377,13 @@ class DirectSCPIRelay(CommandRelay):
 			bool: Success status of write.
 		'''
 		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+		
 		try:
 			self.inst.write(cmd)
 			self.log.lowdebug(f"DirectSCPIRelay wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"DirectSCPIRelay failed to write to instrument {self.address}. ({e})")
 			return False
 		
@@ -276,10 +396,13 @@ class DirectSCPIRelay(CommandRelay):
 			tuple: Element 0 = success status of read, element 1 = read string.
 		'''
 		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+		
 		try:
 			rv = self.inst.read()
 			self.log.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"DirectSCPIRelay failed to read from instrument {self.address}. ({e})")
 			return False, ""
 		
@@ -295,10 +418,13 @@ class DirectSCPIRelay(CommandRelay):
 			tuple: Element 0 = success status of read, element 1 = read string.
 		'''
 		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+		
 		try:
 			rv = self.inst.query(cmd)
 			self.log.lowdebug(f"DirectSCPIRelay queried instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"DirectSCPIRelay failed to query instrument {self.address}. ({e})")
 			return False, ""
 
@@ -315,11 +441,14 @@ class DirectSCPIRelay(CommandRelay):
 		Returns:
 			tuple: Element 0 = success status, element 1 = list of decoded values.
 		'''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		try:
 			rv = self.inst.query_binary_values(cmd, datatype=datatype, container=list)
 			self.log.lowdebug(f"DirectSCPIRelay queried binary block from instrument: >:a{len(rv)} values<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"DirectSCPIRelay failed to query binary block from instrument {self.address}. ({e})")
 			return False, []
 
@@ -337,6 +466,8 @@ class DirectSCPIRelay(CommandRelay):
 		Returns:
 			bool: Success status of the write.
 		'''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		try:
 			# is_big_endian=False matches the little-endian convention used across the network
@@ -344,6 +475,7 @@ class DirectSCPIRelay(CommandRelay):
 			self.inst.write_binary_values(cmd, values, datatype=datatype, is_big_endian=False)
 			self.log.lowdebug(f"DirectSCPIRelay wrote binary block to instrument: >:a{len(values)} values<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"DirectSCPIRelay failed to write binary block to instrument {self.address}. ({e})")
 			return False
 
@@ -448,6 +580,8 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		''' Connects to the broker and resolves this relay's `address` (set via configure(),
 		same as every other CommandRelay) as a labmesh relay_id, to get a RelayClient for the
 		remote instrument-adjacent process. '''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		# Read (or interactively prompt for, at most once per process) the shared mesh
 		# password before connecting - see docs/labmesh_migration_plan.md.
@@ -463,6 +597,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 			self.director, self.relay_client = self._run(_connect())
 			self.log.debug(f"RemoteTextCommandRelayClient connected to relay_id >{self.address}<.")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to connect to relay_id >{self.address}<. ({e})")
 			return False
 
@@ -510,6 +645,8 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		Returns:
 			bool: Success status of write.
 		'''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		if self.relay_client is None:
 			self.log.error(f"RemoteTextCommandRelayClient cannot write - not connected.")
@@ -521,6 +658,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 				self.log.lowdebug(f"RemoteTextCommandRelayClient wrote to relay: >@:LOCK{cmd}@:UNLOCK<.")
 			return bool(ok)
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to write via relay >{self.address}<. ({e})")
 			return False
 
@@ -530,6 +668,8 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		Returns:
 			tuple: Element 0 = success status of read, element 1 = read string.
 		'''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		if self.relay_client is None:
 			return False, ""
@@ -540,6 +680,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 				self.log.lowdebug(f"RemoteTextCommandRelayClient read from relay: >:a{rv}<")
 			return bool(ok), rv
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to read via relay >{self.address}<. ({e})")
 			return False, ""
 
@@ -552,6 +693,8 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		Returns:
 			tuple: Element 0 = success status of read, element 1 = read string.
 		'''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		if self.relay_client is None:
 			return False, ""
@@ -562,6 +705,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 				self.log.lowdebug(f"RemoteTextCommandRelayClient queried via relay: >:a{rv}<")
 			return bool(ok), rv
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to query via relay >{self.address}<. ({e})")
 			return False, ""
 
@@ -581,6 +725,8 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		Returns:
 			tuple: Element 0 = success status, element 1 = list of decoded values.
 		'''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		if self.relay_client is None:
 			self.log.error(f"RemoteTextCommandRelayClient cannot query_binary - not connected.")
@@ -592,6 +738,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 				timeout_s=self.binary_timeout_s,
 			)
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to query_binary via relay >{self.address}<. ({e})")
 			return False, []
 
@@ -608,6 +755,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 				raise ValueError(f"{len(raw)} bytes is not a whole number of '{datatype}' items")
 			values = list(struct.unpack(f"<{len(raw)//item_size}{datatype}", raw))
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to decode binary block from relay >{self.address}<. ({e})")
 			return False, []
 
@@ -633,6 +781,8 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		Returns:
 			bool: Success status of the write.
 		'''
+		
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		if self.relay_client is None:
 			self.log.error(f"RemoteTextCommandRelayClient cannot write_binary - not connected.")
@@ -641,6 +791,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		try:
 			payload = base64.b64encode(struct.pack(f"<{len(values)}{datatype}", *values)).decode("ascii")
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to pack {len(values)} values as '{datatype}'. ({e})")
 			return False
 
@@ -652,6 +803,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 				timeout_s=self.binary_timeout_s,
 			)
 		except Exception as e:
+			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to write_binary via relay >{self.address}<. ({e})")
 			return False
 

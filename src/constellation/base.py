@@ -1380,20 +1380,44 @@ class Driver(ABC):
 			except Exception as e:
 				reason = f"{e}"
 			
+			# What KIND of failure was it? Relays swallow their own exceptions and return a
+			# bare success flag, so the classification comes back on the relay itself. A
+			# non-exception failure (relay returned ok=False without raising) leaves it NONE,
+			# which is treated as UNKNOWN.
+			kind = getattr(self.relay, "last_error_kind", RelayErrorKind.UNKNOWN)
+			if kind == RelayErrorKind.NONE:
+				kind = RelayErrorKind.UNKNOWN
+			
+			# USAGE means the call itself was wrong or impossible - an unsupported operation, bad
+			# arguments. Retrying cannot help and the connection is fine, so stop immediately and
+			# leave self.online alone. Without this, a driver calling query_binary on a relay that
+			# has none burns three attempts on a NotImplementedError and then declares the
+			# instrument offline.
+			if kind == RelayErrorKind.USAGE:
+				self.error(f"Cannot {operation} on instrument {self.address} - the call is not valid for this relay. ({reason})", detail="Not retried, and the connection is left untouched: this is a usage error, not a communication failure.")
+				return False, failure_value
+			
 			if not is_last:
-				self.debug(f"Attempt >{attempt+1}</>{attempts}< to {operation} failed ({reason}). Retrying in >{policy.retry_pause_s}s<.")
+				self.debug(f"Attempt >{attempt+1}</>{attempts}< to {operation} failed (>:q{kind.value}<: {reason}). Retrying in >{policy.retry_pause_s}s<.")
 				if policy.retry_pause_s > 0:
 					time.sleep(policy.retry_pause_s)
 				continue
 			
 			# Final attempt failed - now it counts.
 			if attempts > 1:
-				self.error(f"Failed to {operation} on instrument {self.address} after >{attempts}< attempts. ({reason})")
+				self.error(f"Failed to {operation} on instrument {self.address} after >{attempts}< attempts. (>:q{kind.value}<: {reason})")
 			else:
-				self.error(f"Failed to {operation} on instrument {self.address}. ({reason})")
+				self.error(f"Failed to {operation} on instrument {self.address}. (>:q{kind.value}<: {reason})")
 			
-			self.online = False
-			self.check_online()
+			# Only a transport-class failure means the instrument is unreachable. An INSTRUMENT
+			# failure - a reply that wouldn't parse, a malformed block - says the link is working
+			# and the exchange wasn't; marking the driver offline for that would strand it on a
+			# perfectly good connection, and (with reconnect_on_use off) permanently.
+			if kind == RelayErrorKind.INSTRUMENT:
+				self.warning(f"Leaving >{self.address}< online: the failure was in the instrument's response, not the connection.")
+			else:
+				self.online = False
+				self.check_online()
 		
 		return False, failure_value
 	

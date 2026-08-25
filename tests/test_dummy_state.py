@@ -1836,3 +1836,122 @@ def test_reconnect_is_attempted_again_once_the_cooldown_expires():
 	scope.query("*IDN?")
 
 	assert relay.connect_calls == 2
+
+# ---------------------------------------------------------------------------------------------
+# Relay error classification (todo P8 reconnection follow-up)
+#
+# Retrying and reconnecting are only appropriate for transport-class failures. Without
+# classification, a malformed SCPI command takes the instrument "offline" and gets resent three
+# times on the way there, and an operation the relay simply cannot do is retried repeatedly
+# though it can never succeed.
+# ---------------------------------------------------------------------------------------------
+
+import pyvisa as _pv
+from constellation.relay import RelayErrorKind, classify_relay_exception
+
+@pytest.mark.parametrize("exc,expected", [
+	(NotImplementedError("no query_binary here"), RelayErrorKind.USAGE),
+	(ConnectionResetError("peer went away"), RelayErrorKind.TRANSPORT),
+	(TimeoutError("no answer"), RelayErrorKind.TRANSPORT),
+	(OSError("socket closed"), RelayErrorKind.TRANSPORT),
+	(_pv.errors.VisaIOError(_pv.errors.VI_ERROR_CONN_LOST), RelayErrorKind.TRANSPORT),
+	(_pv.errors.VisaIOError(_pv.errors.VI_ERROR_TMO), RelayErrorKind.TRANSPORT),
+	(_pv.errors.VisaIOError(_pv.errors.VI_ERROR_INV_SETUP), RelayErrorKind.INSTRUMENT),
+	(ValueError("could not parse reply"), RelayErrorKind.INSTRUMENT),
+	(TypeError("bad argument"), RelayErrorKind.USAGE),
+	(ZeroDivisionError("something else entirely"), RelayErrorKind.UNKNOWN),
+])
+def test_relay_exception_classification(exc, expected):
+	assert classify_relay_exception(exc) == expected
+
+class _RaisingRelay(CommandRelay):
+	""" Always fails, with a chosen exception. """
+
+	def __init__(self, exc):
+		super().__init__()
+		self.exc = exc
+		self.attempts = 0
+
+	def connect(self):
+		return True
+
+	def close(self):
+		pass
+
+	def _fail(self):
+		self.attempts += 1
+		self.note_success()
+		try:
+			raise self.exc
+		except Exception as e:
+			self.note_failure(e)
+			return False, ""
+
+	def write(self, cmd):
+		return self._fail()[0]
+
+	def read(self):
+		return self._fail()
+
+	def query(self, cmd):
+		return self._fail()
+
+def make_raising_scope(exc, policy=None):
+	scope = RigolDS1000Z("DUMMY", log=make_log(), relay=_RaisingRelay(exc),
+		dummy=True, reconnect_policy=policy or ReconnectPolicy(num_retries=2, retry_pause_s=0))
+	scope.dummy = False
+	scope.online = True
+	return scope
+
+def test_usage_error_is_not_retried_and_does_not_go_offline():
+	""" A relay that cannot do an operation will never be able to. Retrying is pure waste, and
+	the connection is fine - declaring the instrument offline for it is simply wrong. """
+	scope = make_raising_scope(NotImplementedError("this relay has no query_binary"))
+
+	assert scope.query("*IDN?") == ""
+	assert scope.relay.attempts == 1        # no retries, and no check_online() probe either
+	assert scope.online is True
+
+def test_instrument_error_is_retried_but_leaves_the_driver_online():
+	""" A reply that wouldn't parse means the link worked and the exchange didn't. Marking the
+	driver offline would strand it on a perfectly good connection - permanently, with
+	reconnect_on_use off. """
+	scope = make_raising_scope(ValueError("garbled response"))
+
+	assert scope.query("*IDN?") == ""
+	assert scope.relay.attempts == 3        # retried
+	assert scope.online is True             # but not declared unreachable
+
+def test_transport_error_is_retried_and_marks_the_driver_offline():
+	scope = make_raising_scope(ConnectionResetError("relay dropped"))
+
+	assert scope.query("*IDN?") == ""
+	assert scope.relay.attempts > 1
+	assert scope.online is False
+
+def test_unclassified_error_behaves_like_transport():
+	""" UNKNOWN is deliberately conservative - it preserves the behaviour everything had before
+	classification existed. """
+	scope = make_raising_scope(ZeroDivisionError("no idea"))
+
+	assert scope.query("*IDN?") == ""
+	assert scope.relay.attempts > 1
+	assert scope.online is False
+
+def test_relay_records_the_failure_kind_for_the_driver_to_read():
+	relay = _RaisingRelay(ConnectionResetError("gone"))
+	assert relay.last_error_kind == RelayErrorKind.NONE
+
+	relay.query("*IDN?")
+	assert relay.last_error_kind == RelayErrorKind.TRANSPORT
+
+def test_error_kind_is_cleared_at_the_start_of_each_operation():
+	""" A stale classification must not outlive the failure that produced it. """
+	relay = DirectSCPIRelay()
+	relay.configure("DUMMY", make_log())
+	relay.note_failure(ConnectionResetError("old news"))
+	assert relay.last_error_kind == RelayErrorKind.TRANSPORT
+
+	relay.inst = _FakeVisaInstrument()
+	relay.query("*IDN?")
+	assert relay.last_error_kind == RelayErrorKind.NONE
