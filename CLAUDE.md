@@ -66,6 +66,9 @@ skip them instead of aborting the sweep. `RigolDS1000E` is the reference example
 - `InstrumentState` (Serializable, from `stardust`) holds all tracked parameters for a driver/category.
   Subclasses call `self.add_param(name, unit=..., value=...)` in `__init__` and list every param name in
   `__state_fields__`; `validate()` cross-checks the two stay in sync and warns (via `self.log`) if not.
+  Don't call `validate()` by hand — `InstrumentState.__init_subclass__` wraps every subclass's
+  `__init__` so it runs automatically after construction, which is the only point that reaches
+  nested and lazily-built state objects too.
 - `IndexedList` represents per-channel/per-trace state (e.g. one `OscilloscopeChannelState` per channel),
   1-indexed or otherwise offset via `first_index`. Iterating (`for x in indexed_list`) only yields
   populated slots; use `populated_items()` for `(index, value)` pairs when the index is also needed.

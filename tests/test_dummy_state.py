@@ -1384,3 +1384,167 @@ def test_feature_unavailable_preserves_the_method_signature():
 	""" functools.wraps keeps the name and docstring, so introspection and help() still work. """
 	assert RigolDS1000E.set_div_volt.__name__ == "set_div_volt"
 	assert RigolDS1000E.get_div_time.__name__ == "get_div_time"
+
+# ---------------------------------------------------------------------------------------------
+# Automatic state validation: InstrumentState.__init_subclass__ (todo P7)
+#
+# A state class has to keep two lists in sync - stardust's class-level __state_fields__
+# serialization manifest, and the per-instance units/is_data registry built by add_param().
+# validate() catches drift between them, but only if it's called, and three state classes never
+# called it (one had real drift as a result). The hook wraps every subclass's __init__ so
+# validation happens automatically.
+# ---------------------------------------------------------------------------------------------
+
+def capture_warnings(log):
+	""" Returns a list that collects every warning message logged to `log`. """
+	captured = []
+	original = log.warning
+	def spy(message, detail=""):
+		captured.append(message)
+		return original(message, detail)
+	log.warning = spy
+	return captured
+
+def test_auto_validate_catches_a_field_missing_from_state_fields():
+	""" The drift that actually matters: registered with add_param() but absent from the
+	manifest, so the field silently does not serialize. """
+	log = make_log()
+	warnings = capture_warnings(log)
+
+	class DriftyState(InstrumentState):
+		__state_fields__ = ("declared",)
+		def __init__(self, log=None):
+			super().__init__(log=log)
+			self.add_param("declared", unit="V")
+			self.add_param("forgotten", unit="V")
+
+	DriftyState(log=log)
+
+	assert len(warnings) == 1
+	assert "forgotten" in warnings[0]
+	assert "__state_fields__" in warnings[0]
+
+def test_auto_validate_catches_a_field_missing_from_add_param():
+	log = make_log()
+	warnings = capture_warnings(log)
+
+	class OtherDriftState(InstrumentState):
+		__state_fields__ = ("declared", "never_registered")
+		def __init__(self, log=None):
+			super().__init__(log=log)
+			self.add_param("declared", unit="V")
+
+	OtherDriftState(log=log)
+
+	assert len(warnings) == 1
+	assert "never_registered" in warnings[0]
+	assert "add_param" in warnings[0]
+
+def test_auto_validate_is_silent_when_the_lists_agree():
+	log = make_log()
+	warnings = capture_warnings(log)
+
+	class CleanState(InstrumentState):
+		__state_fields__ = ("voltage",)
+		def __init__(self, log=None):
+			super().__init__(log=log)
+			self.add_param("voltage", unit="V")
+
+	assert CleanState(log=log).validate() is True
+	assert warnings == []
+
+def test_auto_validate_fires_exactly_once_per_construction():
+	""" The `type(self) is cls` guard: without it a two-level hierarchy validates twice, once
+	per level, doubling every warning. """
+	log = make_log()
+
+	class BaseState(InstrumentState):
+		__state_fields__ = ("a",)
+		def __init__(self, log=None):
+			super().__init__(log=log)
+			self.add_param("a", unit="")
+			self.add_param("undeclared", unit="")
+
+	class DerivedState(BaseState):
+		__state_fields__ = ("b",)
+		def __init__(self, log=None):
+			super().__init__(log=log)
+			self.add_param("b", unit="")
+
+	warnings = capture_warnings(log)
+	DerivedState(log=log)
+	assert len(warnings) == 1
+
+def test_auto_validate_fires_for_a_subclass_that_inherits_init():
+	""" This is why the wrapper must NOT skip an already-wrapped __init__: a subclass that
+	defines no __init__ of its own would then never validate. """
+	log = make_log()
+
+	class ParentState(InstrumentState):
+		__state_fields__ = ("a",)
+		def __init__(self, log=None):
+			super().__init__(log=log)
+			self.add_param("a", unit="")
+			self.add_param("undeclared", unit="")
+
+	class InheritsInitState(ParentState):
+		__state_fields__ = ()
+
+	warnings = capture_warnings(log)
+	InheritsInitState(log=log)
+	assert len(warnings) == 1
+
+def test_auto_validate_cooperates_with_serializable_registration():
+	""" Serializable uses __init_subclass__ too, for class registration and the parent
+	__state_fields__ merge. The hook must call super().__init_subclass__ first or both break. """
+	from stardust.serializer import SERIALIZABLE_CLASS_REGISTRY
+
+	class RegisteredState(InstrumentState):
+		__state_fields__ = ("thing",)
+		def __init__(self, log=None):
+			super().__init__(log=log)
+			self.add_param("thing", unit="")
+
+	assert "RegisteredState" in SERIALIZABLE_CLASS_REGISTRY
+	# The parent-field merge must still have happened.
+	assert "units" in RegisteredState.__state_fields__
+
+def test_validate_does_not_print_to_stdout(capsys):
+	""" It used to print() with colorama in addition to logging - wrong for a library, and far
+	worse now that it runs on every state object ever constructed. """
+	log = make_log()
+
+	class NoisyState(InstrumentState):
+		__state_fields__ = ()
+		def __init__(self, log=None):
+			super().__init__(log=log)
+			self.add_param("unmanifested", unit="")
+
+	NoisyState(log=log)
+	assert capsys.readouterr().out == ""
+
+def test_measurement_setting_serializes_its_value():
+	""" OscilloscopeMeasurementSetting registered last_measured_value with add_param() but left
+	it out of __state_fields__, so a saved measurement came back without its value. Found by the
+	auto-validate hook. """
+	from constellation.instrument_control.oscilloscope.oscilloscope_ctg import OscilloscopeMeasurementSetting
+
+	assert "last_measured_value" in OscilloscopeMeasurementSetting.__state_fields__
+
+	log = make_log()
+	warnings = capture_warnings(log)
+	OscilloscopeMeasurementSetting(log=log)
+	assert warnings == []
+
+def test_working_drivers_validate_cleanly():
+	""" Turning auto-validation on must not be a noise event - if it warned on ordinary drivers
+	nobody would read the warnings. """
+	log = make_log()
+	warnings = capture_warnings(log)
+
+	# Pass the spied log explicitly - make_dummy_osc() builds its own, which the spy can't see.
+	RigolDS1000Z("DUMMY", log=log, relay=DirectSCPIRelay(), dummy=True)
+	RigolDP832("DUMMY", log, relay=DirectSCPIRelay(), dummy=True)
+	SiglentSSA3000X("DUMMY", log, relay=DirectSCPIRelay(), dummy=True)
+
+	assert warnings == []

@@ -502,6 +502,53 @@ class InstrumentState(Serializable):
 	
 	__state_fields__ = ("units", "is_data", "valid_params", "state_fragments")
 	
+	def __init_subclass__(cls, **kwargs):
+		''' Makes every state subclass validate itself automatically, right after construction.
+		
+		`validate()` cross-checks the two lists a state class has to keep in sync - stardust's
+		class-level `__state_fields__` serialization manifest, and the per-instance
+		units/is_data registry built by `add_param()`. Drift between them means a parameter
+		silently does not serialize, which is invisible until a saved state comes back missing
+		a field.
+		
+		The guard only works if it is actually *called*, and relying on each state class to
+		remember was not working - three of them never called it, and one had real drift as a
+		result. Calling it from `Driver.__init__`/`discover_mixins()` instead is the wrong level:
+		that only reaches `self.state` and the mixin fragments, and misses every nested state
+		object (the per-channel/per-trace objects inside an IndexedList) and everything built
+		lazily - `OscilloscopeMeasurementSetting` is constructed inside `add_measurement()`, long
+		after `Driver.__init__` has returned.
+		
+		`__init_subclass__` fires once per subclass *definition*, which is the one point that
+		cannot be forgotten. There is no instance yet, so it can't validate directly - it wraps
+		the subclass's `__init__` so validation runs immediately after construction instead.
+		
+		Note this does NOT fire on deserialization: stardust rebuilds via `cls.__new__(cls)` and
+		never calls `__init__`. That's correct - a restored object's field list comes from the
+		file, and the class it was restored into was already validated when its own instances
+		were built.
+		'''
+		
+		# MUST cooperate: Serializable uses this hook too, for class registration and the
+		# __state_fields__ parent-field merge. Call it first.
+		super().__init_subclass__(**kwargs)
+		
+		orig_init = cls.__init__
+		
+		@functools.wraps(orig_init)
+		def _validating_init(self, *args, **kw):
+			
+			orig_init(self, *args, **kw)
+			
+			# Only the most-derived class validates, so a B(A) hierarchy validates once rather
+			# than once per level. NOTE: the obvious-looking optimization of tagging the wrapper
+			# and refusing to wrap an already-wrapped __init__ is WRONG - a subclass that
+			# inherits __init__ rather than defining one would then never validate at all.
+			if type(self) is cls:
+				self.validate()
+		
+		cls.__init__ = _validating_init
+	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__()
 		
@@ -556,8 +603,15 @@ class InstrumentState(Serializable):
 		# else:
 		# 	self.manifest.append(name)
 	
-	def validate(self):
-		''' Checks that everything in __state_fields__ is in add_param and vis versa.'''
+	def validate(self) -> bool:
+		''' Checks that everything in `__state_fields__` is in `add_param` and vice versa.
+		
+		Called automatically after construction of every InstrumentState subclass - see
+		`__init_subclass__`. Reports through `self.log` only; a library must not write to stdout.
+		
+		Returns:
+			bool: True if the two lists agree, False if drift was found (and warned about).
+		'''
 		
 		missing_add_param = []
 		missing_state_field = []
@@ -582,25 +636,25 @@ class InstrumentState(Serializable):
 				self.log.lowdebug(f"{Fore.RED}{vp}{Style.RESET_ALL} missing from state_fields!")
 				missing_state_field.append(vp)
 				
-		if len(missing_add_param) > 0 or len(missing_state_field) > 0:
+		if len(missing_add_param) == 0 and len(missing_state_field) == 0:
+			return True
+		
+		# Report through the log only. This used to also print() to stdout with colorama, which
+		# is wrong for a library at the best of times and is far worse now that validation runs
+		# on every state object ever constructed.
+		if not self.surpress_warnings:
 			
-			# Print warning to console if allowed
-			if not self.surpress_warnings:
+			if len(missing_add_param) > 0:
+				self.log.warning(f"Validation failed in >:q{type(self).__name__}<: must call add_param() for >{missing_add_param}<.", detail="Listed in __state_fields__ but never registered via add_param(), so they carry no unit/is_data information.")
 			
-				print(f"{Fore.RED}Validation error:{Style.RESET_ALL}Errors were detected while performing validation on InstrumentState:")
-				if len(missing_add_param) > 0:
-					print(f"Parameters to place in {Fore.LIGHTBLACK_EX}add_param(...){Style.RESET_ALL}:")
-					for idx, mp in enumerate(missing_add_param):
-						print(f"\t[{idx}]: \"{Fore.RED}{mp}{Style.RESET_ALL}\"")
-				if len(missing_state_field) > 0:
-					print(f"Parameters to place in {Fore.LIGHTBLACK_EX}__state_fields__(...){Style.RESET_ALL}:")
-					for idx, mp in enumerate(missing_state_field):
-						print(f"\t[{idx}]: \"{Fore.RED}{mp}{Style.RESET_ALL}\"")
-						
-				if len(missing_add_param) > 0:
-					self.log.warning(f"Validation failed in {type(self)}: Must call add_param for >{missing_add_param}<.")
-				if len(missing_add_param) > 0:
-					self.log.warning(f"Validation failed in {type(self)}: Must add to __state_fields__ for >{missing_state_field}<.")
+			# NOTE: this second branch used to be guarded by `len(missing_add_param) > 0` - a
+			# copy-paste of the line above - so a class whose ONLY problem was a parameter
+			# missing from __state_fields__ (the exact drift that stops a field serializing)
+			# reported nothing at all.
+			if len(missing_state_field) > 0:
+				self.log.warning(f"Validation failed in >:q{type(self).__name__}<: must add to __state_fields__ for >{missing_state_field}<.", detail="Registered via add_param() but absent from the serialization manifest, so these fields silently do not serialize.")
+		
+		return False
 	
 	def get_unit(self, param:str):
 		''' Attempts to return the unit for the specified param. Returns None

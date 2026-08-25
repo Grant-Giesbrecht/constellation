@@ -24,8 +24,6 @@ class OscilloscopeChannelState(InstrumentState):
 		self.add_param("coupling", unit="")
 		
 		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
-		
-		self.validate()
 
 class OscilloscopeState(InstrumentState):
 	
@@ -54,8 +52,6 @@ class OscilloscopeState(InstrumentState):
 		
 		for ch_no in self.channels.get_range():
 			self.channels[ch_no] = OscilloscopeChannelState(log=log)
-		
-		self.validate()
 
 class Oscilloscope(Driver):
 	
@@ -438,7 +434,10 @@ class Oscilloscope(Driver):
 
 class OscilloscopeMeasurementSetting(InstrumentState):
 	
-	__state_fields__ = ("measurement_type", "measurement_source")
+	# last_measured_value was registered with add_param() but missing here, so it silently did
+	# not serialize - a saved measurement came back without its value. Found by the automatic
+	# validate() hook (InstrumentState.__init_subclass__); this class never called validate().
+	__state_fields__ = ("measurement_type", "measurement_source", "last_measured_value")
 	
 	def __init__(self, log:plf.LogPile=None):
 		super().__init__(log=log)

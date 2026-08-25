@@ -9,7 +9,6 @@ class SpectrumAnalyzerTraceState(InstrumentState):
 		
 		self.add_param("waveform", unit="", is_data=True, value={"time_S":[], "volt_V":[]})
 		
-		self.validate()
 		
 class SpectrumAnalyzerState(InstrumentState):
 	
@@ -36,7 +35,6 @@ class SpectrumAnalyzerState(InstrumentState):
 		# TODO: In future, allow to populate more traces
 		self.traces[self.first_trace] = SpectrumAnalyzerTraceState(self.log)
 		
-		self.validate()
 		
 class SpectrumAnalyzer(Driver):
 	

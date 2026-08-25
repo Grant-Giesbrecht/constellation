@@ -43,7 +43,6 @@ class AnalogInputChannelState(InstrumentState):
 
 		self.add_param("last_value_V", unit="V", is_data=True, value=None)
 
-		self.validate()
 
 
 class DataAcquisitionState(InstrumentState):
@@ -78,7 +77,6 @@ class DataAcquisitionState(InstrumentState):
 
 		self.add_param("last_acquisition", unit="", is_data=True, value=None)
 
-		self.validate()
 
 
 class DataAcquisition(Driver):

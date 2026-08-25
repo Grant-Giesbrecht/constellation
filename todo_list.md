@@ -21,7 +21,8 @@ after the P9 pass: 124 passed, 4 xfailed;
 after the P8 pass: 135 passed, 4 xfailed;
 after write_binary: 150 passed, 4 xfailed;
 after the P6 pass: 160 passed, 4 xfailed;
-after the P2 partial-compliance pass: **172 passed, 4 xfailed**).
+after the P2 partial-compliance pass: 172 passed, 4 xfailed;
+after the P7 auto-validate pass: **181 passed, 4 xfailed**).
 
 ---
 
@@ -448,7 +449,7 @@ Verdict: keep it — it costs nothing and, now that `validate_type_name` seriali
 file documents what each list is meant to hold. But do not rely on it as a safety net. The gap
 that matters (the `setattr` path) needs a different mechanism — see **P16**.
 
-## Priority 7 — `add_param` / `__state_fields__` / `validate()`
+## Priority 7 — `add_param` / `__state_fields__` / `validate()` — **DONE**
 
 Conclusion: the two-list system is at its floor. `__state_fields__` is stardust's class-level
 serialization manifest; `add_param` is Constellation's per-instance units/is_data registry.
@@ -500,23 +501,36 @@ classes; they become redundant (and can't be forgotten by the next state class).
 - [-] ~~Call `validate()` centrally from `Driver.__init__`/`discover_mixins()`~~ — superseded by
       the `__init_subclass__` approach above; the `Driver.__init__` level can't see nested or
       lazily-built state objects.
-- [ ] **Implement the `__init_subclass__` auto-validate hook** in `InstrumentState` (needs
-      `import functools` in `base.py`).
-- [ ] **Remove the now-redundant manual `self.validate()` calls** from the category state classes.
-- [ ] **Do the `validate()` output fix in the same pass** (see below) — auto-validation makes a
-      `print()`-to-stdout side effect fire on every state object ever constructed, which is much
-      worse than it is today.
-- [ ] **`OscilloscopeMeasurementSetting` has real drift**: `add_param("last_measured_value", ...)`
-      but it's missing from `__state_fields__`, and the class never calls `validate()` — so the
-      field silently does not serialize.
+- [x] **Implement the `__init_subclass__` auto-validate hook** in `InstrumentState`.
+- [x] **Remove the now-redundant manual `self.validate()` calls** — 12 of them, across all six
+      category modules. No state class can forget it now.
+- [x] **`validate()` output fixed in the same pass.** No longer `print()`s; reports through
+      `self.log` only, and returns a `bool` so callers can branch. Each warning carries a
+      `detail` saying what the drift actually costs.
+- [x] **`OscilloscopeMeasurementSetting` drift fixed** — `last_measured_value` added to
+      `__state_fields__`. It was registered with `add_param()` but absent from the manifest, so a
+      saved measurement came back without its value. The hook flagged it on the first run.
+- [x] `OscilloscopeMeasurementMixinState` never called `validate()` — now automatic, and it
+      validates clean.
+- [x] `BasicVectorNetworkAnalyzerState` never called `validate()` — now automatic, and it
+      validates clean.
+
+### Found while implementing this
+
+- [x] **`validate()` never reported a parameter missing from `__state_fields__`.** The second
+      warning branch was guarded by `if len(missing_add_param) > 0:` — a copy-paste of the line
+      above it, instead of `missing_state_field`. So a class whose *only* problem was the
+      add_param-but-not-in-manifest case (exactly the drift that stops a field serializing, and
+      exactly what `OscilloscopeMeasurementSetting` had) printed the stdout block but logged
+      nothing. Two of the three bugs in this priority were the same bug wearing different hats.
       *confirmed*
-- [ ] `OscilloscopeMeasurementMixinState` never calls `validate()`.
-      *confirmed*
-- [ ] `BasicVectorNetworkAnalyzerState` never calls `validate()`.
-      *confirmed*
-- [ ] **`validate()` `print()`s to stdout** with colorama in addition to logging. Wrong for a
-      library — route through `self.log` only.
-      *static*
+- [x] `examples/validate_demo.py` was three lines that constructed a driver and relied on
+      `validate()`'s stdout side effect to demonstrate anything. Rewritten to explain the
+      mechanism and include a deliberately-drifting state class so the warning is visible.
+- [ ] **Nothing consumes `validate()`'s return value yet.** It now returns `bool`, but the only
+      caller is the auto-hook, which ignores it. If validation should ever be *fatal* (a
+      `strict=True` mode for CI, say) that's the hook to put it in. No evidence it's needed —
+      logged so the return value isn't mistaken for dead code.
 
 ## Priority 8 — networking (labmesh)
 

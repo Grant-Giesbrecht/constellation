@@ -12,8 +12,6 @@ class AWGChannelState(InstrumentState):
 		self.add_param("amplitude", unit="Vpp")
 		self.add_param("offset", unit="V")
 		self.add_param("output_enable", unit="Hz")
-		
-		self.validate()
 
 class ArbitraryWaveformGeneratorState(InstrumentState):
 	
@@ -29,8 +27,6 @@ class ArbitraryWaveformGeneratorState(InstrumentState):
 		
 		for ch_no in self.channels.get_range():
 			self.channels[ch_no] = AWGChannelState(log=log)
-		
-		self.validate()
 
 class ArbitraryWaveformGenerator(Driver):
 	
