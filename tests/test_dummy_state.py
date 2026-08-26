@@ -403,6 +403,8 @@ ALLOWED_ENABLEDUMMY = {
 	                 "do_single_trigger", "do_force_trigger"},
 	"PowerSupply": {"get_measured_output"},
 	"BasicVectorNetworkAnalyzerCtg": {"get_trace_data"},
+	"DigitalMultimeter": {"get_value"},
+	"SpectrumAnalyzer": {"get_trace_data"},
 }
 
 def _enabledummy_methods(cls):
@@ -421,15 +423,32 @@ def test_enabledummy_only_on_synthetic_methods(cls_name):
 	cls = getattr(ca, cls_name)
 	assert _enabledummy_methods(cls) == ALLOWED_ENABLEDUMMY[cls_name]
 
-def test_no_category_hand_maintains_a_getter_table():
-	""" The AWG/DMM/SpectrumAnalyzer dummy_responder overrides were pure state read-back tables,
-	duplicating what modify_state() now does generically. They should stay deleted. """
+def test_categories_with_no_synthetic_values_have_no_dummy_responder():
+	""" The AWG's dummy_responder override was a pure state read-back table, duplicating what
+	modify_state() now does generically. It should stay deleted. """
 	import constellation.all as ca
-	for cls_name in ("ArbitraryWaveformGenerator", "DigitalMultimeter", "SpectrumAnalyzer"):
-		cls = getattr(ca, cls_name)
-		assert "dummy_responder" not in vars(cls), (
-			f"{cls_name} re-added a dummy_responder override - if it's a plain state read-back, "
-			f"modify_state() already handles it")
+	cls = ca.ArbitraryWaveformGenerator
+	assert "dummy_responder" not in vars(cls), (
+		"ArbitraryWaveformGenerator re-added a dummy_responder override - if it's a plain state "
+		"read-back, modify_state() already handles it")
+
+@pytest.mark.parametrize("make,plain_getter", [
+	(lambda: SiglentSSA3000X("DUMMY", make_log(), relay=DirectSCPIRelay(), dummy=True), "get_freq_start"),
+	(lambda: SiglentSDM3000X("DUMMY", make_log(), relay=DirectSCPIRelay(), dummy=True), "get_measurement"),
+	(lambda: RigolDP832("DUMMY", make_log(), relay=DirectSCPIRelay(), dummy=True), "get_voltage"),
+	(lambda: make_dummy_osc(), "get_div_time"),
+], ids=["spectrum_analyzer", "dmm", "power_supply", "oscilloscope"])
+def test_dummy_responders_stay_synthetic_only(make, plain_getter):
+	""" SpectrumAnalyzer, DigitalMultimeter, VNA and PowerSupply all legitimately have a
+	dummy_responder now - each has genuine synthetic data to invent (a trace, a meter reading, a
+	measured output). What they must NOT do is drift back into hand-maintaining a table of plain
+	getters, which modify_state() handles generically.
+
+	Guarded behaviourally rather than by asserting the override's absence: asking a responder
+	about a plain state-backed getter must fall through to Driver.dummy_responder (which returns
+	-1 for any get_*), not return a tracked value. """
+	driver = make()
+	assert driver.dummy_responder(plain_getter) == -1
 
 @pytest.mark.parametrize("setter,getter,value", [
 	("set_trigger_mode",      "get_trigger_mode",      Oscilloscope.TRIG_SINGLE),
@@ -2123,3 +2142,147 @@ def test_connection_summary_diagnoses_each_case():
 	scope.relay.link_online = True
 	scope.relay.instrument_online = False
 	assert "cannot talk to the instrument" in scope.connection_summary()["diagnosis"]
+
+# ---------------------------------------------------------------------------------------------
+# Dummy state seeding for the remaining categories (todo P3 follow-ups)
+#
+# Since modify_state() became the single dummy dispatch point, a dummy getter returns whatever is
+# tracked in state - so a category that never seeds its state returns None from every getter and
+# its dummy driver can't exercise anything downstream. SpectrumAnalyzer's init_dummy_state() was
+# an empty `pass`, the VNA had none at all, and the DMM had no synthetic reading.
+# ---------------------------------------------------------------------------------------------
+
+from constellation.all import RohdeSchwarzFSE as _FSE
+
+def make_dummy_sa():
+	return SiglentSSA3000X("DUMMY", make_log(), relay=DirectSCPIRelay(), dummy=True)
+
+def make_dummy_vna():
+	return RohdeSchwarzZVA("DUMMY", make_log(), relay=DirectSCPIRelay(), dummy=True)
+
+def make_dummy_dmm():
+	return SiglentSDM3000X("DUMMY", make_log(), relay=DirectSCPIRelay(), dummy=True)
+
+@pytest.mark.parametrize("getter", [
+	"get_freq_start", "get_freq_end", "get_res_bandwidth",
+	"get_continuous_trigger", "get_ref_level", "get_y_div",
+])
+def test_spectrum_analyzer_dummy_getters_return_a_value(getter):
+	sa = make_dummy_sa()
+	assert getattr(sa, getter)() is not None
+
+def test_spectrum_analyzer_dummy_trace_has_the_shape_a_real_driver_returns():
+	""" Matches Siglent_SSA3000X_dvr.get_trace_data's x/y/units dict - deliberately NOT
+	SpectrumAnalyzerTraceState's stale {"time_S", "volt_V"} default, which is wrong for this
+	category (logged under P11). """
+	sa = make_dummy_sa()
+	trace = sa.get_trace_data(1)
+
+	assert set(trace.keys()) == {"x", "y", "x_units", "y_units"}
+	assert trace["x_units"] == "Hz"
+	assert trace["y_units"] == "dBm"
+	assert len(trace["x"]) == len(trace["y"]) > 0
+
+def test_spectrum_analyzer_dummy_trace_spans_the_configured_frequency_range():
+	""" The synthetic trace must follow the dummy state, not be a fixed canned array. """
+	sa = make_dummy_sa()
+	sa.set_freq_start(5e9)
+	sa.set_freq_end(6e9)
+
+	trace = sa.get_trace_data(1)
+	assert trace["x"][0] == pytest.approx(5e9)
+	assert trace["x"][-1] == pytest.approx(6e9)
+
+def test_spectrum_analyzer_dummy_trace_has_structure_not_a_flat_line():
+	""" A flat array would satisfy "not None" while being useless for testing anything that
+	looks at the data (peak finding, plotting, thresholds). """
+	sa = make_dummy_sa()
+	trace = sa.get_trace_data(1)
+
+	assert max(trace["y"]) - min(trace["y"]) > 20      # dB of dynamic range
+	assert max(trace["y"]) <= sa.get_ref_level()       # nothing above the reference level
+
+def test_both_spectrum_analyzer_drivers_construct_and_read_in_dummy():
+	""" RohdeSchwarzFSE called modify_state() with SpectrumAnalyzer.FREQ_START and friends -
+	constants that do not exist - so every one of its methods raised AttributeError. Nothing
+	noticed because init_dummy_state() was empty and never called them. """
+	for driver in (make_dummy_sa(), _FSE("DUMMY", make_log(), relay=DirectSCPIRelay(), dummy=True)):
+		assert driver.get_freq_start() is not None
+		assert len(driver.get_trace_data(1)["y"]) > 0
+
+@pytest.mark.parametrize("getter", [
+	"get_freq_start", "get_freq_end", "get_num_points", "get_power", "get_res_bandwidth",
+])
+def test_vna_dummy_channel_getters_return_a_value(getter):
+	vna = make_dummy_vna()
+	assert getattr(vna, getter)() is not None
+
+def test_vna_dummy_populates_a_channel_and_a_trace():
+	""" VNA channels/traces are created lazily (a VNA can have hundreds), so unlike the
+	oscilloscope the first channel object has to be constructed before anything can be written
+	into it - otherwise every state.set() reports "index is not populated". """
+	vna = make_dummy_vna()
+
+	assert vna.state.channels.idx_is_populated(vna.first_channel)
+	assert vna.state.traces.idx_is_populated(vna.first_trace)
+	assert vna.get_rf_enable() is True
+
+def test_vna_dummy_trace_data_is_complex():
+	""" A VNA measures magnitude and phase - plot_vna_mag/plot_vna_phase both index data['y']
+	and take np.abs/np.angle of it. """
+	vna = make_dummy_vna()
+	data = vna.state.get(["traces", "data"], indices=[vna.first_trace])
+
+	assert len(data["x"]) == len(data["y"]) > 0
+	assert isinstance(data["y"][0], complex)
+
+def test_dmm_dummy_returns_a_reading_rather_than_none():
+	""" Regression: in dummy mode get_value() read result_V/result_I/result_R back, and those
+	are None until something sets them - so a dummy DMM returned None forever. """
+	dmm = make_dummy_dmm()
+	value = dmm.get_value()
+
+	assert value is not None
+	assert isinstance(value, float)
+
+def test_dmm_dummy_reading_follows_the_selected_measurement():
+	dmm = make_dummy_dmm()
+
+	dmm.set_measurement(DigitalMultimeter.MEAS_VOLT_DC)
+	volts = dmm.get_value()
+
+	dmm.set_measurement(DigitalMultimeter.MEAS_RESISTANCE_2WIRE)
+	ohms = dmm.get_value()
+
+	# Ranges are wildly different, so this can't pass by accident.
+	assert 1.0 < volts < 2.0
+	assert 90.0 < ohms < 110.0
+	# Each reading lands in its own result field.
+	assert dmm.state.get(["result_V"]) == pytest.approx(volts)
+	assert dmm.state.get(["result_R"]) == pytest.approx(ohms)
+
+def test_dmm_dummy_readings_have_noise():
+	""" A constant would make it impossible to test averaging, drift detection, or anything else
+	that cares about scatter. """
+	dmm = make_dummy_dmm()
+	readings = {dmm.get_value() for _ in range(10)}
+	assert len(readings) > 1
+
+def test_dmm_dummy_nominal_is_overridable():
+	""" A test or demo that needs a specific reading shouldn't have to patch the category. """
+	dmm = make_dummy_dmm()
+	dmm.dummy_nominal[DigitalMultimeter.MEAS_VOLT_DC] = (5.0, 0.0)
+
+	dmm.set_measurement(DigitalMultimeter.MEAS_VOLT_DC)
+	assert dmm.get_value() == pytest.approx(5.0)
+
+def test_partially_compliant_drivers_may_still_have_unset_dummy_state():
+	""" "Getter returned None in dummy" cannot be a blanket error: a driver whose hardware can't
+	report a parameter legitimately has no value for it. RigolDS1000E's timebase is the case -
+	init_dummy_state() skips the unavailable setter, so div_time stays None by design. """
+	scope = make_dummy_ds1000e()
+
+	assert scope.state.get(["div_time"]) is None
+	assert scope.feature_is_available("get_div_time") is False
+	# ...while everything the hardware CAN do was still seeded.
+	assert scope.state.get(["channels", "div_volt"], indices=[1, None]) is not None

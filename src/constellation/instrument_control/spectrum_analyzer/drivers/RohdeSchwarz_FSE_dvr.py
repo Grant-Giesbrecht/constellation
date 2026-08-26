@@ -19,29 +19,44 @@ class RohdeSchwarzFSE(SpectrumAnalyzer):
 		
 		self.trace_lookup = {}
 	
+	# NOTE: this driver previously called modify_state() itself with constants
+	# (SpectrumAnalyzer.FREQ_START and friends) that do not exist on the category class - every
+	# one of these methods raised AttributeError the moment it was called. It went unnoticed
+	# because nothing ever called them: SpectrumAnalyzer.init_dummy_state() was an empty `pass`,
+	# so constructing a dummy FSE touched none of this. Seeding dummy state surfaced it
+	# immediately. Now migrated to the standard @superreturn pattern - the driver returns its
+	# parsed value and the category handles all state tracking.
+	
+	@superreturn
 	def set_freq_start(self, f_Hz:float):
-		self.modify_state(self.get_freq_start, SpectrumAnalyzer.FREQ_START, f_Hz)
 		self.write(f"SENS:FREQ:STAR {f_Hz} Hz")
+	
+	@superreturn
 	def get_freq_start(self):
-		return self.modify_state(None, SpectrumAnalyzer.FREQ_START, float(self.query(f"SENS:FREQ:STAR?")))
+		return float(self.query(f"SENS:FREQ:STAR?"))
 	
+	@superreturn
 	def set_freq_end(self, f_Hz:float):
-		self.modify_state(self.get_freq_end, SpectrumAnalyzer.FREQ_END, f_Hz)
 		self.write(f"SENS:FREQ:STOP {f_Hz}")
-	def get_freq_end(self):
-		return self.modify_state(None, SpectrumAnalyzer.FREQ_END, float(self.query(f"SENS:FREQ:STOP?")))
 	
+	@superreturn
+	def get_freq_end(self):
+		return float(self.query(f"SENS:FREQ:STOP?"))
+	
+	@superreturn
 	def set_ref_level(self, ref_dBm:float):
 		ref_dBm = max(-130, min(ref_dBm, 30))
 		if ref_dBm != ref_dBm:
 			self.log.error(f"Did not apply command. Instrument limits values from -130 to 30 dBm and this range was violated.")
 			return
-		self.modify_state(self.get_ref_level, SpectrumAnalyzer.REF_LEVEL, ref_dBm)
 		self.write(f"CALC:UNIT:POW dBm") # Set units to DBM (Next command refers to this unit)
 		self.write(f"DISP:WIND:TRAC:Y:RLEV {ref_dBm}")
-	def get_ref_level(self):
-		return self.modify_state(None, SpectrumAnalyzer.REF_LEVEL, float(self.query("DISP:WIND:TRAC:Y:RLEV?")))
 	
+	@superreturn
+	def get_ref_level(self):
+		return float(self.query("DISP:WIND:TRAC:Y:RLEV?"))
+	
+	@superreturn
 	def set_y_div(self, step_dB:float):
 		
 		step_dB = max(1, min(step_dB, 20))
@@ -49,30 +64,36 @@ class RohdeSchwarzFSE(SpectrumAnalyzer):
 			self.log.error(f"Did not apply command. Instrument limits values from 1 to 20 dB and this range was violated.")
 			return
 		
-		self.modify_state(self.get_y_div, SpectrumAnalyzer.Y_DIV, step_dB)
 		full_span_dB = step_dB*10 #Sets total span, not per div, so must multiply by num. divisions (10)
-		self.write(f":DISP:WIND:TRAC:Y:SCAL {full_span_dB} DB") 
+		self.write(f":DISP:WIND:TRAC:Y:SCAL {full_span_dB} DB")
+	
+	@superreturn
 	def get_y_div(self):
 		full_span_dB = float(self.query(f":DISP:WIND:TRAC:Y:SCAL?"))
-		return self.modify_state(None, SpectrumAnalyzer.Y_DIV, full_span_dB/10)
+		return full_span_dB/10
 	
+	@superreturn
 	def set_res_bandwidth(self, rbw_Hz:float):
-		self.modify_state(self.get_res_bandwidth, SpectrumAnalyzer.RES_BW, rbw_Hz)
 		self.write(f"SENS:BAND:RES {rbw_Hz} Hz")
-	def get_res_bandwidth(self):
-		return self.modify_state(None, SpectrumAnalyzer.RES_BW, float(self.query(f"SENS:BAND:RES?")))
 	
+	@superreturn
+	def get_res_bandwidth(self):
+		return float(self.query(f"SENS:BAND:RES?"))
+	
+	@superreturn
 	def set_continuous_trigger(self, enable:bool):
-		self.modify_state(self.get_continuous_trigger, SpectrumAnalyzer.CONTINUOUS_TRIG_EN, enable)
 		self.write(f"INIT:CONT {bool_to_ONOFF(enable)}")
+	
+	@superreturn
 	def get_continuous_trigger(self):
-		return self.modify_state(None, SpectrumAnalyzer.CONTINUOUS_TRIG_EN, str_to_bool(self.query(f"INIT:CONT?")))
+		return str_to_bool(self.query(f"INIT:CONT?"))
 	
 	def send_manual_trigger(self, send_cls:bool=True):
 		if send_cls:
 			self.write("*CLS")
 		self.write(f"INIT:IMM")
 	
+	@superreturn
 	def get_trace_data(self, trace:int, use_ascii_transfer:bool=False):
 		''' Returns the data of the trace in a standard waveform dict, which
 		
@@ -119,7 +140,7 @@ class RohdeSchwarzFSE(SpectrumAnalyzer):
 			# For this instrument, if I try to read in multiple commands it becomes
 			# unstable. If I read the entire packet in one go, it works. This tries
 			# to read 1 GB and aborts when a termination character is sent.
-			byte = self.inst.read_bytes(RS_FSE_DRIVER_MAX_READ_LEN, break_on_termchar=True)
+			byte = self.relay.inst.read_bytes(RS_FSE_DRIVER_MAX_READ_LEN, break_on_termchar=True)
 			data_raw += byte
 			
 			# Get size of size of packet block (ie. convert #4 -> (int)4 )
@@ -141,10 +162,7 @@ class RohdeSchwarzFSE(SpectrumAnalyzer):
 		
 		out_data = {'x':f_list, 'y':float_data, 'x_units':'Hz', 'y_units':'dBm'}
 		
-		# Update state tracker
-		self.modify_state(None, SpectrumAnalyzer.TRACE_DATA, out_data, channel=trace)
-		
-		# Convert Y-unit to dBm
+		# State tracking is the category's job - @superreturn hands this return value up.
 		return out_data
 		
 		# trace_name = self.trace_lookup[trace]

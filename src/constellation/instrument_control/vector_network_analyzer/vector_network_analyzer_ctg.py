@@ -139,7 +139,115 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 		self.max_channels = max_channels
 		self.max_traces = max_traces # This is per-channel
 		
+		if self.dummy:
+			self.init_dummy_state()
+	
+	def init_dummy_state(self) -> None:
+		''' Seeds a plausible starting state so dummy mode has something to read back.
 		
+		Since modify_state() became the single dummy dispatch point, a dummy getter returns
+		whatever is tracked in state - so a category that never seeds its state returns None from
+		every getter and the dummy instrument can't exercise anything downstream. The VNA had no
+		init_dummy_state() at all.
+		
+		Note the extra step this category needs: unlike the oscilloscope, VNA channels and traces
+		are created lazily (a VNA can have hundreds, and pre-allocating them all would make the
+		state dict enormous - see the note in BasicVectorNetworkAnalyzerState). So the first
+		channel object has to be constructed here before anything can be written into it;
+		otherwise every state.set() reports "index is not populated".
+		'''
+		
+		ch = self.first_channel
+		
+		if not self.state.channels.idx_is_populated(ch):
+			self.state.channels[ch] = VNAChannelState(log=self.log)
+		
+		self.set_freq_start(1e9, channel=ch)
+		self.set_freq_end(10e9, channel=ch)
+		self.set_num_points(201, channel=ch)
+		self.set_power(-10, channel=ch)
+		self.set_res_bandwidth(1e3, channel=ch)
+		self.set_cal_enabled(False, channel=ch)
+		self.set_rf_enable(True)
+		
+		self.state.channels[ch].enabled = True
+		
+		# One trace, so get_trace_data() has somewhere to land.
+		tr = self.first_trace
+		if not self.state.traces.idx_is_populated(tr):
+			trace = VNATraceState(log=self.log)
+			trace.enabled = True
+			trace.id_str = f"dummy_trace_{tr}"
+			trace.measurement = BasicVectorNetworkAnalyzerCtg.MEAS_S21
+			trace.format = BasicVectorNetworkAnalyzerCtg.FORM_LOG_MAG
+			self.state.traces[tr] = trace
+		
+		self.remake_dummy_traces()
+	
+	def remake_dummy_traces(self) -> None:
+		''' Regenerates synthetic S-parameter data for every populated trace, consistent with
+		the current dummy state.
+		
+		Unlike the settings above this IS invented data - a trace is a measurement, and there is
+		nothing in state to read it back from. Values are complex (a VNA measures magnitude and
+		phase), matching what `plot_vna_mag`/`plot_vna_phase` expect of `data['y']`.
+		
+		Returns:
+			None
+		'''
+		
+		ch = self.first_channel
+		
+		f_start = self.state.get(["channels", "freq_start"], indices=[ch])
+		f_end = self.state.get(["channels", "freq_end"], indices=[ch])
+		npoints = self.state.get(["channels", "num_points"], indices=[ch])
+		
+		# A partially-seeded state shouldn't crash the synthesis.
+		if f_start is None:
+			f_start = 1e9
+		if f_end is None or f_end <= f_start:
+			f_end = f_start + 9e9
+		if not npoints or npoints < 2:
+			npoints = 201
+		
+		freqs = np.linspace(f_start, f_end, int(npoints))
+		
+		# A single-pole lowpass-ish response with linear phase - enough structure that magnitude
+		# and phase plots both show something, without pretending to model a real device.
+		f_corner = f_start + (f_end - f_start) * 0.4
+		response = 1.0 / (1.0 + 1j*(freqs/f_corner))
+		response = response * np.exp(-1j * 2 * np.pi * freqs * 1e-9)
+		
+		for tr_idx, trace in self.state.traces.populated_items():
+			trace.data = {
+				"x": [float(f) for f in freqs],
+				"y": [complex(v) for v in response],
+				"x_units": "Hz",
+				"y_units": "lin-mag",
+			}
+	
+	def dummy_responder(self, func_name:str, *args, **kwargs):
+		''' Supplies SYNTHETIC dummy values only - see Oscilloscope.dummy_responder. Plain
+		set_*/get_* methods are handled generically by modify_state() and need no case here.
+		'''
+		
+		# Put everything in a try-catch in case arguments are missing or similar
+		try:
+			
+			match func_name:
+				case "get_trace_data":
+					self.remake_dummy_traces()
+					trace_name = args[0] if len(args) > 0 else kwargs.get("trace_name", None)
+					idx = self._get_trace_idx(trace_name) if trace_name is not None else self.first_trace
+					rval = self.state.get(["traces", "data"], indices=[idx])
+				case _:
+					return super().dummy_responder(func_name, *args, **kwargs)
+			
+			self.debug(f"Dummy responder sending >{protect_str(rval)}< to synthetic function (>{func_name}<).")
+			return rval
+		except Exception as e:
+			self.error(f"Failed to respond to dummy instruction. ({e})")
+			return None
 	
 	def find_trace(self, meas:str, format:str=FORM_LOG_MAG) -> str:
 		''' Looks for a trace with the specified measurement and format, and if found,

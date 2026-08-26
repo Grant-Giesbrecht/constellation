@@ -26,7 +26,8 @@ after the P7 auto-validate pass: 181 passed, 4 xfailed;
 after the P8 bug batch: 189 passed, 3 xfailed;
 after ReconnectPolicy: 200 passed, 3 xfailed;
 after error classification: 216 passed, 3 xfailed;
-after two-level connection tracking: **224 passed, 3 xfailed**).
+after two-level connection tracking: 224 passed, 3 xfailed;
+after the P3 dummy-seeding follow-ups: **252 passed, 3 xfailed**).
 
 ---
 
@@ -220,15 +221,54 @@ setter again, which is the mistake that caused the original bug. `osc_dummy_demo
 
 ### Follow-ups noticed during this pass
 
-- [ ] **`DigitalMultimeter.dummy_responder`'s deleted `return_selected()` helper referenced
-      `self.state.result_B`**, but the state field is `result_R` — it would have raised
-      `AttributeError` for any resistance measurement. Moot now (the override is gone), but
-      `get_value()` still has no synthetic dummy reading: in dummy it reads `result_I`/`result_V`/
-      `result_R` back, which are `None` until something sets them. Decide whether a DMM should
-      synthesize a reading the way `PowerSupply.get_measured_output` does. *confirmed*
-- [ ] **`SpectrumAnalyzer` and VNA have no `init_dummy_state()` content** (`pass`), so their dummy
-      state starts entirely `None` and getters read `None` back. Now that read-back is the generic
-      path, populating a sensible default state matters more than it did. *static*
+- [x] **`DigitalMultimeter.get_value()` had no synthetic dummy reading** — fixed. Decided *yes*,
+      a DMM should synthesize one, but not the way `PowerSupply.get_measured_output` does: a
+      power supply derives its reading from a setpoint, and a DMM has none — it measures whatever
+      is wired to it. So `DUMMY_NOMINAL` gives a plausible `(nominal, noise)` pair per
+      measurement function, `remake_dummy_reading()` generates from it and writes the matching
+      `result_V`/`result_I`/`result_R`, and `get_value()` gained `@enabledummy` (a correct use:
+      a meter reading is measurement data with nothing tracked to read back). The per-instance
+      `dummy_nominal` dict is overridable, so a test needing a specific reading doesn't have to
+      patch the category.
+- [x] **`SpectrumAnalyzer` and VNA dummy state now seeded.** SA's `init_dummy_state()` was an
+      empty `pass`; the VNA had none at all and never called one. Both now seed defaults through
+      the normal setters, and both gained a synthetic-data path (`remake_dummy_trace()` /
+      `remake_dummy_traces()` plus a synthetic-only `dummy_responder`) since a trace is
+      measurement data with nothing in state to read back.
+
+      The VNA needed one extra step the oscilloscope doesn't: channels and traces are created
+      lazily (a VNA can have hundreds, and pre-allocating would make the state dict enormous), so
+      the first channel object has to be constructed before anything can be written into it —
+      otherwise every `state.set()` reports "index is not populated".
+
+      Synthetic shapes deliberately match what the real drivers return: SA gives
+      `{x, y, x_units, y_units}` per `Siglent_SSA3000X_dvr.get_trace_data`, and VNA `data['y']`
+      is complex, since `plot_vna_mag`/`plot_vna_phase` take `np.abs`/`np.angle` of it. Neither
+      matches its state class's stale default value — `SpectrumAnalyzerTraceState`'s is
+      `{"time_S": [], "volt_V": []}`, which is wrong for the category; see P11.
+
+### Found while seeding dummy state
+
+- [x] **`RohdeSchwarzFSE` was never actually migrated, and every one of its methods raised
+      `AttributeError`.** It called `modify_state()` itself with `SpectrumAnalyzer.FREQ_START`,
+      `.REF_LEVEL`, `.Y_DIV`, `.RES_BW`, `.CONTINUOUS_TRIG_EN`, `.TRACE_DATA` — constants that do
+      not exist on the category class. Nothing noticed because nothing ever called them:
+      `init_dummy_state()` was an empty `pass`, so constructing a dummy FSE touched none of it,
+      and the P2 work only proved the class could be *constructed*. Seeding dummy state surfaced
+      it on the first run. Now migrated to the standard `@superreturn` pattern (driver returns
+      its parsed value, category does the state tracking), and `self.inst` corrected to
+      `self.relay.inst` in the binary trace read. **The SCPI itself is unverified against
+      hardware** — only the Constellation-side plumbing was fixed. *confirmed*
+- [x] Rewrote `test_no_category_hand_maintains_a_getter_table`, whose premise expired: DMM and SA
+      now legitimately have `dummy_responder` overrides. It guarded the right thing the wrong
+      way (asserting the override's *absence*). Now behavioural — asking any category's responder
+      about a plain state-backed getter must fall through to `Driver.dummy_responder` rather than
+      return a tracked value, which still catches a responder drifting back into hand-maintaining
+      a getter table. *static*
+- [ ] **`DigitalMultimeter.get_value()`'s `check_measurement` round trip is wasteful in dummy.**
+      It calls `get_measurement()` before every reading to decide which result field to write.
+      Harmless, but on a real instrument that's an extra SCPI query per reading, and the value
+      is already tracked in state. Consider trusting the tracker unless explicitly asked.
 
 ## Priority 4 — `_super_hint` and `superreturn` — **DONE**
 
