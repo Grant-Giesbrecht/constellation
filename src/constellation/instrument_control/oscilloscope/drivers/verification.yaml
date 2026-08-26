@@ -21,6 +21,20 @@
 #
 # Records are a LIST per method, keyed by model, because one driver covers a series: a DS1052E
 # and a DS1054Z share RigolDS1000Z, and a command can work on one and not the other.
+#
+# EXPIRY. A record is evidence about a moment, not a certificate. A `roundtrip`/`confirmed` record
+# must therefore carry enough to be invalidated later, and all of it is captured automatically by
+# the run:
+#   idn         the instrument's full *IDN? string. Compared against the connected instrument, so
+#               a firmware update shows up as stale-firmware.
+#   code_hash   hash of the driver method's own implementation, normalized so comments and
+#               formatting don't invalidate it but a changed SCPI string does -> stale-code.
+#   epoch       VERIFICATION_EPOCH at the time of the run. Bumped when the shared instrument-I/O
+#               path changes enough to invalidate evidence -> stale-framework.
+# Any stale record is reported to a user as NOT verified. The record is kept, because "this worked
+# at hash X on date Y" distinguishes 'used to work' from 'never tried'.
+#
+# Do not write `unavailable`, `unimplemented`, or any `stale-*` status here - all are derived.
 
 RigolDS1000Z:
   add_measurement:

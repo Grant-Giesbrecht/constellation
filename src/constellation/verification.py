@@ -19,8 +19,11 @@ Two halves, deliberately kept apart:
 Capability is never restated in YAML - it is derived. See docs/hardware_verification.md.
 '''
 
+import ast
+import hashlib
 import inspect
 import os
+import textwrap
 from enum import Enum
 
 import pylogfile.base as plf
@@ -28,6 +31,38 @@ import pylogfile.base as plf
 from constellation.base import Driver
 
 VERIFICATION_FILENAME = "verification.yaml"
+
+# Bump this when a change to the shared instrument-I/O path could plausibly change what a driver
+# actually does to hardware - the relay layer, superreturn, modify_state, Driver.write/read/query.
+# Every record stamped with an older epoch is then reported as stale-framework, because the
+# evidence was gathered under different plumbing.
+#
+# Bumping is a HUMAN judgement, deliberately. "Did this refactor change instrument behaviour" is
+# not machine-decidable, and auto-invalidating every record on any base.py edit would produce a
+# wall of false staleness on routine refactors - which is how these systems die: people stop
+# reading the warnings and re-stamp without looking.
+#
+# What IS automated is noticing that you touched the plumbing: FRAMEWORK_CRITICAL_FUNCTIONS below
+# is hashed by a test that fails if it changed without an epoch bump. See
+# tests/test_verification_records.py and docs/hardware_verification.md.
+VERIFICATION_EPOCH = 1
+
+# The functions every SCPI call passes through. Deliberately a short, explicit list rather than a
+# call graph: the point is to catch changes to the shared path, not to track every dependency.
+FRAMEWORK_CRITICAL_FUNCTIONS = (
+	("constellation.base", "Driver.write"),
+	("constellation.base", "Driver.read"),
+	("constellation.base", "Driver.query"),
+	("constellation.base", "Driver.query_binary"),
+	("constellation.base", "Driver.write_binary"),
+	("constellation.base", "Driver._relay_attempt"),
+	("constellation.base", "Driver._ensure_online"),
+	("constellation.base", "Driver.modify_state"),
+	("constellation.base", "superreturn.__call__"),
+	("constellation.relay", "DirectSCPIRelay.write"),
+	("constellation.relay", "DirectSCPIRelay.read"),
+	("constellation.relay", "DirectSCPIRelay.query"),
+)
 
 class VerificationStatus(Enum):
 	''' How thoroughly one driver method has been checked against real hardware.
@@ -58,6 +93,29 @@ class VerificationStatus(Enum):
 	ROUNDTRIP = "roundtrip"
 	CONFIRMED = "confirmed"
 	FAILED = "failed"
+	
+	# Derived at report time by comparing a record against the code and instrument in front of
+	# you. A record does not become wrong when something changes - it becomes evidence about a
+	# situation that no longer holds, which is a different thing and worth saying differently.
+	STALE_CODE = "stale-code"
+	STALE_FRAMEWORK = "stale-framework"
+	STALE_FIRMWARE = "stale-firmware"
+
+# Every way a record can have expired. All of them are reported to a user as "not verified" - the
+# detail says why, but the headline never claims verification. Fail closed.
+STALE_STATUSES = {
+	VerificationStatus.STALE_CODE,
+	VerificationStatus.STALE_FRAMEWORK,
+	VerificationStatus.STALE_FIRMWARE,
+}
+
+# Statuses that assert the driver actually worked. Only these are subject to staleness checks -
+# there is nothing to invalidate about "unverified", and a failure does not become less of a
+# failure because the code changed.
+VERIFIED_STATUSES = {
+	VerificationStatus.ROUNDTRIP,
+	VerificationStatus.CONFIRMED,
+}
 
 # Strength ordering, used when a method has records from several models/runs: the report shows the
 # strongest. FAILED is deliberately absent - it is not "weak evidence of working", it is evidence
@@ -80,6 +138,9 @@ WRITABLE_STATUSES = {
 DERIVED_STATUSES = {
 	VerificationStatus.UNAVAILABLE,
 	VerificationStatus.UNIMPLEMENTED,
+	VerificationStatus.STALE_CODE,
+	VerificationStatus.STALE_FRAMEWORK,
+	VerificationStatus.STALE_FIRMWARE,
 }
 
 # Abstract methods declared by Driver itself. These are framework plumbing implemented by the
@@ -96,6 +157,153 @@ def _yaml():
 		raise ImportError(f"Hardware-verification records need PyYAML (`pip install pyyaml`). ({e})")
 
 	return yaml
+
+def _normalized_source_hash(func) -> str:
+	''' A hash of what a function *does*, insensitive to how it is written.
+
+	The source is parsed to an AST and its decorators and docstring are stripped before hashing,
+	so reformatting, a comment, or a docstring fix does not invalidate hardware evidence - while a
+	changed SCPI string or a changed calculation does. Hashing raw text instead would produce
+	constant false staleness and train people to ignore it.
+
+	Args:
+		func (callable): The function to hash.
+
+	Returns:
+		str: 16 hex characters, or "" if the source could not be read (a C function, an
+			interactively-defined class, a stripped install).
+	'''
+
+	try:
+		source = textwrap.dedent(inspect.getsource(func))
+		tree = ast.parse(source)
+	except (OSError, TypeError, SyntaxError, IndentationError):
+		return ""
+
+	node = tree.body[0] if tree.body else None
+	if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+
+		# Decorators are policy applied to the body, not the body itself. @superreturn coming or
+		# going is a real change, but it is caught by the framework epoch rather than by every
+		# method's hash flipping at once.
+		node.decorator_list = []
+
+		# The name is not part of what the function does, and it is already the record's key - a
+		# rename is caught as an orphaned record, not as staleness. Normalizing it out also keeps
+		# the hash comparable between two functions that differ only in name.
+		node.name = ""
+
+		if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant) and isinstance(node.body[0].value.value, str):
+			node.body = node.body[1:]
+
+	return hashlib.sha256(ast.dump(tree).encode("utf-8")).hexdigest()[:16]
+
+def method_code_hash(driver_cls, name:str) -> str:
+	''' Hash of one driver method's implementation, for detecting that hardware evidence no
+	longer describes the code that is there now.
+
+	Per-method rather than per-commit on purpose. A commit hash says *when* the record was made,
+	not *whether the relevant code changed* - it would invalidate every record in the project on
+	any commit, needs git to interpret, and is meaningless in an installed wheel with no .git.
+
+	Args:
+		driver_cls (type): A Driver subclass.
+		name (str): Method name.
+
+	Returns:
+		str: 16 hex characters, or "" if unavailable.
+	'''
+
+	raw = inspect.getattr_static(driver_cls, name, None)
+	if raw is None:
+		return ""
+
+	# Unwrap the superreturn descriptor to reach the driver's own function - the same unwrap
+	# Oscilloscope._get_waveform_accepts_batch_hint() does.
+	func = getattr(raw, "func", raw)
+	func = getattr(func, "__func__", func)
+
+	return _normalized_source_hash(func)
+
+def _resolve_dotted(module_name:str, dotted:str):
+	''' Resolves "Class.method" (or a bare function name) inside an imported module. '''
+
+	import importlib
+
+	obj = importlib.import_module(module_name)
+	for part in dotted.split("."):
+		obj = inspect.getattr_static(obj, part) if inspect.isclass(obj) else getattr(obj, part)
+
+	return getattr(obj, "func", obj)
+
+def framework_fingerprint() -> str:
+	''' A single hash over every function on the shared instrument-I/O path.
+
+	Used by a test to detect that the plumbing changed without VERIFICATION_EPOCH being bumped.
+	It does not invalidate anything by itself - a human decides whether a plumbing change
+	invalidates hardware evidence, and records that decision by bumping the epoch.
+
+	Returns:
+		str: 16 hex characters.
+	'''
+
+	parts = []
+	for module_name, dotted in FRAMEWORK_CRITICAL_FUNCTIONS:
+		try:
+			parts.append(f"{module_name}.{dotted}={_normalized_source_hash(_resolve_dotted(module_name, dotted))}")
+		except Exception:
+			parts.append(f"{module_name}.{dotted}=<unresolved>")
+
+	return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:16]
+
+def record_staleness(driver_cls, name:str, record:dict, idn:str=None):
+	''' Decides whether one verified record still describes the situation in front of you.
+
+	Checked in order of specificity - the most precise explanation wins, so a user is told the
+	most actionable thing rather than the broadest.
+
+	Args:
+		driver_cls (type): A Driver subclass.
+		name (str): Method name the record belongs to.
+		record (dict): The record.
+		idn (str): Optional live `*IDN?` string from the connected instrument. Supplying it
+			enables the firmware check; without it, firmware staleness cannot be assessed and is
+			not guessed at.
+
+	Returns:
+		VerificationStatus: One of the STALE_* values, or None if the record still stands.
+	'''
+
+	try:
+		status = VerificationStatus(record.get("status"))
+	except ValueError:
+		return None
+
+	# Only claims of success can go stale. "unverified" has nothing to invalidate, and a failure
+	# does not become less of a failure because the code moved on.
+	if status not in VERIFIED_STATUSES:
+		return None
+
+	# 1. The method's own code changed. Most precise, and most likely to be actionable.
+	recorded_hash = record.get("code_hash")
+	if recorded_hash:
+		current = method_code_hash(driver_cls, name)
+		if current and current != recorded_hash:
+			return VerificationStatus.STALE_CODE
+
+	# 2. The shared I/O path changed enough that someone bumped the epoch.
+	recorded_epoch = record.get("epoch")
+	if recorded_epoch is not None and recorded_epoch < VERIFICATION_EPOCH:
+		return VerificationStatus.STALE_FRAMEWORK
+
+	# 3. The instrument in front of you is not the one the record was made against. Only
+	#    assessable when a live IDN is supplied - absence of information is not evidence of
+	#    staleness, and guessing here would cry wolf on every offline report.
+	recorded_idn = record.get("idn")
+	if idn and recorded_idn and idn.strip() != recorded_idn.strip():
+		return VerificationStatus.STALE_FIRMWARE
+
+	return None
 
 def verification_file_for(driver_cls) -> str:
 	''' Path of the verification.yaml that describes `driver_cls`.
@@ -193,7 +401,7 @@ def declared_capability(driver_cls, name:str):
 
 	return None, None
 
-def method_status(driver_cls, name:str, model:str=None) -> tuple:
+def method_status(driver_cls, name:str, model:str=None, idn:str=None) -> tuple:
 	''' Resolves one method's status, combining declared capability with recorded verification.
 
 	Capability wins outright: a method the hardware cannot do, or that nobody has written, has
@@ -205,11 +413,17 @@ def method_status(driver_cls, name:str, model:str=None) -> tuple:
 		model (str): Optional - restrict to records for this instrument model. Useful because one
 			driver covers a series (a DS1052E and a DS1054Z share RigolDS1000Z) and a command can
 			work on one and not another.
+		idn (str): Optional live `*IDN?` string, enabling the firmware staleness check.
 
 	Returns:
 		tuple: (VerificationStatus, record_or_reason). The second element is the decorator's
 			reason string for a derived status, the winning record dict for a recorded one, or
 			None when nothing is known.
+	
+	A record that no longer describes the code or instrument in front of you is reported as one of
+	the STALE_* statuses rather than as the success it claims. This is the case the whole scheme
+	exists to prevent: a driver verified on hardware, then changed, then used by someone who reads
+	"confirmed" and trusts it.
 	'''
 
 	status, reason = declared_capability(driver_cls, name)
@@ -221,6 +435,7 @@ def method_status(driver_cls, name:str, model:str=None) -> tuple:
 	best = None
 	best_strength = -1
 	failures = []
+	stale_records = []
 
 	for record in records:
 
@@ -236,12 +451,24 @@ def method_status(driver_cls, name:str, model:str=None) -> tuple:
 			failures.append(record)
 			continue
 
+		# A stale record's claim no longer stands. Keep it as the winner if nothing better exists
+		# (its detail explains what expired, which beats a bare "unverified"), but report the
+		# staleness rather than the claim, and rank it below anything still valid.
+		stale = record_staleness(driver_cls, name, record, idn=idn)
+		if stale is not None:
+			stale_records.append((stale, record))
+			continue
+
 		strength = _STATUS_STRENGTH.get(record_status, 0)
 		if strength > best_strength:
 			best, best_strength = record, strength
 
 	if best is not None:
 		return VerificationStatus(best.get("status", "unverified")), best
+	
+	# Nothing valid on file, but something used to be. Say which way it expired.
+	if stale_records:
+		return stale_records[0]
 
 	# Only failures on file. Report the failure rather than the absence - "we tried and it broke"
 	# is far more useful than "nothing is known".
@@ -250,7 +477,7 @@ def method_status(driver_cls, name:str, model:str=None) -> tuple:
 
 	return VerificationStatus.UNVERIFIED, None
 
-def capability_report(driver, model:str=None) -> dict:
+def capability_report(driver, model:str=None, idn:str=None) -> dict:
 	''' Every category-API method of a driver, with its status.
 
 	This is the single call a GUI or a coverage table wants: it merges what the decorators declare
@@ -260,17 +487,30 @@ def capability_report(driver, model:str=None) -> dict:
 	Args:
 		driver (Driver|type): A Driver instance or class.
 		model (str): Optional instrument model to restrict records to.
+		idn (str): Optional live `*IDN?`. When `driver` is a connected instance this defaults to
+			that instrument's own IDN, so a report taken against real hardware automatically
+			notices records made against a different firmware.
 
 	Returns:
-		dict: {method_name: {"status": VerificationStatus, "detail": reason/record}}
+		dict: {method_name: {"status": VerificationStatus, "detail": reason/record,
+			"trusted": bool}}. `trusted` is the one field a UI needs: True only for a claim that
+			still stands. Everything uncertain - unverified, unimplemented, stale, failed - is
+			False. Fail closed.
 	'''
 
 	driver_cls = driver if inspect.isclass(driver) else type(driver)
 
+	if idn is None and not inspect.isclass(driver):
+		idn = getattr(getattr(driver, "id", None), "idn_model", None) or None
+
 	report = {}
 	for name in sorted(category_api_methods(driver_cls)):
-		status, detail = method_status(driver_cls, name, model=model)
-		report[name] = {"status": status, "detail": detail}
+		status, detail = method_status(driver_cls, name, model=model, idn=idn)
+		report[name] = {
+			"status": status,
+			"detail": detail,
+			"trusted": status in VERIFIED_STATUSES,
+		}
 
 	return report
 

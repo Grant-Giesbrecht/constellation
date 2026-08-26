@@ -28,7 +28,8 @@ after ReconnectPolicy: 200 passed, 3 xfailed;
 after error classification: 216 passed, 3 xfailed;
 after two-level connection tracking: 224 passed, 3 xfailed;
 after the P3 dummy-seeding follow-ups: 252 passed, 3 xfailed;
-after hardware-verification tracking: **270 passed, 3 xfailed**).
+after hardware-verification tracking: 270 passed, 3 xfailed;
+after the staleness layer: **286 passed, 3 xfailed**).
 
 ---
 
@@ -1409,10 +1410,27 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
       failures, and preserve comments/ordering in the file if possible — plain `yaml.safe_dump`
       will destroy the explanatory header, so either use a round-trip YAML library or write only
       the record blocks.
-- [ ] **Expiry.** A record naming a firmware version is stale once the instrument is updated.
-      Decide whether `capability_report()` should flag records older than some age, or mismatched
-      against the connected instrument's actual `*IDN?` firmware — the data to do it is already
-      in the schema, nothing consumes it yet.
+- [x] **Expiry / staleness layer — implemented.** Three independent invalidations, checked most-
+      specific first: `stale-code` (normalized AST hash of the driver method's own source),
+      `stale-framework` (`VERIFICATION_EPOCH` recorded with the run), `stale-firmware` (live
+      `*IDN?` vs the recorded one). All report as *not verified* — `capability_report()` returns a
+      `trusted` bool that is True only for a claim that survives every check. Fail closed.
+
+      Design notes worth keeping: the hash is **per-method, not per-commit** (a commit hash says
+      *when*, not *whether the relevant code changed*, invalidates everything at once, needs git,
+      and is meaningless in an installed wheel), and it is **AST-normalized** so comments,
+      formatting and docstrings don't invalidate hardware evidence — a hash that flips on cosmetic
+      edits trains people to ignore staleness. The epoch is **deliberately manual**: full call-
+      graph hashing would invalidate every record on any `base.py` edit, which is how these
+      systems die. What's automated is noticing you touched the plumbing —
+      `FRAMEWORK_CRITICAL_FUNCTIONS` is fingerprinted by a test that fails if it changes without
+      an epoch decision. Only `roundtrip`/`confirmed` can go stale; absence of a connected
+      instrument is never treated as evidence of staleness.
+
+      Known and accepted gaps, documented rather than papered over: a changed **helper in the same
+      file**, a behaviour change in a **dependency**, and the **instrument itself** drifting.
+- [ ] **Consider a whole-class advisory hash** for the same-file-helper gap — invalidates far more
+      coarsely, so only worth it if that case actually bites.
 - [ ] **Coverage table.** Script that renders every `verification.yaml` into a matrix for the
       README — the "what has actually been tested" view that motivated this.
 - [ ] **Roll out to the remaining drivers.** `TRACKED_DRIVERS` in the test is a deliberate opt-in
