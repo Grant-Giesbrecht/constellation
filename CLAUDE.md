@@ -58,8 +58,11 @@ impossible ones `@feature_unavailable("<what the hardware can't do>")` (never co
 `@superreturn`, since no value is produced to track). The class stays constructible, a direct call
 raises `FeatureUnavailable`, `Driver.unavailable_features()`/`feature_is_available()` report the
 gaps before they're called, and `refresh_state`/`apply_state`/`refresh_data`/`init_dummy_state`
-skip them instead of aborting the sweep. `RigolDS1000E` is the reference example; see
-`docs/partial_compliance.md`.
+skip them instead of aborting the sweep. Use `@feature_unimplemented("...")` instead for methods the hardware probably *can* do but nobody
+has written yet — same behaviour, opposite meaning about the future, reported separately by
+`unimplemented_features()`. `RigolDS1000E` is the reference example for both; see
+`docs/partial_compliance.md`. Whether an implemented method has been *checked against hardware* is
+tracked separately in `verification.yaml` — see `docs/hardware_verification.md`.
 
 ### State tracking (`src/constellation/base.py`)
 
@@ -165,6 +168,8 @@ connected instruments.
 - `docs/dummy_mode.md` — how dummy dispatch works and when `@enabledummy` is warranted.
 - `docs/partial_compliance.md` — `@feature_unavailable`: how a driver whose hardware can't do
   everything its category declares stays constructible and introspectable.
+- `docs/hardware_verification.md` — `verification.yaml` and the two "verified" flavours: which
+  driver methods have been checked against real hardware, and why that's separate from capability.
 - `docs/superreturn.md` — how drivers hand parsed values up to their category class.
 - `docs/networking_data_paths.md` — RPC vs DataBank: which channel bulk data should take, and why
   binary on the RPC path is base64.

@@ -186,76 +186,75 @@ class RigolDS1000E(Oscilloscope):
 		self.write(f":MEASure:STATistic:DISPlay {bool_to_ONOFF(enable)}")
 	
 	# --- Not yet implemented ----------------------------------------------------------------
-	# These are abstract on `Oscilloscope` and have no DS1000E implementation yet. They are
-	# marked unavailable so the class is constructible and the working majority of the driver is
-	# reachable; the reason string deliberately says "unverified", NOT "the hardware cannot" -
-	# unlike the timebase above, these have not been checked against the instrument.
+	# @feature_unimplemented, NOT @feature_unavailable. The distinction is the point: the timebase
+	# above is a permanent hardware limitation, while these are a work queue - the DS1000E
+	# programming guide appears to document commands for most of them, nobody has written and
+	# checked the SCPI. `unimplemented_features()` lists exactly these.
 	#
-	# The DS1000E programming guide does appear to document commands for most of them, so each
-	# is expected to convert into a real implementation once verified on the bench. Converting
-	# one is a single-method edit: delete the decorator, add @superreturn and the SCPI body.
+	# Converting one is a single-method edit: delete the decorator, add @superreturn and the SCPI
+	# body, then record the result in verification.yaml. See docs/hardware_verification.md.
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def set_coupling(self, channel:int, coupling:str):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def get_coupling(self, channel:int):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def set_probe_attenuation(self, channel:int, attenuation:float):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def get_probe_attenuation(self, channel:int):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def set_bandwidth_limit(self, channel:int, enable:bool):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def get_bandwidth_limit(self, channel:int):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def set_trigger_mode(self, mode:str):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def get_trigger_mode(self):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def set_trigger_level(self, level_V:float):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def get_trigger_level(self):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def set_trigger_source(self, channel:int=None, external:bool=False, line:bool=False):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def get_trigger_source(self):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def run_acquisition(self):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def stop_acquisition(self):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def do_single_trigger(self):
 		pass
 	
-	@feature_unavailable("not yet implemented for the DS1000E - SCPI support unverified on hardware (todo_list.md P2)")
+	@feature_unimplemented("DS1000E SCPI for this is documented but not written or checked - see verification.yaml")
 	def do_force_trigger(self):
 		pass
 	

@@ -27,7 +27,8 @@ dependencies = [
 	'stardust-tools >= 0.0.0.dev0',
 	'pyvicp >= 1.0.0',
 	'PyQt6 >= 6.4.0',
-	'matplotlib >= 3.5.0'
+	'matplotlib >= 3.5.0',
+	'PyYAML >= 6.0'
 ]
 license = "BSD-2-Clause"
 license-files = ["LICENSE"]
@@ -35,3 +36,11 @@ license-files = ["LICENSE"]
 [project.urls]
 Homepage = "https://github.com/Grant-Giesbrecht/constellation"
 Issues = "https://github.com/Grant-Giesbrecht/constellation/issues"
+
+# verification.yaml files sit beside the drivers they describe (see
+# docs/hardware_verification.md), so they must ship with the package - a driver in another repo
+# then carries its own records with no central registry to keep in sync. `assets` holds the GUI's
+# indicator icons and needs the same treatment.
+[tool.setuptools.package-data]
+"constellation" = ["assets/*"]
+"constellation.instrument_control.*.drivers" = ["verification.yaml"]

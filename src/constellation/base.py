@@ -1029,6 +1029,46 @@ class ReconnectPolicy:
 # shared-mutable-default trap that the relay= argument used to have.
 DEFAULT_RECONNECT_POLICY = ReconnectPolicy()
 
+def feature_unimplemented(reason:str):
+	''' Decorator marking a category method this driver has simply not implemented yet.
+
+	Sibling of `@feature_unavailable`, and deliberately a separate marker rather than a different
+	reason string on the same one. The two look identical at the call site - both raise
+	`FeatureUnavailable`, both are skipped during state sweeps - but they mean opposite things
+	about the future:
+
+	 - `@feature_unavailable` is permanent. The hardware cannot do this; no amount of driver work
+	   will change that.
+	 - `@feature_unimplemented` is a to-do. The instrument probably supports it; nobody has
+	   written and checked the SCPI.
+
+	Conflating them loses exactly the information someone picking up the driver needs: which gaps
+	are worth attacking. `unavailable_features()` reports only the first; `unimplemented_features()`
+	reports only the second, and that list is a work queue.
+
+	Args:
+		reason (str): What is missing and, ideally, what would be needed to finish it.
+	'''
+
+	def decorator(func):
+
+		@functools.wraps(func)
+		def wrapper(self, *args, **kwargs):
+
+			detail = f"{type(self).__name__}.{func.__name__}() is not implemented: {reason}"
+
+			if getattr(self, "_state_sweep_depth", 0) > 0:
+				self.debug(f"Skipping unimplemented feature >:a{func.__name__}<. ({reason})")
+				return None
+
+			raise FeatureUnavailable(detail)
+
+		wrapper.__feature_unimplemented__ = reason
+
+		return wrapper
+
+	return decorator
+
 class CheckOnline(Enum):
 	''' Contains possible values for the Driver.check_online_on_error parameter.
 	How check_online_on_error is set controls how a driver handles updating online
@@ -1178,6 +1218,24 @@ class Driver(ABC):
 		
 		return out
 	
+	def unimplemented_features(self) -> dict:
+		''' Returns {method_name: reason} for every method marked `@feature_unimplemented` -
+		category API this driver has not written yet, as opposed to what its hardware cannot do.
+		
+		Unlike `unavailable_features()`, this list is a work queue: each entry is expected to
+		become a real implementation.
+		'''
+		
+		out = {}
+		
+		for name in dir(type(self)):
+			attr = inspect.getattr_static(type(self), name, None)
+			reason = getattr(attr, "__feature_unimplemented__", None)
+			if reason is not None:
+				out[name] = reason
+		
+		return out
+	
 	def feature_is_available(self, name:str) -> bool:
 		''' True if `name` is a method this driver can actually perform.
 		
@@ -1189,7 +1247,12 @@ class Driver(ABC):
 		if attr is None:
 			return False
 		
-		return getattr(attr, "__feature_unavailable__", None) is None
+		# Either marker means the call cannot be made, even though they mean different things
+		# about whether that will ever change.
+		if getattr(attr, "__feature_unavailable__", None) is not None:
+			return False
+		
+		return getattr(attr, "__feature_unimplemented__", None) is None
 	
 	def connect(self, check_id:bool=True) -> bool:
 		''' Attempts to establish a connection to the instrument. Updates

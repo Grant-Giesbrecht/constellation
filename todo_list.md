@@ -27,7 +27,8 @@ after the P8 bug batch: 189 passed, 3 xfailed;
 after ReconnectPolicy: 200 passed, 3 xfailed;
 after error classification: 216 passed, 3 xfailed;
 after two-level connection tracking: 224 passed, 3 xfailed;
-after the P3 dummy-seeding follow-ups: **252 passed, 3 xfailed**).
+after the P3 dummy-seeding follow-ups: 252 passed, 3 xfailed;
+after hardware-verification tracking: **270 passed, 3 xfailed**).
 
 ---
 
@@ -1346,6 +1347,78 @@ container all exist in `ui.py`, with widgets registered for `Oscilloscope`, `Pow
         question from either of the Driver's two links.
       - Much of the popup's content isn't exposed anywhere yet (time since last successful
         exchange, in particular). Adding it to `connection_summary()` is the natural home.
+
+## Priority 18 — hardware verification tracking
+
+Answers "which categories, drivers and individual methods have been checked against real
+hardware" — a question git branches and PR discipline structurally cannot answer, because the fact
+is per-method, per-model, perishable and re-checkable. Recorded as data in the repo instead. See
+`docs/hardware_verification.md`.
+
+### Done
+
+- [x] **`@feature_unimplemented`** added as a sibling of `@feature_unavailable`. Both raise
+      `FeatureUnavailable` and are skipped during state sweeps, but they mean opposite things
+      about the future: one is a permanent hardware limitation, the other is a work queue.
+      `unimplemented_features()` reports the second. The DS1000E's 16 methods moved onto it,
+      which retires the fudged reason string ("not yet implemented — SCPI unverified") that was
+      encoding verification status inside a capability marker. That was flagged as a compromise
+      when it was written; this is the fix.
+- [x] **`src/constellation/verification.py`** — `VerificationStatus`, record loading,
+      `method_status()`, `capability_report()`, `summarize_report()`. The YAML is located
+      relative to the driver's own source file, so an out-of-tree driver (P15) carries its own
+      records with no central registry.
+- [x] **`verification.yaml`** for the two Rigol scopes, with the schema documented in-file. All
+      entries are `unverified` — nothing has been run on hardware, and a fabricated record would
+      be worse than none.
+- [x] **`tests/test_verification_records.py`** — 18 tests, no hardware needed.
+- [x] **`docs/hardware_verification.md`**.
+- [x] `PyYAML` added to `pyproject.toml`, plus `[tool.setuptools.package-data]`.
+
+### Open
+
+- [ ] **Confirm package data actually ships.** There was no `[tool.setuptools.package-data]`
+      section before this, and no `MANIFEST.in` — so `src/constellation/assets/*` (the GUI's
+      indicator icons) may never have been included in the wheel. The new section covers both
+      `assets/` and `verification.yaml`, but **this has not been verified against a built
+      wheel**. Build one and check. If the icons were missing, that's a live bug in installed
+      copies, independent of this priority.
+- [ ] **Build the hardware suite** (`tests/hardware/`, `@pytest.mark.hardware`, deselected by
+      default, `--address=`/`--driver=` options). `examples/osc_hardware_demo.py` and
+      `vna_hardware_demo.py` are this already, written as scripts with the assertions replaced by
+      eyeballing — converting them is mostly mechanical, and because drivers are written against
+      category APIs, one parametrized suite covers every driver in a category.
+- [ ] **Two modes, per the owner's design (2026-08-26).** Round-trip mode is fast and unattended;
+      **moderated mode** (`--confirm`) pauses at each step for a human to confirm the instrument
+      actually did the right thing. This is not a nicety — a round trip can be *self-consistently
+      wrong*: if a driver's setter writes the timebase and its getter also reads the timebase,
+      setting volts/div round-trips perfectly while the driver is broken. Only a person looking at
+      the front panel catches that. And for action commands (`run_acquisition`,
+      `do_single_trigger`, `preset`) there is no read-back at all, so round-trip mode is not
+      weaker for them — it is *unreachable*, and `confirmed` is the only status they can ever have.
+      - Prompts must name the **physical** thing to look at ("channel 1's VERTICAL scale should
+        read 2 V/div — if the TIMEBASE changed instead, the set/get pair agrees with itself and
+        controls the wrong parameter"). That makes prompt text per-method content living with the
+        test, not boilerplate.
+      - pytest captures stdout, so prompting needs the capture manager suspended
+        (`capsys.disabled()` / `capturemanager.global_and_fixture_disabled()`).
+      - Moderated runs are slow, so they need to be resumable and to skip already-`confirmed`
+        methods by default.
+- [ ] **The record writer.** A passing run stamps `verification.yaml`. Rules: never *lower* a
+      status (a later round-trip-only run must not downgrade a `confirmed` method), always record
+      failures, and preserve comments/ordering in the file if possible — plain `yaml.safe_dump`
+      will destroy the explanatory header, so either use a round-trip YAML library or write only
+      the record blocks.
+- [ ] **Expiry.** A record naming a firmware version is stale once the instrument is updated.
+      Decide whether `capability_report()` should flag records older than some age, or mismatched
+      against the connected instrument's actual `*IDN?` firmware — the data to do it is already
+      in the schema, nothing consumes it yet.
+- [ ] **Coverage table.** Script that renders every `verification.yaml` into a matrix for the
+      README — the "what has actually been tested" view that motivated this.
+- [ ] **Roll out to the remaining drivers.** `TRACKED_DRIVERS` in the test is a deliberate opt-in
+      list so un-migrated drivers don't fail the suite; every driver should end up in it.
+- [ ] **GUI integration** — `capability_report()` is what the widget layer needs to grey out
+      `unavailable` controls and badge `unverified` ones with a caution marker. See P17.
 
 ## Execution order (agreed)
 
