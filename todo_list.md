@@ -34,7 +34,9 @@ after the oscilloscope hardware suite: 317 passed, 19 skipped, 3 xfailed;
 after the Parameter* GUI controls: 342 passed, 19 skipped, 3 xfailed;
 after Parameter* display modes + detail window: 366 passed, 19 skipped, 3 xfailed;
 after Parameter* v3 (units, LCD, toggle PV, input-eating fix): 386 passed, 19 skipped, 3 xfailed;
-after Parameter* v4 (vertical layout, widget-lifetime fixes): **391 passed, 19 skipped, 3
+after Parameter* v4 (vertical layout, widget-lifetime fixes): 391 passed, 19 skipped, 3 xfailed;
+after the persistent layout skeleton: 392 passed, 19 skipped, 3 xfailed;
+after window chrome (shortcuts, collapsible panels, splitters): **411 passed, 19 skipped, 3
 xfailed** - the 19 skips are the hardware tests, which need `--address`).
 
 ---
@@ -1551,6 +1553,39 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
       widgets the current view had not placed (an unused `QLCDNumber` has no other owner), and
       handing a still-populated layout to a throwaway widget re-parented everything onto it. The
       layout is now drained item-by-item first, which leaves widget parents untouched.
+- [x] **Persistent layout skeleton** (2026-09-04). A density switch now re-fills existing
+      layouts instead of destroying and rebuilding the whole tree (which also needed a throwaway
+      `QWidget` to dispose of the old root). Prompted by macOS `TSMSendMessageToUIServer` warnings
+      the owner saw *only* in `parameter_widgets_demo`; that could not be reproduced headlessly or
+      with synthetic focus - it needs real Cocoa window activation - so this is not a confirmed
+      fix, but widget-tree churn is the one thing in our code that could plausibly aggravate it,
+      and removing it is right regardless. The demo also now passes `view=` at construction rather
+      than switching afterwards, which was a redundant startup re-layout.
+      If the warnings persist: they are harmless Cocoa noise from running a GUI outside an `.app`
+      bundle, and the demo simply has more editable text fields than the others (measured: 9
+      visible editable line edits vs 3 in `osc_gui_demo` and 0 in `psu_gui_demo`), so it makes
+      more of them.
+- [x] **Window chrome: shortcuts, folding, resizing** (2026-09-04).
+      - **Cmd/Ctrl-W closes the window, Cmd/Ctrl-Q quits**, on every Constellation window and on
+        the parameter detail dialog. `install_window_shortcuts()` in `ui.py`. Installed directly
+        rather than via the menu, since the menu is optional and its shortcuts are not always live
+        before it has been shown; `WindowShortcut`-scoped so a dialog's Cmd-W closes the dialog.
+        Falls back to explicit `Ctrl+W`/`Ctrl+Q` where the platform supplies no standard binding
+        (Windows has no standard Quit shortcut).
+      - **Fixed: "Close Window" killed the whole application.** It called `sys.exit(0)` straight
+        after `close()`, so closing one instrument's window took every other panel with it. Quit
+        is now its own menu action.
+      - **`CollapsiblePanel`** replaces `QGroupBox` for front-panel sections. Not
+        `QGroupBox.setCheckable(True)`: that *disables* contents rather than hiding them (frees no
+        space) and its checkbox reads as "this feature is off", which is a different claim from
+        "I have folded this away". Collapsing clamps the widget's maximum size, which is what
+        actually makes a splitter release the room; `fold=` picks whether height or width is
+        surrendered, so a per-channel strip folds sideways instead of leaving an empty column.
+      - **`make_splitter`** + a nested-splitter layout for `oscilloscope_gui.py`. Note `stretch=`
+        vs `sizes=`: `QSplitter.setSizes([3, 1])` is three *pixels*, not a 3:1 ratio, and Qt
+        clamps it up to the children's minimums - which is exactly what squashed the plot on the
+        first attempt.
+      - `tests/test_gui_chrome.py`, 19 tests, headless.
 
 ### Open
 
@@ -1572,7 +1607,8 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
       written as a script with the assertions replaced by eyeballing.
 - [ ] **Run it.** Nothing in the oscilloscope `verification.yaml` is anything but `unverified` —
       the machinery exists, no instrument has been in front of it yet.
-- [ ] **Roll `Parameter*` into `power_supply_gui.py`**, which still uses `Tracked*`. Its measured
+- [ ] **Roll `Parameter*` and `CollapsiblePanel` into `power_supply_gui.py`**, which still uses
+      `Tracked*` and `QGroupBox`. Its measured
       voltage/current labels are a good test of whether a read-only variant is worth adding.
 - [ ] **The `Tracked*` family still has the `hasFocus()` bug** in `TrackedValue._display()`, and
       still compares with exact `!=`. Either fix it or retire the family once

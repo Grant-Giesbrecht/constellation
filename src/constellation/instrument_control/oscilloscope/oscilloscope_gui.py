@@ -15,7 +15,9 @@ from constellation.base import *
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
 from constellation.ui import *
 
-from PyQt6.QtWidgets import QWidget, QGridLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox
+from PyQt6.QtWidgets import (QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
+	QGroupBox, QSplitter)
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDoubleValidator
 from constellation.widgets import StatusPushButton
 
@@ -104,15 +106,17 @@ class OscilloscopeWidget(InstrumentWidget):
 		self.capture_button = QPushButton("Capture Waveforms")
 		self.capture_button.clicked.connect(self._capture_waveforms)
 
-		self.acq_box = QGroupBox("Acquisition")
+		self.acq_box = CollapsiblePanel("Acquisition")
 		acq_layout = QHBoxLayout()
+		acq_layout.setContentsMargins(0, 0, 0, 0)
 		for b in (self.run_button, self.stop_button, self.single_button, self.capture_button):
 			acq_layout.addWidget(b)
-		self.acq_box.setLayout(acq_layout)
+		self.acq_box.set_content_layout(acq_layout)
 
 		# --- Trigger group ---
-		self.trigger_box = QGroupBox("Trigger")
+		self.trigger_box = CollapsiblePanel("Trigger")
 		trig_layout = QGridLayout()
+		trig_layout.setContentsMargins(0, 0, 0, 0)
 		self.trigger_mode = ParameterChoice(
 			bridge, "Mode", get=lambda s: s.trigger_mode, set_method="set_trigger_mode",
 			choices=[Oscilloscope.TRIG_AUTO, Oscilloscope.TRIG_NORM, Oscilloscope.TRIG_SINGLE],
@@ -125,11 +129,12 @@ class OscilloscopeWidget(InstrumentWidget):
 		# Controls keep their natural width and stay left; the slack goes into the empty column.
 		trig_layout.setColumnStretch(1, 1)
 		trig_layout.setRowStretch(2, 1)
-		self.trigger_box.setLayout(trig_layout)
+		self.trigger_box.set_content_layout(trig_layout)
 
 		# --- Horizontal / timebase group ---
-		self.horiz_box = QGroupBox("Horizontal")
+		self.horiz_box = CollapsiblePanel("Horizontal")
 		horiz_layout = QGridLayout()
+		horiz_layout.setContentsMargins(0, 0, 0, 0)
 		# Timebase values are microseconds to milliseconds in practice, so both of these carry a
 		# prefix selector: a user types "2" and picks "ms" rather than counting zeros in 0.002.
 		self.time_div = ParameterBox(
@@ -143,25 +148,36 @@ class OscilloscopeWidget(InstrumentWidget):
 		horiz_layout.addWidget(self.time_offset, 1, 0)
 		horiz_layout.setColumnStretch(1, 1)
 		horiz_layout.setRowStretch(2, 1)
-		self.horiz_box.setLayout(horiz_layout)
+		self.horiz_box.set_content_layout(horiz_layout)
 
 		# --- Channels group - populated lazily in _build_channels() once the first state update
 		# tells us how many channels this instrument actually has (state.num_channels). Doing
 		# this from state rather than from a driver attribute is what keeps this widget working
 		# identically whether `bridge` owns a local Driver or is only observing one over labmesh -
 		# an ObserverBridge has no local Driver to read attributes off of at all. ---
-		self.channels_box = QGroupBox("Channels")
-		self.channels_layout = QHBoxLayout()
-		self.channels_box.setLayout(self.channels_layout)
+		self.channels_box = CollapsiblePanel("Channels")
+		self.channels_splitter = make_splitter(Qt.Orientation.Horizontal)
+		channels_layout = QHBoxLayout()
+		channels_layout.setContentsMargins(0, 0, 0, 0)
+		channels_layout.addWidget(self.channels_splitter)
+		self.channels_box.set_content_layout(channels_layout)
 
 		# --- Waveform plot ---
 		self.plot_widget = PlotWidget(main_window, log)
 
-		self.main_layout.addWidget(self.acq_box, 0, 0, 1, 3)
-		self.main_layout.addWidget(self.plot_widget, 1, 0, 1, 2)
-		self.main_layout.addWidget(self.trigger_box, 1, 2)
-		self.main_layout.addWidget(self.horiz_box, 2, 2)
-		self.main_layout.addWidget(self.channels_box, 2, 0, 1, 2)
+		# --- Assembly ---
+		# Nested splitters rather than a fixed grid, so a user can give the plot more room, shrink
+		# the channel strip, or fold a panel away entirely. Each section is a CollapsiblePanel, so
+		# the ones you are not using right now cost a header's worth of height.
+		self.side_splitter = make_splitter(Qt.Orientation.Vertical, self.trigger_box, self.horiz_box)
+		self.upper_splitter = make_splitter(Qt.Orientation.Horizontal, self.plot_widget,
+			self.side_splitter, stretch=[3, 1])
+		self.body_splitter = make_splitter(Qt.Orientation.Vertical, self.upper_splitter,
+			self.channels_box, stretch=[4, 1])
+
+		self.main_layout = QVBoxLayout()
+		self.main_layout.addWidget(self.acq_box)
+		self.main_layout.addWidget(self.body_splitter, 1)
 		self.setLayout(self.main_layout)
 
 	def on_state_changed(self, state):
@@ -176,8 +192,11 @@ class OscilloscopeWidget(InstrumentWidget):
 
 		for ch in range(first, first + count):
 
-			group = QGroupBox(f"Channel {ch}")
+			# Folds sideways: these sit in a row, so collapsing one should give its width to its
+			# neighbours rather than leaving an empty column.
+			group = CollapsiblePanel(f"Channel {ch}", fold=Qt.Orientation.Horizontal)
 			layout = QGridLayout()
+			layout.setContentsMargins(0, 0, 0, 0)
 
 			# get_args are the *getter's* arguments, which is what the PV button re-queries with -
 			# same channel number, but the getter takes it alone rather than alongside a value.
@@ -203,9 +222,9 @@ class OscilloscopeWidget(InstrumentWidget):
 
 			layout.setColumnStretch(1, 1)
 			layout.setRowStretch(4, 1)
-			group.setLayout(layout)
+			group.set_content_layout(layout)
 
-			self.channels_layout.addWidget(group)
+			self.channels_splitter.addWidget(group)
 			self.channel_controls[ch] = {"enable": enable, "vdiv": vdiv, "voff": voff, "coupling": coupling}
 
 		self._channels_built = True

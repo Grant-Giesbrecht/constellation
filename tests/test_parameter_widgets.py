@@ -1047,3 +1047,22 @@ def test_switching_views_repeatedly_does_not_destroy_unplaced_widgets(qt_app):
 	assert widget.pv_lcd.value() == 2.5
 	assert widget.edit.text() == "2.5"
 	assert widget.lamp_send.color
+
+def test_switching_density_creates_no_new_layouts(qt_app):
+	""" A density switch moves existing widgets between existing containers. It used to destroy
+	and rebuild every layout in the control - pointless churn in Qt's widget tree, and on macOS
+	that churn also drags the text-input contexts along with it. """
+
+	widget = _box(FakeBridge(), view=ParameterView.COMPACT)
+
+	before = (widget._root, widget._body, widget._rows, widget._sp_row, widget._pv_row,
+		widget._lamp_column)
+
+	widget.set_view(ParameterView.FULL)
+	widget.set_view(ParameterView.COMPACT)
+
+	after = (widget._root, widget._body, widget._rows, widget._sp_row, widget._pv_row,
+		widget._lamp_column)
+
+	assert all(a is b for a, b in zip(before, after))
+	assert widget.layout() is widget._root

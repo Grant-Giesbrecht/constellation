@@ -9,8 +9,9 @@ from PyQt6 import QtCore, QtGui
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QMainWindow, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton,
 	QSlider, QGroupBox, QWidget, QTabWidget, QDockWidget, QLabel, QLineEdit, QComboBox, QDialog,
-	QDialogButtonBox, QSizePolicy, QFrame, QCheckBox, QLCDNumber)
-from PyQt6.QtGui import QAction
+	QDialogButtonBox, QSizePolicy, QFrame, QCheckBox, QLCDNumber, QApplication, QSplitter,
+	QToolButton)
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
@@ -570,6 +571,190 @@ class TrackedChoice(_TrackedControlBase):
 		self._status_light.setToolTip(f"status: {status} (setpoint={setpoint_value}, confirmed={confirmed_value})")
 
 # ============================================================================
+# Window chrome: keyboard shortcuts and collapsible/resizable panels.
+# ============================================================================
+
+def _key_bindings(standard, fallback:str) -> list:
+	''' Every key sequence for a standard action, with a guaranteed fallback.
+
+	`QKeySequence.keyBindings()` gives the platform-correct answer - Cmd+W on macOS, Ctrl+W
+	elsewhere - but it returns *nothing* for Quit on Windows, where quitting is conventionally a
+	menu-only action. Constellation wants the shortcut to exist everywhere, so an explicit
+	fallback is appended whenever the platform doesn't supply it.
+	'''
+
+	sequences = list(QKeySequence.keyBindings(standard))
+
+	explicit = QKeySequence(fallback)
+	if not any(seq.matches(explicit) == QKeySequence.SequenceMatch.ExactMatch for seq in sequences):
+		sequences.append(explicit)
+
+	return sequences
+
+def install_window_shortcuts(window, on_close=None, on_quit=None) -> list:
+	''' Gives a top-level window the two shortcuts every desktop app is expected to have:
+	Cmd/Ctrl-W closes this window, Cmd/Ctrl-Q quits the application.
+
+	Call this on any window Constellation puts on screen - the main window, and any dialog that
+	can outlive the click that opened it. Scoped to the window, so a dialog's Cmd-W closes the
+	dialog and not whatever is behind it.
+
+	Args:
+		window (QWidget): The top-level window.
+		on_close (callable): Override for Cmd/Ctrl-W. Defaults to `window.close`.
+		on_quit (callable): Override for Cmd/Ctrl-Q. Defaults to quitting the application.
+
+	Returns:
+		list: The QShortcut objects, parented to `window` (so they die with it).
+	'''
+
+	shortcuts = []
+
+	for standard, fallback, slot in (
+			(QKeySequence.StandardKey.Close, "Ctrl+W", on_close or window.close),
+			(QKeySequence.StandardKey.Quit, "Ctrl+Q", on_quit or QApplication.quit)):
+
+		for sequence in _key_bindings(standard, fallback):
+			shortcut = QShortcut(sequence, window)
+			shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+			shortcut.activated.connect(slot)
+			shortcuts.append(shortcut)
+
+	return shortcuts
+
+_QT_MAX_SIZE = 16777215   # QWIDGETSIZE_MAX - "no maximum", as Qt spells it
+
+class CollapsiblePanel(QWidget):
+	''' A titled frame whose contents can be folded away, for use in place of a QGroupBox.
+
+	Two reasons this exists rather than `QGroupBox.setCheckable(True)`: a checkable group box
+	*disables* its contents rather than hiding them, so it frees no space at all; and its checkbox
+	reads as "this feature is off", which is a completely different claim from "I have folded this
+	away". A front panel with six sections is mostly sections you are not using right now.
+
+	Collapsing clamps the widget's maximum height to its header, so a QSplitter holding one gives
+	the space back to its neighbours instead of leaving a hole.
+
+	Put the contents in `panel.content` (a plain QWidget - set a layout on it), or hand a layout
+	straight to `set_content_layout()`.
+	'''
+
+	toggled = pyqtSignal(bool)
+
+	def __init__(self, title:str, parent=None, collapsed:bool=False,
+			fold=Qt.Orientation.Vertical):
+		super().__init__(parent)
+
+		# Which dimension folding gives back. A panel stacked vertically should surrender its
+		# HEIGHT; one sitting in a row of columns (a per-channel strip) should surrender its
+		# WIDTH, or collapsing it just leaves an empty column where it was.
+		self.fold = fold
+
+		self.header = QToolButton()
+		self.header.setText(title)
+		self.header.setCheckable(True)
+		self.header.setChecked(not collapsed)
+		self.header.setAutoRaise(True)
+		self.header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+		self.header.setArrowType(Qt.ArrowType.DownArrow if not collapsed else Qt.ArrowType.RightArrow)
+		self.header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+		self.header.setCursor(QtGui.QCursor(Qt.CursorShape.PointingHandCursor))
+		self.header.setToolTip("Click to fold this panel away")
+		self.header.toggled.connect(self._on_toggled)
+
+		self.content = QWidget()
+
+		self.frame = QFrame()
+		self.frame.setFrameShape(QFrame.Shape.StyledPanel)
+
+		frame_layout = QVBoxLayout()
+		frame_layout.setContentsMargins(4, 2, 4, 4)
+		frame_layout.setSpacing(2)
+		frame_layout.addWidget(self.header)
+		frame_layout.addWidget(self.content)
+		self.frame.setLayout(frame_layout)
+
+		layout = QVBoxLayout()
+		layout.setContentsMargins(0, 0, 0, 0)
+		layout.addWidget(self.frame)
+		self.setLayout(layout)
+
+		self._apply_collapsed(collapsed)
+
+	def set_content_layout(self, layout):
+		''' Convenience for `panel.content.setLayout(layout)`. '''
+
+		self.content.setLayout(layout)
+
+	@property
+	def collapsed(self) -> bool:
+		return not self.header.isChecked()
+
+	def set_collapsed(self, collapsed:bool):
+
+		if bool(collapsed) == self.collapsed:
+			return
+
+		self.header.setChecked(not collapsed)
+
+	def _on_toggled(self, expanded:bool):
+
+		self._apply_collapsed(not expanded)
+		self.toggled.emit(not expanded)
+
+	def _apply_collapsed(self, collapsed:bool):
+
+		self.content.setVisible(not collapsed)
+		self.header.setArrowType(Qt.ArrowType.RightArrow if collapsed else Qt.ArrowType.DownArrow)
+
+		# Clamping the maximum is what actually frees the space: hiding the content alone leaves a
+		# splitter holding the old size, so the panel collapses into a blank gap rather than
+		# giving its room to its neighbours.
+		margins = self.frame.layout().contentsMargins()
+
+		if not collapsed:
+			self.setMaximumHeight(_QT_MAX_SIZE)
+			self.setMaximumWidth(_QT_MAX_SIZE)
+		elif self.fold == Qt.Orientation.Vertical:
+			self.setMaximumHeight(margins.top() + margins.bottom() + self.header.sizeHint().height() + 4)
+		else:
+			self.setMaximumWidth(margins.left() + margins.right() + self.header.sizeHint().width() + 8)
+
+		self.updateGeometry()
+
+def make_splitter(orientation, *widgets, stretch=None, sizes=None, collapsible:bool=False) -> QSplitter:
+	''' A QSplitter with the handles made visible and children that keep their minimums.
+
+	Qt's default handle is a 1px hairline that nobody discovers, so panels look fixed even when
+	they are not. `collapsible=False` (the default) stops a drag from swallowing a child entirely -
+	the CollapsiblePanel header is the honest way to fold something away, and a panel dragged to
+	zero width just looks broken.
+
+	Args:
+		stretch (sequence): Relative shares of the extra space, one per widget. This is what you
+			almost always want - it survives a resize.
+		sizes (sequence): Initial sizes in PIXELS. `setSizes([3, 1])` does not mean "3:1", it means
+			three pixels and one pixel, which Qt then clamps up to the children's minimums - so a
+			ratio passed here silently does nothing useful.
+	'''
+
+	splitter = QSplitter(orientation)
+	splitter.setHandleWidth(6)
+	splitter.setChildrenCollapsible(collapsible)
+
+	for widget in widgets:
+		splitter.addWidget(widget)
+
+	if stretch:
+		for index, factor in enumerate(stretch):
+			splitter.setStretchFactor(index, factor)
+
+	if sizes:
+		splitter.setSizes(list(sizes))
+
+	return splitter
+
+# ============================================================================
 # Parameter controls - the dense set-point / process-variable family.
 #
 # The Tracked* controls above show one box and one status lamp: the box holds "the setpoint if
@@ -615,8 +800,8 @@ class ParameterView:
 	ORDER = (COMPACT, FULL)
 
 	LABELS = {
-		FULL: "Full - setpoint, measured value, three lamps",
-		COMPACT: "Compact - setpoint only, two lamps",
+		FULL: "Full",
+		COMPACT: "Compact",
 	}
 
 # Verification: can this driver method be trusted? Sourced from the hardware-verification records
@@ -1010,6 +1195,9 @@ class ParameterDetailDialog(QDialog):
 		self.setWindowTitle(f"{control.label} - details")
 		self.setMinimumWidth(520)
 
+		# Cmd/Ctrl-W closes the dialog, not the panel behind it (WindowShortcut scope).
+		self._window_shortcuts = install_window_shortcuts(self, on_close=self.reject)
+
 		layout = QVBoxLayout()
 
 		header = QLabel(f"<b>{control.label}</b><br><span style='color:gray'>{control.set_method}() / {control.get_method or 'no getter'}()</span>")
@@ -1028,7 +1216,7 @@ class ParameterDetailDialog(QDialog):
 		density.addWidget(self.view_combo, 1)
 		layout.addLayout(density)
 
-		self.lcd_check = QCheckBox("Show the measured value on an LCD readout (full view only)")
+		self.lcd_check = QCheckBox("LCD Readout")
 		self.lcd_check.setChecked(bool(getattr(control, "lcd", False)))
 		self.lcd_check.setEnabled(getattr(control, "supports_lcd", False))
 		self.lcd_check.toggled.connect(control.set_lcd)
@@ -1367,6 +1555,30 @@ class _ParameterControlBase(_TrackedControlBase):
 		# was then squashed into the row height the compact one had needed.
 		self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 
+		# The whole layout skeleton is built ONCE here and then only ever re-filled. Switching
+		# density used to destroy and recreate every layout in the control, which churns Qt's
+		# widget tree (and, on macOS, its text-input contexts) for no reason - a density switch
+		# moves existing widgets around, it does not need new containers.
+		self._root = QVBoxLayout()
+		self._root.setContentsMargins(4, 2, 4, 2)
+		self._root.setSpacing(2)
+		self.setLayout(self._root)
+
+		self._body = QHBoxLayout()
+		self._body.setSpacing(6)
+
+		self._rows = QVBoxLayout()
+		self._rows.setSpacing(2)
+
+		self._sp_row = QHBoxLayout()
+		self._sp_row.setSpacing(4)
+
+		self._pv_row = QHBoxLayout()
+		self._pv_row.setSpacing(4)
+
+		self._lamp_column = QVBoxLayout()
+		self._lamp_column.setSpacing(3)
+
 		self._apply_view()
 
 		# A method the hardware cannot do, or that nobody has written, gets a visibly dead
@@ -1439,31 +1651,78 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		full = self.view == ParameterView.FULL
 
-		# Rebuilding the layout must not take the widgets with it. Two traps here, both of which
-		# manifest as "wrapped C/C++ object ... has been deleted" on the next value update:
-		#
-		#  - emptying the layout in place and reparenting its SUBLAYOUTS to None destroys widgets
-		#    the current view had not placed (an unused LCD has no other owner);
-		#  - handing a still-populated layout to a throwaway widget re-parents everything it
-		#    manages onto that widget, which then dies with it.
-		#
-		# So: drain every item out first (widgets stay children of this control), pin ownership
-		# explicitly, and only then dispose of the empty husk.
-		old_layout = self.layout()
-		if old_layout is not None:
-			_drain_layout(old_layout)
+		# Empty every layout, keeping the layouts themselves. takeAt() detaches an item without
+		# touching the widget's parent, so nothing is created or destroyed here - the widgets are
+		# simply re-placed.
+		for layout in (self._sp_row, self._pv_row, self._lamp_column, self._rows, self._body, self._root):
+			_drain_layout(layout)
 
 		for widget in self._managed_widgets():
-			widget.setParent(self)
+			if widget.parent() is not self:
+				widget.setParent(self)
 			widget.setVisible(False)
 
-		if old_layout is not None:
-			QWidget().setLayout(old_layout)
+		# --- setpoint row ---
+		if self.show_inline_label():
+			self.inline_label.setVisible(True)
+			self._sp_row.addWidget(self.inline_label)
 
-		self._root = QVBoxLayout()
-		self._root.setContentsMargins(4, 2, 4, 2)
-		self._root.setSpacing(2)
-		self.setLayout(self._root)
+		if self.show_sp_icon():
+			self.sp_icon.setVisible(True)
+			self._sp_row.addWidget(self.sp_icon)
+
+		self._add_sp_editor(self._sp_row)
+
+		# The prefix selector sits immediately right of the setpoint field, and doubles as the
+		# unit label - so there is exactly one place the units are stated for the SP row.
+		if self.has_prefixes:
+			self.prefix_combo.setVisible(True)
+			self._sp_row.addWidget(self.prefix_combo)
+		elif self.unit:
+			self.unit_sp.setVisible(True)
+			self._sp_row.addWidget(self.unit_sp)
+
+		# Both rows get a trailing stretch so both pack LEFT. Without it the SP row spread its
+		# slack between its widgets while the PV row (which has one) stayed put, and the two rows'
+		# indicators drifted out of column - which is exactly the alignment that makes an SP row
+		# above a PV row readable as "asked" above "actually".
+		self._sp_row.addStretch(1)
+		self._rows.addLayout(self._sp_row)
+
+		# --- measured row ---
+		if full and self.show_pv_row():
+
+			self.pv_icon.setVisible(True)
+			self._pv_row.addWidget(self.pv_icon)
+
+			pv = self._pv_row_widget()
+			pv.setVisible(True)
+			self._pv_row.addWidget(pv)
+
+			# The PV row's unit label mirrors the selector, so both rows always read in the same
+			# units - which is the entire point of scaling them together.
+			if self.has_prefixes or self.unit:
+				self.unit_pv.setText(self.prefix_combo.currentText() if self.has_prefixes else self.unit)
+				self.unit_pv.setVisible(True)
+				self._pv_row.addWidget(self.unit_pv)
+
+			self._pv_row.addStretch(1)
+			self._rows.addLayout(self._pv_row)
+
+		# --- lamps ---
+		# Stretch on BOTH sides centres the lamp column against the rows it annotates. With a
+		# stretch only underneath, the lamps rode the top of whatever cell the control was placed
+		# in and drifted away from the control they describe as soon as the row got taller.
+		self._lamp_column.addStretch(1)
+
+		for lamp in self.visible_lamps():
+			lamp.setVisible(True)
+			self._lamp_column.addWidget(lamp)
+
+		self._lamp_column.addStretch(1)
+
+		self._body.addLayout(self._rows)
+		self._body.addLayout(self._lamp_column)
 
 		# The title sits ABOVE the row-plus-lamps block rather than inside it, so the lamp column
 		# centres on the fields it annotates. Centring it over the title as well pushed the lamps
@@ -1472,81 +1731,11 @@ class _ParameterControlBase(_TrackedControlBase):
 			self.title_label.setVisible(True)
 			self._root.addWidget(self.title_label)
 
-		rows = QVBoxLayout()
-		rows.setSpacing(2)
-
-		sp_row = QHBoxLayout()
-		sp_row.setSpacing(4)
-
-		if self.show_inline_label():
-			self.inline_label.setVisible(True)
-			sp_row.addWidget(self.inline_label)
-
-		if self.show_sp_icon():
-			self.sp_icon.setVisible(True)
-			sp_row.addWidget(self.sp_icon)
-
-		self._add_sp_editor(sp_row)
-
-		# The prefix selector sits immediately right of the setpoint field, and doubles as the
-		# unit label - so there is exactly one place the units are stated for the SP row.
-		if self.has_prefixes:
-			self.prefix_combo.setVisible(True)
-			sp_row.addWidget(self.prefix_combo)
-		elif self.unit:
-			self.unit_sp.setVisible(True)
-			sp_row.addWidget(self.unit_sp)
-
-		# Both rows get a trailing stretch so both pack LEFT. Without it the SP row spread its
-		# slack between its widgets while the PV row (which has one) stayed put, and the two rows'
-		# indicators drifted out of column - which is exactly the alignment that makes an SP row
-		# above a PV row readable as "asked" above "actually".
-		sp_row.addStretch(1)
-		rows.addLayout(sp_row)
-
-		if full and self.show_pv_row():
-			pv_row = QHBoxLayout()
-			pv_row.setSpacing(4)
-			self.pv_icon.setVisible(True)
-			pv_row.addWidget(self.pv_icon)
-
-			pv = self._pv_row_widget()
-			pv.setVisible(True)
-			pv_row.addWidget(pv)
-
-			# The PV row's unit label mirrors the selector, so both rows always read in the same
-			# units - which is the entire point of scaling them together.
-			if self.has_prefixes or self.unit:
-				self.unit_pv.setText(self.prefix_combo.currentText() if self.has_prefixes else self.unit)
-				self.unit_pv.setVisible(True)
-				pv_row.addWidget(self.unit_pv)
-
-			pv_row.addStretch(1)
-			rows.addLayout(pv_row)
-
-		# Stretch on BOTH sides centres the lamp column against the rows it annotates. With a
-		# stretch only underneath, the lamps rode the top of whatever cell the control was placed
-		# in and drifted away from the control they describe as soon as the row got taller.
-		lamps = QVBoxLayout()
-		lamps.setSpacing(3)
-		lamps.addStretch(1)
-
-		for lamp in self.visible_lamps():
-			lamp.setVisible(True)
-			lamps.addWidget(lamp)
-
-		lamps.addStretch(1)
-
-		body = QHBoxLayout()
-		body.setSpacing(6)
-		body.addLayout(rows)
-		body.addLayout(lamps)
-
-		self._root.addLayout(body)
+		self._root.addLayout(self._body)
 
 		# Any height beyond what the rows need pools here rather than being shared out between
-		# them. The size policy above already stops a well-behaved container from growing the
-		# widget at all; this keeps the rows packed even when something resizes it directly.
+		# them. The size policy already stops a well-behaved container from growing the widget at
+		# all; this keeps the rows packed even when something resizes it directly.
 		self._root.addStretch(1)
 
 		# Switching density changes how much room this control needs. Without telling the parent,
@@ -1719,19 +1908,16 @@ class _ParameterControlBase(_TrackedControlBase):
 
 
 def _drain_layout(layout):
-	''' Removes every item from a layout tree without disturbing any widget's parent.
+	''' Removes every item from one layout without disturbing any widget's parent.
 
 	takeAt() detaches a QWidgetItem but leaves the widget itself parented where it was, which is
-	exactly what a layout rebuild needs: the control keeps its widgets, the layout keeps nothing.
+	exactly what re-filling a layout needs: the control keeps its widgets, the layout keeps
+	nothing. Deliberately shallow - each layout in the skeleton is drained by name, so recursing
+	would empty the same containers twice.
 	'''
 
 	while layout.count():
-
-		item = layout.takeAt(0)
-
-		child = item.layout()
-		if child is not None:
-			_drain_layout(child)
+		layout.takeAt(0)
 
 class ParameterBox(_ParameterControlBase):
 	''' A numeric parameter. Example:
@@ -2012,6 +2198,11 @@ class ConstellationWindow(QMainWindow):
 
 		self.setDockNestingEnabled(True)
 
+		# Cmd/Ctrl-W and Cmd/Ctrl-Q, on every Constellation window. Installed here rather than
+		# relying on the menu bar alone, because the menu is optional (`add_menu=False`) and on
+		# some platforms a menu action's shortcut is not active until the menu is shown.
+		self._window_shortcuts = install_window_shortcuts(self)
+
 		if add_menu:
 			self.add_basic_menu_bar()
 
@@ -2076,7 +2267,7 @@ class ConstellationWindow(QMainWindow):
 		self.file_menu = self.bar.addMenu("File")
 
 		self.close_window_act = QAction("Close Window", self)
-		self.close_window_act.setShortcut("Ctrl+W")
+		self.close_window_act.setShortcut(QKeySequence.StandardKey.Close)
 		self.close_window_act.triggered.connect(self._basic_menu_close)
 		self.file_menu.addAction(self.close_window_act)
 
@@ -2085,9 +2276,19 @@ class ConstellationWindow(QMainWindow):
 		self.view_log_act.triggered.connect(self._basic_menu_view_log)
 		self.file_menu.addAction(self.view_log_act)
 
+		self.file_menu.addSeparator()
+
+		self.quit_act = QAction("Quit", self)
+		self.quit_act.setShortcut(QKeySequence.StandardKey.Quit)
+		self.quit_act.setMenuRole(QAction.MenuRole.QuitRole)
+		self.quit_act.triggered.connect(QApplication.quit)
+		self.file_menu.addAction(self.quit_act)
+
 	def _basic_menu_close(self):
+		# Closes this window only. This used to call sys.exit(0) straight after close(), so
+		# "Close Window" killed the whole application and took every other instrument's panel
+		# with it - which is what Quit is for, and it is now a separate action.
 		self.close()
-		sys.exit(0)
 
 	def _basic_menu_view_log(self):
 		self.log.error(f"Log viewing not implemented.")

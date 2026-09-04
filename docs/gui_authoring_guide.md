@@ -315,6 +315,69 @@ new work.
 `examples/parameter_widgets_demo.py` runs the whole family at all three densities against two dummy
 scopes, with buttons that simulate a failed send and a dropped connection.
 
+## Window chrome: shortcuts, folding, resizing
+
+### Shortcuts
+
+`ConstellationWindow` installs **Cmd/Ctrl-W** (close this window) and **Cmd/Ctrl-Q** (quit) for
+you. Any other top-level window Constellation puts on screen should call the same helper:
+
+```python
+from constellation.ui import install_window_shortcuts
+
+install_window_shortcuts(my_dialog, on_close=my_dialog.reject)
+```
+
+They are installed directly rather than relying on the menu bar, because the menu is optional
+(`add_menu=False`) and on some platforms a menu action's shortcut is not live until the menu has
+been shown. `QKeySequence.keyBindings()` supplies the platform-correct sequence, with an explicit
+`Ctrl+W`/`Ctrl+Q` appended where the platform provides none (Windows has no standard Quit
+shortcut). Shortcuts are `WindowShortcut`-scoped, so a dialog's Cmd-W closes the dialog rather than
+the panel behind it.
+
+### `CollapsiblePanel`
+
+Use this instead of `QGroupBox` for a section of a front panel:
+
+```python
+panel = CollapsiblePanel("Trigger")
+panel.set_content_layout(my_layout)
+```
+
+Clicking the header folds the section away. Not `QGroupBox.setCheckable(True)`, for two reasons: a
+checkable group box *disables* its contents rather than hiding them, so it frees no space at all;
+and its checkbox reads as "this feature is off", which is a completely different claim from "I have
+folded this away".
+
+`fold=` chooses which dimension collapsing gives back — `Qt.Orientation.Vertical` (the default)
+surrenders height, `Horizontal` surrenders width. Use `Horizontal` for panels sitting in a row of
+columns, like a per-channel strip: folding one should give its width to its neighbours rather than
+leaving an empty column.
+
+Collapsing clamps the widget's maximum size. Hiding the contents alone is not enough — a splitter
+keeps holding the old size, and the panel becomes a blank gap instead of releasing its room.
+
+### `make_splitter`
+
+Nest splitters instead of fixing a grid, so the person using the instrument can give the plot more
+room or shrink the channel strip:
+
+```python
+side  = make_splitter(Qt.Orientation.Vertical, trigger_box, horiz_box)
+upper = make_splitter(Qt.Orientation.Horizontal, plot, side, stretch=[3, 1])
+body  = make_splitter(Qt.Orientation.Vertical, upper, channels_box, stretch=[4, 1])
+```
+
+**Use `stretch=`, not `sizes=`.** `QSplitter.setSizes([3, 1])` means three *pixels* and one pixel,
+which Qt then clamps up to the children's minimums — a ratio passed there silently does nothing.
+Stretch factors are proportions, and they survive a resize.
+
+The helper also widens the handle (Qt's 1px default hairline is undiscoverable, so panels look
+fixed even when they aren't) and turns off `childrenCollapsible`: the panel header is the honest way
+to fold something away, and a child dragged to zero width just looks broken.
+
+`oscilloscope_gui.py` is the worked example of all three.
+
 ## Testing your widget headlessly
 
 No display needed - Qt has an offscreen platform plugin, and a `dummy=True` driver gives you

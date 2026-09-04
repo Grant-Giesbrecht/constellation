@@ -53,36 +53,39 @@ def build_panel(bridge, title:str, view:str=ParameterView.FULL) -> QGroupBox:
 	box = QGroupBox(title)
 	grid = QGridLayout()
 
+	def V(**kwargs):
+		""" Every control in this panel is built directly in the requested view, rather than being
+		built compact and switched afterwards - a redundant re-layout at startup. """
+		kwargs.setdefault("view", view)
+		return kwargs
+
 	controls = [
 		# A unit-prefix selector, so a user types "2" and picks "ms" rather than counting zeros.
 		ParameterBox(bridge, "Time/div", get=lambda s: s.div_time,
 			set_method="set_div_time", set_args=lambda v: (v,), unit="s",
-			prefixes=("", "m", "\u00b5", "n")),
+			prefixes=("", "m", "\u00b5", "n"), **V()),
 
 		ParameterBox(bridge, "Volts/div", get=lambda s: s.channels[CHANNEL].div_volt,
-			set_method="set_div_volt", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,), unit="V"),
+			set_method="set_div_volt", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,), unit="V", **V()),
 
 		# ...and the same value on an LCD readout instead of a text field.
 		ParameterBox(bridge, "Offset", get=lambda s: s.channels[CHANNEL].offset_volt,
 			set_method="set_offset_volt", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,),
-			unit="V", abs_tolerance=0.01, prefixes=("", "m"), lcd=True),
+			unit="V", abs_tolerance=0.01, prefixes=("", "m"), lcd=True, **V()),
 
 		ParameterToggle(bridge, f"Channel {CHANNEL}", get=lambda s: s.channels[CHANNEL].chan_en,
-			set_method="set_chan_enable", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,)),
+			set_method="set_chan_enable", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,), **V()),
 
 		ParameterChoice(bridge, "Coupling", get=lambda s: s.channels[CHANNEL].coupling,
 			set_method="set_coupling", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,),
 			choices=[Oscilloscope.COUPLING_AC, Oscilloscope.COUPLING_DC, Oscilloscope.COUPLING_GND],
-			labels={Oscilloscope.COUPLING_AC: "AC", Oscilloscope.COUPLING_DC: "DC", Oscilloscope.COUPLING_GND: "GND"}),
+			labels={Oscilloscope.COUPLING_AC: "AC", Oscilloscope.COUPLING_DC: "DC", Oscilloscope.COUPLING_GND: "GND"}, **V()),
 
 		ParameterChoice(bridge, "Trigger mode", get=lambda s: s.trigger_mode,
 			set_method="set_trigger_mode", set_args=lambda v: (v,),
 			choices=[Oscilloscope.TRIG_AUTO, Oscilloscope.TRIG_NORM, Oscilloscope.TRIG_SINGLE],
-			labels={Oscilloscope.TRIG_AUTO: "AUTO", Oscilloscope.TRIG_NORM: "NORMAL", Oscilloscope.TRIG_SINGLE: "SINGLE"}),
+			labels={Oscilloscope.TRIG_AUTO: "AUTO", Oscilloscope.TRIG_NORM: "NORMAL", Oscilloscope.TRIG_SINGLE: "SINGLE"}, **V()),
 	]
-
-	for control in controls:
-		control.set_view(view)
 
 	for i, control in enumerate(controls):
 		grid.addWidget(control, i // 3, i % 3)
