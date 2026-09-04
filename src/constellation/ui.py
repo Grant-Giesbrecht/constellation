@@ -547,6 +547,631 @@ class TrackedChoice(_TrackedControlBase):
 		self._status_light.setToolTip(f"status: {status} (setpoint={setpoint_value}, confirmed={confirmed_value})")
 
 # ============================================================================
+# Parameter controls - the dense set-point / process-variable family.
+#
+# The Tracked* controls above show one box and one status lamp: the box holds "the setpoint if
+# you've set one, otherwise whatever the instrument last said", and the lamp collapses
+# pending/mismatch/stale into a single colour. That is fine for a simple panel and wrong for
+# diagnosing an instrument, because the two numbers a user needs to compare - what I asked for,
+# what the instrument reports - are never on screen at the same time, and the one lamp answers
+# three different questions at once.
+#
+# The Parameter* family below separates them. Two rows (SP above, PV below) and three independent
+# lamps, because they fail independently and a user needs to know WHICH failed:
+#
+#     Parameter Name
+#   <|SP [ 2.0            ]  * <- can this driver method be trusted at all?
+#     PV|> [ 2.0          ]  * <- did the setpoint reach the instrument?
+#                            * <- does the instrument agree with the setpoint?
+#
+# A command that was sent successfully to a driver method nobody has ever verified, whose
+# read-back then disagrees, is three different colours here and one ambiguous amber above.
+#
+# The SP and PV labels are buttons: clicking SP re-sends the current setpoint, clicking PV
+# re-queries the instrument. Both are things a user reaches for the moment a lamp goes the wrong
+# colour, and neither was reachable before without restarting the panel.
+# ============================================================================
+
+# Verification: can this driver method be trusted? Sourced from the hardware-verification records
+# (see docs/hardware_verification.md), NOT from anything happening at runtime.
+VERIFICATION_COLORS = {
+	"confirmed":   "#2ecc71",  # green  - a person watched the instrument do this
+	"roundtrip":   "#5dade2",  # blue   - set/read-back agreed on real hardware, nobody watched
+	"untested":    "#f1c40f",  # yellow - implemented, never checked (or the check has expired)
+	"broken":      "#e74c3c",  # red    - checked against hardware and it did not work
+	"unavailable": "#4a4a4a",  # dark   - the hardware cannot do this; the control is disabled
+	"unknown":     "#888888",  # grey   - no local driver to ask (an ObserverBridge)
+}
+
+# Setpoint: did what I asked for reach the instrument?
+SEND_COLORS = {
+	"sent":    "#2ecc71",  # green  - the driver call returned successfully
+	"unsent":  "#f1c40f",  # yellow - nothing requested yet, or a request is in flight
+	"failed":  "#e74c3c",  # red    - the driver call failed
+}
+
+# Process variable: does the instrument agree with what I asked for?
+VALUE_COLORS = {
+	"match":       "#2ecc71",  # green  - read back and agrees within tolerance
+	"unqueried":   "#f1c40f",  # yellow - setpoint changed, no read-back since
+	"mismatch":    "#888888",  # grey   - read back and does NOT agree
+	"query_error": "#e74c3c",  # red    - could not read the value at all
+}
+
+# `mismatch` is deliberately GREY rather than red. An instrument quantizes: ask a scope for
+# 0.55 V/div and it will report 0.5, forever. That is the instrument working correctly, so
+# colouring it as an error would leave a panel full of red lamps that everyone learns to ignore -
+# and the one that means something would be lost among them. Grey says "these two numbers differ,
+# look at them", which is exactly what it means.
+
+_VERIFICATION_REPORT_CACHE = {}
+
+def _verification_report(driver_cls, idn:str=None) -> dict:
+	''' capability_report() for one driver class, cached.
+
+	A panel builds dozens of controls, and each report re-reads the YAML and re-hashes every
+	method's source - once per panel is fine, once per widget is not.
+	'''
+
+	key = (driver_cls, idn)
+
+	if key not in _VERIFICATION_REPORT_CACHE:
+		try:
+			from constellation.verification import capability_report
+			_VERIFICATION_REPORT_CACHE[key] = capability_report(driver_cls, idn=idn)
+		except Exception:
+			# A missing/corrupt records file must not take a GUI down with it. Every method then
+			# reads as "unknown", which is the honest answer and fails closed anyway.
+			_VERIFICATION_REPORT_CACHE[key] = {}
+
+	return _VERIFICATION_REPORT_CACHE[key]
+
+def clear_verification_cache():
+	''' Forgets cached verification reports. Call after a hardware run rewrites verification.yaml
+	in the same process. '''
+
+	_VERIFICATION_REPORT_CACHE.clear()
+
+def verification_indicator(bridge, method_names) -> tuple:
+	''' Resolves the verification lamp for one parameter.
+
+	Args:
+		bridge (InstrumentBridge): The control's bridge. Only an OwningBridge has a Driver to ask;
+			an ObserverBridge watches someone else's instrument over labmesh and has no local
+			driver class, so it reports "unknown" rather than guessing.
+		method_names (iterable): The driver methods this control drives, normally the set/get
+			pair.
+
+	Returns:
+		tuple: (key, tooltip_html). `key` indexes VERIFICATION_COLORS.
+
+	Both halves of a set/get pair are considered and the WEAKEST wins, matching how the hardware
+	suite records them: neither half can be verified without the other, so a confirmed setter
+	paired with an unverified getter is not a verified parameter.
+	'''
+
+	driver = getattr(bridge, "driver", None)
+	if driver is None:
+		return "unknown", "Verification: <b>unknown</b><br>No local driver - this panel is observing an instrument owned by another process."
+
+	idn = getattr(getattr(driver, "id", None), "idn_model", None) or None
+	report = _verification_report(type(driver), idn=idn)
+
+	# Rank low-to-high; the lamp shows the worst answer among the methods involved.
+	order = ["unavailable", "broken", "unknown", "untested", "roundtrip", "confirmed"]
+	worst = None
+	lines = []
+
+	for name in method_names:
+
+		if name is None:
+			continue
+
+		entry = report.get(name)
+		if entry is None:
+			key, detail = "unknown", "no record"
+		else:
+			key, detail = _verification_key(entry)
+
+		lines.append(f"<b>{name}()</b>: {key} - {detail}")
+
+		if worst is None or order.index(key) < order.index(worst):
+			worst = key
+
+	if worst is None:
+		worst = "unknown"
+
+	return worst, f"Verification: <b>{worst}</b><br>" + "<br>".join(lines)
+
+def _verification_key(entry:dict) -> tuple:
+	''' Maps one capability_report() entry onto a lamp colour and an explanation. '''
+
+	from constellation.verification import VerificationStatus
+
+	status = entry.get("status")
+	detail = entry.get("detail")
+
+	# The decorator's reason string, or the winning record - both are worth showing verbatim,
+	# because "why" is the whole reason someone moused over the lamp.
+	if isinstance(detail, dict):
+		note = ", ".join(f"{k}={detail[k]}" for k in ("model", "firmware", "date", "by") if detail.get(k))
+	else:
+		note = detail or ""
+
+	if status == VerificationStatus.CONFIRMED:
+		return "confirmed", note or "a person confirmed the physical effect"
+	if status == VerificationStatus.ROUNDTRIP:
+		return "roundtrip", (note + " (self-consistent; nobody watched the instrument)").strip()
+	if status == VerificationStatus.FAILED:
+		return "broken", note or "checked against hardware and it did not work"
+	if status in (VerificationStatus.UNAVAILABLE, VerificationStatus.UNIMPLEMENTED):
+		return "unavailable", note or status.value
+
+	# Everything else - unverified, and all three staleness flavours - reads as untested. A stale
+	# record's claim no longer stands, so it must not be shown as verified; its detail says which
+	# way it expired.
+	if status in (VerificationStatus.STALE_CODE, VerificationStatus.STALE_FRAMEWORK, VerificationStatus.STALE_FIRMWARE):
+		return "untested", f"{status.value} - was verified, but no longer describes this code/instrument"
+
+	return "untested", note or "implemented, never checked against hardware"
+
+class StatusLamp(QLabel):
+	''' One coloured dot with a rich tooltip. Pure visuals - knows nothing about instruments. '''
+
+	def __init__(self, size:int=11, parent=None):
+		super().__init__(parent)
+
+		self._size = size
+		self.setFixedSize(size, size)
+		self.set("#888888", "")
+
+	def set(self, color:str, tooltip:str):
+		r = self._size // 2
+		self.setStyleSheet(f"background-color:{color}; border-radius:{r}px; min-width:{self._size}px; min-height:{self._size}px; max-width:{self._size}px; max-height:{self._size}px;")
+		self.setToolTip(tooltip)
+
+class ActionIcon(QWidget):
+	''' The clickable "SP"/"PV" label beside a field: a short caption and a triangle pointing the
+	way the data flows - out to the instrument for SP, back from it for PV.
+
+	Drawn rather than loaded from a PNG. The package-data situation for `assets/` has never been
+	verified against a built wheel (see todo P18), so a control that needs an image file to
+	function would be one bad install away from an invisible button; drawing also stays crisp on
+	a HiDPI display and can recolour on hover to show it is clickable. `pixmap=` accepts a
+	QPixmap for anyone who does want artwork.
+	'''
+
+	clicked = pyqtSignal()
+
+	def __init__(self, text:str, points_left:bool, tooltip:str="", pixmap=None, parent=None):
+		super().__init__(parent)
+
+		self._text = text
+		self._points_left = points_left
+		self._pixmap = pixmap
+		self._hover = False
+		self._enabled = True
+
+		self.setFixedSize(34, 22)
+		self.setToolTip(tooltip)
+		self.setCursor(QtGui.QCursor(Qt.CursorShape.PointingHandCursor))
+
+	def setEnabled(self, enabled:bool):
+		self._enabled = enabled
+		super().setEnabled(enabled)
+		self.update()
+
+	def enterEvent(self, event):
+		self._hover = True
+		self.update()
+		super().enterEvent(event)
+
+	def leaveEvent(self, event):
+		self._hover = False
+		self.update()
+		super().leaveEvent(event)
+
+	def mousePressEvent(self, event):
+		if self._enabled and event.button() == Qt.MouseButton.LeftButton:
+			self.clicked.emit()
+		super().mousePressEvent(event)
+
+	def paintEvent(self, event):
+
+		painter = QtGui.QPainter(self)
+		painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+		color = self.palette().text().color()
+		if not self._enabled:
+			color.setAlpha(70)
+		elif self._hover:
+			color = QtGui.QColor("#5dade2")
+
+		if self._pixmap is not None:
+			painter.drawPixmap(self.rect(), self._pixmap)
+			painter.end()
+			return
+
+		h = self.height()
+		tri_w, tri_h = 8, 10
+		gap = 2
+
+		# Triangle leads for SP (pointing at the field the value is going into) and trails for PV
+		# (pointing out of the field the value came from), so the two rows are distinguishable at
+		# a glance without reading the caption.
+		if self._points_left:
+			tri_x, text_x = 0, tri_w + gap
+		else:
+			text_x, tri_x = 0, self.width() - tri_w
+
+		painter.setPen(color)
+		font = painter.font()
+		font.setBold(True)
+		painter.setFont(font)
+		painter.drawText(QtCore.QRect(text_x, 0, self.width() - tri_w - gap, h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter, self._text)
+
+		top = (h - tri_h) // 2
+		triangle = QtGui.QPolygon([
+			QtCore.QPoint(tri_x + (0 if self._points_left else tri_w), top + tri_h // 2),
+			QtCore.QPoint(tri_x + (tri_w if self._points_left else 0), top),
+			QtCore.QPoint(tri_x + (tri_w if self._points_left else 0), top + tri_h),
+		])
+
+		painter.setBrush(QtGui.QBrush(color))
+		painter.setPen(Qt.PenStyle.NoPen)
+		painter.drawPolygon(triangle)
+		painter.end()
+
+class _ParameterControlBase(_TrackedControlBase):
+	''' Shared machinery for the SP/PV family: the three-lamp state, the lamp column, the title,
+	and the two action buttons. Subclasses supply the SP editor and how to render a value.
+
+	Deliberately built on _TrackedControlBase rather than replacing it - the setpoint/confirmed
+	bookkeeping there is already correct, and the existing Tracked* controls keep working
+	untouched. What is added is the decomposition of one status into three, plus a tolerance that
+	the single-lamp version never had.
+	'''
+
+	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
+			set_args:callable=None, get_method:str=None, get_args:tuple=(), unit:str="",
+			tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0):
+
+		super().__init__(bridge, label, get, set_method, set_args, stale_after_s)
+
+		# Every category API is a set_x/get_x pair, so the getter's name is derivable - but it can
+		# be given explicitly for anything that doesn't follow the convention.
+		if get_method is None and set_method.startswith("set_"):
+			get_method = "get_" + set_method[4:]
+
+		self.get_method = get_method
+		self.get_args = tuple(get_args)
+		self.tolerance = tolerance
+		self.abs_tolerance = abs_tolerance
+
+		self._send_state = "unsent"
+		self._send_error = ""
+		self._awaiting_readback = False
+		self._query_error = ""
+		self._online = True
+
+		self.title = QLabel(label)
+		self.title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+		self.lamp_verification = StatusLamp()
+		self.lamp_send = StatusLamp()
+		self.lamp_value = StatusLamp()
+
+		self.sp_icon = ActionIcon("SP", points_left=True, tooltip="Send this setpoint to the instrument again")
+		self.pv_icon = ActionIcon("PV", points_left=False, tooltip="Re-read this value from the instrument")
+		self.sp_icon.clicked.connect(self.resend)
+		self.pv_icon.clicked.connect(self.requery)
+		self.pv_icon.setEnabled(self.get_method is not None)
+
+		self.pv_display = QLineEdit()
+		self.pv_display.setReadOnly(True)
+		self.pv_display.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+		self.unit = unit
+
+		# Resolved once: verification is a property of the code and the records, not of anything
+		# happening at runtime, so it cannot change while a panel is open.
+		self._verification_key, self._verification_tip = verification_indicator(bridge, (set_method, get_method))
+
+	def _build_layout(self, sp_editor):
+		''' Assembles the two rows and the lamp column around whatever editor the subclass built. '''
+
+		lamps = QVBoxLayout()
+		lamps.setSpacing(3)
+		lamps.addWidget(self.lamp_verification)
+		lamps.addWidget(self.lamp_send)
+		lamps.addWidget(self.lamp_value)
+		lamps.addStretch(1)
+
+		sp_row = QHBoxLayout()
+		sp_row.setContentsMargins(0, 0, 0, 0)
+		sp_row.addWidget(self.sp_icon)
+		sp_row.addWidget(sp_editor, 1)
+
+		pv_row = QHBoxLayout()
+		pv_row.setContentsMargins(0, 0, 0, 0)
+		pv_row.addWidget(self.pv_icon)
+		pv_row.addWidget(self.pv_display, 1)
+
+		if self.unit:
+			for row in (sp_row, pv_row):
+				row.addWidget(QLabel(self.unit))
+
+		rows = QVBoxLayout()
+		rows.setSpacing(3)
+		rows.addWidget(self.title)
+		rows.addLayout(sp_row)
+		rows.addLayout(pv_row)
+
+		layout = QHBoxLayout()
+		layout.setContentsMargins(4, 4, 4, 4)
+		layout.addLayout(rows, 1)
+		layout.addLayout(lamps)
+		self.setLayout(layout)
+
+		# A method the hardware cannot do, or that nobody has written, gets a visibly dead
+		# control rather than one that raises FeatureUnavailable when clicked.
+		if self._verification_key == "unavailable":
+			for widget in (sp_editor, self.sp_icon, self.pv_icon):
+				widget.setEnabled(False)
+			self.setToolTip(self._verification_tip)
+
+		self._refresh_display()
+
+	# --- user actions -------------------------------------------------------
+
+	def resend(self):
+		''' Re-sends the current setpoint. Does nothing if the user has never set one - there is
+		no defensible value to send, and inventing one would write to an instrument on a click
+		the user thought was a refresh. '''
+
+		if self._setpoint is None:
+			return
+
+		self._pending = True
+		self._send_state = "unsent"
+		self._awaiting_readback = True
+		self._refresh_display()
+		self.bridge.request(self.set_method, *self.set_args(self._setpoint))
+
+	def requery(self):
+		''' Asks the instrument for the value again. '''
+
+		if self.get_method is None:
+			return
+
+		self.bridge.request(self.get_method, *self.get_args)
+
+	# --- state machine ------------------------------------------------------
+
+	def _matches(self, a, b) -> bool:
+		''' Whether a read-back agrees with a setpoint.
+
+		Instruments quantize - a scope asked for 0.55 V/div reports 0.5 - so exact equality
+		(which is what the single-lamp Tracked* controls use) marks a correctly-working
+		instrument as mismatched forever. Numeric comparisons get a relative tolerance;
+		everything else falls back to equality.
+		'''
+
+		if a is None or b is None:
+			return False
+
+		if isinstance(a, bool) or isinstance(b, bool):
+			return bool(a) == bool(b)
+
+		try:
+			a_f, b_f = float(a), float(b)
+		except (TypeError, ValueError):
+			return a == b
+
+		return abs(a_f - b_f) <= max(self.abs_tolerance, abs(b_f) * self.tolerance)
+
+	def _user_changed(self, new_value):
+		self._send_state = "unsent"
+		self._send_error = ""
+		self._awaiting_readback = True
+		super()._user_changed(new_value)
+
+	def _on_command_result(self, method_name, args, success, result):
+
+		if method_name == self.set_method:
+			self._send_state = "sent" if success else "failed"
+			self._send_error = "" if success else str(result)
+
+		if method_name == self.get_method:
+			self._query_error = "" if success else str(result)
+
+		super()._on_command_result(method_name, args, success, result)
+		self._refresh_display()
+
+	def _on_state_changed(self, state):
+
+		try:
+			self.get(state)
+		except Exception:
+			return
+
+		self._awaiting_readback = False
+		self._query_error = ""
+		super()._on_state_changed(state)
+
+	def _on_connection_changed(self, online):
+		self._online = online
+		super()._on_connection_changed(online)
+		self._refresh_display()
+
+	def _value_status(self) -> str:
+
+		if self._query_error or not self._online:
+			return "query_error"
+		if self._confirmed is None or self._awaiting_readback:
+			return "unqueried"
+		if self._setpoint is None or self._matches(self._confirmed, self._setpoint):
+			return "match"
+
+		return "mismatch"
+
+	def _format(self, value) -> str:
+		return "" if value is None else str(value)
+
+	def _refresh_lamps(self):
+
+		self.lamp_verification.set(VERIFICATION_COLORS.get(self._verification_key, "#888888"), self._verification_tip)
+
+		# Deliberately NOT gated on self._pending. In the base class `_pending` means "waiting for
+		# a read-back", which is the value lamp's question - letting it mask the send lamp would
+		# re-merge the two facts this widget exists to keep apart. `_send_state` is "unsent" until
+		# a command_result arrives, which already covers "in flight".
+		send = self._send_state
+		send_tip = {
+			"sent": "Setpoint: <b>sent</b><br>The driver call returned successfully.",
+			"unsent": "Setpoint: <b>not sent</b><br>Nothing requested yet, or a request is in flight.",
+			"failed": f"Setpoint: <b>send failed</b><br>{self._send_error}",
+		}[send]
+		self.lamp_send.set(SEND_COLORS[send], send_tip + f"<br>Click SP to re-send. (setpoint={self._setpoint})")
+
+		value = self._value_status()
+		value_tip = {
+			"match": "Measured: <b>agrees with setpoint</b>",
+			"unqueried": "Measured: <b>not re-read since the setpoint changed</b>",
+			"mismatch": "Measured: <b>differs from setpoint</b><br>Often just the instrument quantizing to its own grid - compare the two rows.",
+			"query_error": f"Measured: <b>could not be read</b><br>{self._query_error or 'instrument offline'}",
+		}[value]
+		self.lamp_value.set(VALUE_COLORS[value], value_tip + f"<br>Click PV to re-read. (measured={self._confirmed})")
+
+	def _display(self, confirmed_value, setpoint_value, status):
+
+		self._display_setpoint(setpoint_value if setpoint_value is not None else confirmed_value)
+		self.pv_display.setText(self._format(confirmed_value))
+		self._refresh_lamps()
+
+	def _display_setpoint(self, value):
+		raise NotImplementedError
+
+class ParameterBox(_ParameterControlBase):
+	''' A numeric parameter with its setpoint and its measured value both on screen. Example:
+
+		ParameterBox(bridge, "Volts/div", get=lambda s: s.channels[1].div_volt,
+			set_method="set_div_volt", set_args=lambda v: (1, v), get_args=(1,), unit="V")
+	'''
+
+	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
+			set_args:callable=None, get_method:str=None, get_args:tuple=(), validator=None,
+			unit:str="", tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0):
+
+		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args, unit,
+			tolerance, abs_tolerance, stale_after_s)
+
+		self.edit = QLineEdit()
+		if validator is not None:
+			self.edit.setValidator(validator)
+		self.edit.editingFinished.connect(self._on_edited)
+
+		self._build_layout(self.edit)
+
+	def _on_edited(self):
+
+		try:
+			value = float(self.edit.text())
+		except ValueError:
+			self._refresh_display()   # revert to the last known-good display
+			return
+
+		if value == self._setpoint:
+			return
+
+		self._user_changed(value)
+
+	def _display_setpoint(self, value):
+		if value is not None and not self.edit.hasFocus():
+			self.edit.setText(self._format(value))
+
+class ParameterToggle(_ParameterControlBase):
+	''' An on/off parameter in the same three-lamp frame. The PV row is a read-only field showing
+	what the instrument actually reports, so "I clicked it and nothing happened" is visible
+	rather than inferred. '''
+
+	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
+			set_args:callable=None, get_method:str=None, get_args:tuple=(),
+			on_text:str="ON", off_text:str="OFF", stale_after_s:float=5.0):
+
+		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args,
+			unit="", stale_after_s=stale_after_s)
+
+		self.on_text = on_text
+		self.off_text = off_text
+
+		self.button = QPushButton(off_text)
+		self.button.setCheckable(True)
+		self.button.toggled.connect(self._on_toggled)
+
+		self._build_layout(self.button)
+
+	def _on_toggled(self, checked):
+		self.button.setText(self.on_text if checked else self.off_text)
+		if checked == self._setpoint:
+			return
+		self._user_changed(checked)
+
+	def _format(self, value):
+		if value is None:
+			return ""
+		return self.on_text if value else self.off_text
+
+	def _display_setpoint(self, value):
+		checked = bool(value) if value is not None else False
+		if self.button.isChecked() != checked:
+			self.button.blockSignals(True)
+			self.button.setChecked(checked)
+			self.button.blockSignals(False)
+		self.button.setText(self.on_text if checked else self.off_text)
+
+class ParameterChoice(_ParameterControlBase):
+	''' An enumerated parameter in the same three-lamp frame. Worth having a PV row for: an
+	instrument that silently refuses an unsupported mode looks identical to one that accepted it,
+	until you can see what it actually reports. '''
+
+	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
+			choices:list, set_args:callable=None, get_method:str=None, get_args:tuple=(),
+			labels:dict=None, stale_after_s:float=5.0):
+
+		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args,
+			unit="", stale_after_s=stale_after_s)
+
+		self._choices = list(choices)
+		self._labels = labels or {}
+
+		self.combo = QComboBox()
+		self.combo.addItems([self._format(c) for c in self._choices])
+		self.combo.activated.connect(self._on_activated)
+
+		self._build_layout(self.combo)
+
+	def _on_activated(self, index:int):
+		value = self._choices[index]
+		if value == self._setpoint:
+			return
+		self._user_changed(value)
+
+	def _format(self, value):
+		if value is None:
+			return ""
+		return self._labels.get(value, str(value))
+
+	def _display_setpoint(self, value):
+		if value is None or value not in self._choices:
+			return
+		idx = self._choices.index(value)
+		if self.combo.currentIndex() != idx:
+			self.combo.blockSignals(True)
+			self.combo.setCurrentIndex(idx)
+			self.combo.blockSignals(False)
+
+# ============================================================================
 # Category -> widget registration, so ConstellationWindow.add_instrument(driver) works without
 # the caller needing to know which widget class handles that driver's category.
 # ============================================================================

@@ -30,7 +30,8 @@ after two-level connection tracking: 224 passed, 3 xfailed;
 after the P3 dummy-seeding follow-ups: 252 passed, 3 xfailed;
 after hardware-verification tracking: 270 passed, 3 xfailed;
 after the staleness layer: 286 passed, 3 xfailed;
-after the oscilloscope hardware suite: **317 passed, 19 skipped, 3 xfailed** - the 19 skips are the
+after the oscilloscope hardware suite: 317 passed, 19 skipped, 3 xfailed;
+after the Parameter* GUI controls: **342 passed, 19 skipped, 3 xfailed** - the 19 skips are the
 hardware tests, which need `--address`).
 
 ---
@@ -1284,17 +1285,19 @@ like P16. The architecture itself is settled and built — see `docs/gui_archite
 container all exist in `ui.py`, with widgets registered for `Oscilloscope`, `PowerSupply` and
 `DataAcquisition`.
 
-- [ ] **No test coverage for `ui.py` at all.** The suite is 200 tests of state/dummy/networking
-      and zero touching the GUI layer. Both of the pieces most worth testing are testable
-      headless — Qt's `offscreen` platform plugin needs no display:
+- [ ] **`ui.py` test coverage — partly done.** `tests/test_parameter_widgets.py` (25 tests, 
+      2026-09-04) covers the **`Parameter*` lamp state machine** headless, via Qt's `offscreen`
+      platform plugin and a fake bridge: the three lamps staying independent, the quantization
+      tolerance, the verification lamp's weakest-half rule, stale never reading as verified, and
+      a broken records file not taking the GUI down. This was the half that rots silently — a
+      wrong indicator doesn't crash, it just quietly lies about whether the instrument did what
+      you asked.
+      Still untested:
       - the **bridge threading contract**: `request()` returns immediately; a slow driver call
         stalls only its own bridge's queue and not other bridges; `command_result` fires with
         `success=False` and the exception when a driver method raises; `stop()` actually ends the
         worker thread.
-      - the **`TrackedControl` status state machine** (confirmed / pending / mismatch / stale).
-        This is pure logic over signal inputs, needs no rendering, and is exactly the kind of
-        thing that rots silently — a wrong indicator doesn't crash, it just quietly lies about
-        whether the instrument did what you asked.
+      - the older **`Tracked*` status state machine** (confirmed / pending / mismatch / stale).
       Neither needs a real instrument; a dummy-mode driver plus a fake bridge is enough.
 - [ ] **Protect the data-race guard in `OwningBridge._poll_and_emit()`.** It deliberately
       reconstructs a fresh `InstrumentState` with `from_serial_dict(state_dict)` rather than
@@ -1451,6 +1454,28 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
 
       Known and accepted gaps, documented rather than papered over: a changed **helper in the same
       file**, a behaviour change in a **dependency**, and the **instrument itself** drifting.
+- [x] **GUI integration — the `Parameter*` control family** (2026-09-04). `capability_report()`
+      now drives a verification lamp on every control, and `@feature_unavailable`/
+      `@feature_unimplemented` methods come up visibly dead instead of raising when clicked.
+      Built to the owner's mockup: two rows (SP above, PV below) and three independent lamps, so
+      "can this method be trusted", "did the command get there" and "does the instrument agree"
+      stop being one ambiguous amber light. `ui.py`; docs in `docs/gui_authoring_guide.md`; demo
+      in `examples/parameter_widgets_demo.py`.
+      - Both halves of a set/get pair are consulted and the **weaker wins** — a confirmed setter
+        with an unverified getter is not a verified parameter. Stale reads as untested. An
+        `ObserverBridge` has no local driver, so it reports `unknown` rather than guessing
+        optimistically.
+      - `mismatch` is **grey, not red**: an instrument quantizing 0.55 → 0.5 V/div is working
+        correctly, and a panel of permanent red is a panel nobody reads. Which also means these
+        controls needed a **tolerance** — the `Tracked*` family compares with exact `!=`, so a
+        quantizing instrument sits on red forever. That older bug is documented in the authoring
+        guide rather than changed, since `Tracked*` behaviour is depended on elsewhere.
+      - The SP/PV row labels are buttons: re-send and re-query. SP does nothing without a
+        setpoint — a refresh-looking click must never invent a value and write it to hardware.
+      - Icons are drawn with QPainter rather than loaded from PNGs, because the `assets/`
+        package-data situation is still unverified against a built wheel (see above) and a
+        control that needs an image file to function would be one bad install away from an
+        invisible button. `ActionIcon(pixmap=...)` accepts artwork for anyone who wants it.
 
 ### Open
 
@@ -1472,8 +1497,8 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
       written as a script with the assertions replaced by eyeballing.
 - [ ] **Run it.** Nothing in the oscilloscope `verification.yaml` is anything but `unverified` —
       the machinery exists, no instrument has been in front of it yet.
-- [ ] **GUI integration** — `capability_report()` is what the widget layer needs to grey out
-      `unavailable` controls and badge `unverified` ones with a caution marker. See P17.
+- [ ] **Roll the `Parameter*` controls into the category widgets.** `oscilloscope_gui.py` and
+      `power_supply_gui.py` still use `Tracked*` throughout.
 
 ## Execution order (agreed)
 

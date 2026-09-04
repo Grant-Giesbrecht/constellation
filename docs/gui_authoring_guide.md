@@ -143,6 +143,93 @@ This is implemented once, in `_TrackedControlBase._status()` (`src/constellation
 don't reimplement it per category, only per control instance via the `get`/`set_method`/`set_args`
 you pass in.
 
+Note the `mismatch` comparison here is exact equality, which means an instrument that quantizes
+(ask a scope for 0.55 V/div, get 0.5) sits on red forever. The `Parameter*` controls below fix that
+with a tolerance, and separate this one lamp into the three independent questions it is currently
+collapsing.
+
+## Dense controls: the `Parameter*` family
+
+The `Tracked*` controls above show one box and one lamp. That box holds *either* your setpoint or
+the instrument's value — never both — and the one lamp answers three different questions at once.
+For a simple panel that is fine. For diagnosing an instrument it isn't: the two numbers you need to
+compare are never on screen together, and an amber lamp doesn't tell you whether the command failed
+to send or the instrument disagreed with it.
+
+`ParameterBox` / `ParameterToggle` / `ParameterChoice` are the dense version. Two rows and three
+independent lamps:
+
+```
+        Parameter Name
+  ◀SP [ 0.55        ] V   ●  can this driver method be trusted at all?
+  PV▶ [ 0.5         ] V   ●  did the setpoint reach the instrument?
+                          ●  does the instrument agree with the setpoint?
+```
+
+Same constructor shape as the `Tracked*` controls, plus a couple of extras:
+
+```python
+ParameterBox(bridge, "Volts/div", get=lambda s: s.channels[1].div_volt,
+             set_method="set_div_volt", set_args=lambda v: (1, v),
+             get_args=(1,), unit="V", tolerance=0.01)
+```
+
+`get_method` is derived from `set_method` by the `set_x`/`get_x` convention every category API
+follows — pass it explicitly for anything that doesn't. `get_args` are the arguments the *getter*
+needs (a channel number), and are what the PV button re-queries with.
+
+### The three lamps
+
+**Verification** — from the hardware-verification records, not from anything happening at runtime.
+Green `confirmed`, blue `roundtrip`, yellow `untested`, red `broken`, dark `unavailable`, grey
+`unknown`. Both halves of the set/get pair are consulted and **the weaker one wins**: neither half
+can be verified without the other, so a confirmed setter with an unverified getter is not a verified
+parameter. Anything stale reads as `untested` — a record whose code has since changed no longer
+stands. See `docs/hardware_verification.md`.
+
+An `unavailable` method (`@feature_unavailable`/`@feature_unimplemented`) also **disables the
+control**, so a DS1000E's timebase field is visibly dead rather than raising `FeatureUnavailable`
+when a user touches it.
+
+An `ObserverBridge` has no local driver to ask, so its verification lamp is grey/`unknown`. That is
+the honest answer; guessing here would guess optimistically, which is the exact failure the
+verification scheme exists to prevent.
+
+**Setpoint sent** — green `sent`, yellow `unsent`/in flight, red `failed` (with the error in the
+tooltip). Deliberately *not* gated on whether a read-back has arrived: that is the third lamp's
+question, and merging them would re-create the ambiguity this widget exists to remove.
+
+**Measured** — green `match`, yellow `unqueried` (setpoint changed, nothing read back since), grey
+`mismatch`, red `query_error`.
+
+`mismatch` is **grey, not red**, and this is the design decision most worth understanding. Ask a
+scope for 0.55 V/div and it will report 0.5 — forever. That is the instrument working correctly. A
+red lamp there would leave a panel full of permanent red that everyone learns to ignore, and the one
+that means something would be lost among them. Grey says "these two numbers differ, look at them",
+which is exactly what it means — and both numbers are on screen, so looking takes no clicks.
+
+For the same reason these controls compare with a **tolerance** (`tolerance=` relative, default 1%,
+plus `abs_tolerance=` for values that legitimately sit at zero). The `Tracked*` controls use exact
+`!=`, which marks a correctly-quantizing instrument as mismatched forever.
+
+### The SP and PV buttons
+
+The row labels are buttons. **SP re-sends** the current setpoint; **PV re-queries** the instrument.
+Both are what a user reaches for the moment a lamp goes the wrong colour, and neither was reachable
+before without restarting the panel.
+
+SP does nothing when the user has never set a setpoint — clicking something that looks like a
+refresh must not invent a value and write it to an instrument.
+
+### Which family to use
+
+Use `Parameter*` for anything a user might need to diagnose — essentially every real instrument
+setting. Use `Tracked*` where space is tight and the parameter is uncontroversial. They share the
+same `bridge`/`get`/`set_method`/`set_args` interface and can be mixed freely in one panel.
+
+`examples/parameter_widgets_demo.py` runs the whole family against two dummy scopes, with buttons
+that simulate a failed send and a dropped connection so the lamps can be watched doing their job.
+
 ## Testing your widget headlessly
 
 No display needed - Qt has an offscreen platform plugin, and a `dummy=True` driver gives you
@@ -179,8 +266,10 @@ real hardware or a visible display.
 - [ ] `@register_gui(YourCategory)` on the widget class
 - [ ] No code path touches `bridge.driver` or any `Driver` method/attribute directly
 - [ ] Per-channel/per-index closures bind the loop variable as a default argument
-- [ ] Actions (no setpoint) are plain buttons; settings (have a setpoint) are `Tracked*`; read-only
-      measurements are plain labels updated from `on_state_changed`
+- [ ] Actions (no setpoint) are plain buttons; settings (have a setpoint) are `Parameter*` (or
+      `Tracked*` where space is tight); read-only measurements are plain labels updated from
+      `on_state_changed`
+- [ ] Numeric controls that an instrument will quantize carry a sensible `tolerance`/`abs_tolerance`
 - [ ] Anything slow is behind an explicit button, not folded into automatic polling
 - [ ] Channel/index counts come from `state`, not from a driver attribute
 - [ ] Smoke-tested headlessly against a `dummy=True` driver
