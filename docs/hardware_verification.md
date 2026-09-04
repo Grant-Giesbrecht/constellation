@@ -185,7 +185,7 @@ RigolDS1000Z:
       epoch: 1
       date: 2026-08-20
       by: GG
-      notes: "front panel CH1 vertical scale read 2 V/div"
+      note: "front panel CH1 vertical scale read 2 V/div"
     - status: failed
       idn: "RIGOL TECHNOLOGIES,DS1052E,DS1EA000000000,02.01"
       model: DS1052E
@@ -194,12 +194,13 @@ RigolDS1000Z:
       epoch: 1
       date: 2026-08-21
       by: GG
-      notes: "command accepted, scale unchanged"
+      note: "command accepted, scale unchanged"
   set_trigger_level:
     - {status: unverified}
 ```
 
-Everything except `by` and `notes` is captured automatically by the run — which is why the fields
+Records are written as single-line flow mappings (`- {status: confirmed, model: DS1054Z, ...}`);
+they are expanded here for readability. Everything except `by` and `note` is captured automatically by the run — which is why the fields
 can be trusted for expiry checks later, in a way that hand-typed dates cannot.
 
 Records are a **list per method, keyed by model**, because the interesting answer later is
@@ -226,6 +227,9 @@ bookkeeping honest, which is the part that always rots:
 5. `roundtrip`/`confirmed` records carry the provenance that makes them expirable;
 6. the framework fingerprint hasn't changed without an epoch decision.
 
+`tests/test_verification_writer.py` and `tests/test_hardware_suite.py` cover the other half: the
+rules the record writer applies, and what a run concludes from a set of results.
+
 This is the same pattern `InstrumentState.__init_subclass__` and `ALLOWED_ENABLEDUMMY` use
 elsewhere in the suite: make omission a test failure rather than relying on discipline.
 
@@ -233,31 +237,92 @@ elsewhere in the suite: make omission a test failure rather than relying on disc
 
 ```bash
 # round-trip mode: fast, unattended, proves self-consistency
-pytest -m hardware --address=TCPIP0::192.168.1.74::INSTR --driver=RigolDS1000Z
+pytest tests/hardware --driver=RigolDS1000Z --address=TCPIP0::192.168.1.74::INSTR
 
 # moderated mode: pauses at each step for a human to confirm the instrument's behaviour
-pytest -m hardware --confirm --address=... --driver=...
+pytest tests/hardware --driver=RigolDS1000Z --address=... --confirm
 ```
 
-Hardware tests are marked `@pytest.mark.hardware` and deselected by default, so the ordinary suite
-stays runnable with no instruments attached.
+Hardware tests are marked `@pytest.mark.hardware` and skipped unless `--address` is given, so
+`pytest tests/` on a laptop with nothing on the bench behaves exactly as it did before they
+existed.
 
-In moderated mode each test prints what to look at before asking:
+| option | meaning |
+| --- | --- |
+| `--address` | VISA resource string, or a labmesh relay id. Required. |
+| `--driver` | Driver class name, e.g. `RigolDS1000Z`. Required. |
+| `--confirm` | Moderated mode. The only way to earn a `confirmed` record. |
+| `--channel` | Channel to exercise. Defaults to the driver's first channel. |
+| `--operator` | Recorded as `by`. Defaults to `$USER`. |
+| `--model` | Overrides the model parsed out of `*IDN?`. |
+| `--recheck` | Re-run methods already confirmed instead of skipping them. |
+| `--no-record` | Run everything, write nothing. A dry run. |
+| `--dummy` | Smoke-test the harness with no instrument attached. Cannot write records. |
+
+Three things the run does for you:
+
+- **Skips what the driver declares it cannot do.** A `@feature_unavailable` method is skipped with
+  its reason, not failed — a DS1000E is not broken for having no SCPI timebase.
+- **Skips what is already confirmed** (moderated mode), so an interrupted session does not have to
+  be re-answered from the top. Staleness is honoured: a confirmed record whose code has since
+  changed is asked about again. `--recheck` forces everything.
+- **Puts the instrument back.** The bench setup is snapshotted at connect and re-applied at the
+  end. A suite that leaves the timebase somewhere random is a suite people stop running.
+
+In moderated mode each check leaves the instrument sitting at the value in question and then asks:
 
 ```
-Set CH1 volts/div to 2.0 V/div.
-Look at the scope: channel 1's VERTICAL scale should read 2 V/div.
-(If the TIMEBASE changed instead, this driver has a set/get pair that agrees with itself
- and controls the wrong parameter.)
-Confirm? [y/n/s(kip)]
+------------------------------------------------------------------------------
+Channel 1's VERTICAL scale should read 2 V/div, in that channel's badge at the bottom of
+the screen. Check the channel number too: a driver that ignores its channel argument and
+always writes channel 1 round-trips perfectly.
+Did the instrument do this? [y]es / [n]o / [s]kip:
+------------------------------------------------------------------------------
 ```
 
-The prompt has to name the *physical* thing to look at — that is the whole value of the mode, and
-it means the prompt text is per-method content that lives with the test, not boilerplate.
+The prompt has to name the *physical* thing to look at, and the control it would most plausibly be
+confused with. That is the entire value of the mode, and it means prompt text is per-method content
+living with the test, not boilerplate. `n` records a **failure** — a human saying "the front panel
+did not do that" is the strongest negative evidence available. `s` records nothing.
 
-A passing run writes its result back into `verification.yaml`. The writer **never lowers a
-status**: a later round-trip-only run does not downgrade a previously `confirmed` method, it just
-adds nothing. Failures are always recorded.
+Action commands (`run_acquisition`, `stop_acquisition`, `do_single_trigger`, `do_force_trigger`)
+have no read-back, so round-trip mode does not merely test them weakly — it *skips* them, and
+`confirmed` is the only status they can ever hold.
+
+### Smoke-testing the harness without an instrument
+
+```bash
+pytest tests/hardware --dummy --driver=RigolDS1000Z            # and --confirm, to walk the prompts
+```
+
+`--dummy` runs the whole suite against a dummy driver. It is for checking the harness — that the
+checks are wired to the right methods, that the skips fire, that the prompts read sensibly — not
+the driver. It **cannot write records**, enforced in the fixture rather than left to the operator
+remembering `--no-record`: a dummy instrument is not evidence of anything, and a fabricated record
+is worse than none.
+
+### What a run writes
+
+Results are collected over the session and written once at the end, so an interrupted run never
+leaves a half-rewritten file. Three rules govern the merge (`src/constellation/verification_writer.py`):
+
+1. **Never lower a status within the same code.** A later round-trip-only run does not downgrade a
+   method a human confirmed — and it does not restamp its date either, because nobody looked at the
+   front panel today. The qualifier matters: an old `confirmed` cannot lend its strength to an
+   implementation that has since changed, so when the code hash differs the new record *replaces*
+   the old outright. Laundering unconfirmed code as human-confirmed is exactly what the staleness
+   layer exists to prevent.
+2. **Always record failures.** A fresh failure replaces an earlier pass *on the same instrument*,
+   so a regression is never masked by yesterday's success. Records for a *different* instrument
+   accumulate alongside rather than overwriting — one driver covers a series.
+3. **Never destroy the header.** `yaml.safe_dump` of the whole document would delete the comment
+   block explaining what the file is; the header is re-emitted verbatim and only record blocks are
+   generated. Repeated identical runs produce a byte-identical file, so a real change shows up as a
+   real diff.
+
+Every one of these rules is pinned by a test in `tests/test_verification_writer.py`, and the
+suite's own bookkeeping by `tests/test_hardware_suite.py` — both run without hardware, because the
+logic that decides what gets believed later must not be checkable only by someone holding a scope.
 
 ## Reading the result
 
@@ -289,7 +354,21 @@ what renders the per-driver coverage table.
 3. Decorate what the hardware cannot do with `@feature_unavailable`, and what is not written yet
    with `@feature_unimplemented` — do **not** give those YAML entries.
 4. Add the class to `TRACKED_DRIVERS` in `tests/test_verification_records.py`.
-5. Run the suite. It will tell you exactly which methods you missed.
+5. Add it to `driver_registry()` in `tests/hardware/conftest.py`, so `--driver=<name>` can build it.
+6. Run the suite. It will tell you exactly which methods you missed.
 
-Steps 2 and 5 are the ones that make this maintainable: you never have to remember the method list,
+Steps 2 and 6 are the ones that make this maintainable: you never have to remember the method list,
 because the test computes it from the category and reports the difference.
+
+## Adding a category to the hardware suite
+
+`tests/hardware/conftest.py` and `hardware_support.py` are category-agnostic - the instrument
+fixture, the confirmation prompt, the recorder and the skip rules know nothing about oscilloscopes.
+A new category needs one module, `tests/hardware/test_<category>_hw.py`, containing the checks
+themselves: which set/get pairs to drive, with what values, and **what a human should see on the
+front panel**. That last part is the only irreducible work, and it is the part worth the time -
+the rest is a table.
+
+`test_oscilloscope_hw.py` is the reference. Because drivers implement a category API, one module
+covers every driver in that category; per-driver differences are handled by the capability
+decorators, which the runner skips on automatically.

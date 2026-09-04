@@ -379,7 +379,18 @@ class DirectSCPIRelay(CommandRelay):
 		''' Attempts to close the connection to the physical 
 		instrument.'''
 		
-		self.inst.close()	
+		# `inst` is None whenever no connection was ever opened - a dummy driver, or a connect()
+		# that failed. Closing those raised AttributeError, so tearing down a driver that never
+		# came online crashed instead of being a no-op.
+		if self.inst is None:
+			return
+		
+		try:
+			self.inst.close()
+		except Exception as e:
+			self.note_failure(e)
+		finally:
+			self.inst = None
 	
 	def write(self, cmd:str) -> bool:
 		''' Sends a SCPI command via PyVISA.

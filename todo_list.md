@@ -29,7 +29,9 @@ after error classification: 216 passed, 3 xfailed;
 after two-level connection tracking: 224 passed, 3 xfailed;
 after the P3 dummy-seeding follow-ups: 252 passed, 3 xfailed;
 after hardware-verification tracking: 270 passed, 3 xfailed;
-after the staleness layer: **286 passed, 3 xfailed**).
+after the staleness layer: 286 passed, 3 xfailed;
+after the oscilloscope hardware suite: **317 passed, 19 skipped, 3 xfailed** - the 19 skips are the
+hardware tests, which need `--address`).
 
 ---
 
@@ -1375,41 +1377,61 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
 - [x] **`tests/test_verification_records.py`** — 18 tests, no hardware needed.
 - [x] **`docs/hardware_verification.md`**.
 - [x] `PyYAML` added to `pyproject.toml`, plus `[tool.setuptools.package-data]`.
-
-### Open
-
-- [ ] **Confirm package data actually ships.** There was no `[tool.setuptools.package-data]`
-      section before this, and no `MANIFEST.in` — so `src/constellation/assets/*` (the GUI's
-      indicator icons) may never have been included in the wheel. The new section covers both
-      `assets/` and `verification.yaml`, but **this has not been verified against a built
-      wheel**. Build one and check. If the icons were missing, that's a live bug in installed
-      copies, independent of this priority.
-- [ ] **Build the hardware suite** (`tests/hardware/`, `@pytest.mark.hardware`, deselected by
-      default, `--address=`/`--driver=` options). `examples/osc_hardware_demo.py` and
-      `vna_hardware_demo.py` are this already, written as scripts with the assertions replaced by
-      eyeballing — converting them is mostly mechanical, and because drivers are written against
-      category APIs, one parametrized suite covers every driver in a category.
-- [ ] **Two modes, per the owner's design (2026-08-26).** Round-trip mode is fast and unattended;
-      **moderated mode** (`--confirm`) pauses at each step for a human to confirm the instrument
-      actually did the right thing. This is not a nicety — a round trip can be *self-consistently
-      wrong*: if a driver's setter writes the timebase and its getter also reads the timebase,
-      setting volts/div round-trips perfectly while the driver is broken. Only a person looking at
-      the front panel catches that. And for action commands (`run_acquisition`,
-      `do_single_trigger`, `preset`) there is no read-back at all, so round-trip mode is not
-      weaker for them — it is *unreachable*, and `confirmed` is the only status they can ever have.
-      - Prompts must name the **physical** thing to look at ("channel 1's VERTICAL scale should
-        read 2 V/div — if the TIMEBASE changed instead, the set/get pair agrees with itself and
-        controls the wrong parameter"). That makes prompt text per-method content living with the
-        test, not boilerplate.
-      - pytest captures stdout, so prompting needs the capture manager suspended
-        (`capsys.disabled()` / `capturemanager.global_and_fixture_disabled()`).
-      - Moderated runs are slow, so they need to be resumable and to skip already-`confirmed`
-        methods by default.
-- [ ] **The record writer.** A passing run stamps `verification.yaml`. Rules: never *lower* a
-      status (a later round-trip-only run must not downgrade a `confirmed` method), always record
-      failures, and preserve comments/ordering in the file if possible — plain `yaml.safe_dump`
-      will destroy the explanatory header, so either use a round-trip YAML library or write only
-      the record blocks.
+- [x] **The hardware suite — built for the oscilloscope category** (2026-08-26).
+      `tests/hardware/`, marked `@pytest.mark.hardware` and skipped unless `--address` is given, so
+      `pytest tests/` on a laptop is unchanged. Options live in `tests/conftest.py` (pytest parses
+      them before descending into subdirectories, so they cannot live in `tests/hardware/`):
+      `--address`, `--driver`, `--confirm`, `--channel`, `--operator`, `--model`, `--recheck`,
+      `--no-record`, `--dummy`.
+      - `tests/hardware/conftest.py` and `hardware_support.py` are **category-agnostic** — the
+        instrument fixture, the prompt, the recorder and the skip rules know nothing about scopes.
+        A new category needs only its own `test_<category>_hw.py` of checks.
+      - `test_oscilloscope_hw.py` covers all eleven set/get pairs, the four action commands,
+        `get_waveform`, and the measurements mixin. Values sit on the instrument's own 1-2-5
+        quantization grid so the round-trip tolerance stays tight — a loose tolerance passes a
+        driver that is off by a factor of two.
+      - Capability decorators are honoured: an unavailable method is skipped with its reason, and
+        setup steps a driver can't perform (the DS1000E's timebase) are worked around rather than
+        failing the capture they were only setting up for.
+      - The bench setup is snapshotted at connect and re-applied at teardown. A suite that leaves
+        the timebase somewhere random is a suite people stop running.
+- [x] **Two modes, per the owner's design (2026-08-26).** Round-trip mode is fast and unattended;
+      **moderated mode** (`--confirm`) pauses at each check with the instrument still sitting at the
+      value in question. This is not a nicety — a round trip can be *self-consistently wrong*: if a
+      driver's setter writes the timebase and its getter also reads the timebase, setting volts/div
+      round-trips perfectly while the driver is broken. And for action commands there is no
+      read-back at all, so round-trip mode is not weaker for them, it is *unreachable* — they are
+      skipped outside moderated mode, and `confirmed` is the only status they can ever have.
+      - Prompts name the **physical** thing to look at and the control it would most plausibly be
+        confused with, which makes prompt text per-method content living with the test.
+      - `n` records a failure (a human saying the front panel didn't do it is the strongest
+        negative evidence available); `s` records nothing. `None` from the prompt is never treated
+        as success.
+      - Capture suspension needed `suspend_global_capture(in_=True)`, not
+        `global_and_fixture_disabled()` — the latter restores stdout but leaves stdin as pytest's
+        `DontReadFromInput`, which is exactly the half a prompt needs.
+      - Resumable: already-confirmed methods are skipped unless `--recheck`, and staleness is
+        honoured, so a confirmed record whose code has changed gets asked about again.
+- [x] **The record writer** — `src/constellation/verification_writer.py`. Never lowers a status
+      *within the same code* (and doesn't restamp a confirmed record's date with a round-trip run —
+      nobody looked at the front panel today); an old `confirmed` cannot be inherited by changed
+      code, so a differing hash replaces outright rather than upgrading. Failures always recorded,
+      and a fresh failure replaces an earlier pass on the same instrument so a regression is never
+      masked. The header comment block is preserved verbatim and only record blocks are generated;
+      repeated identical runs produce a byte-identical file.
+- [x] **`--dummy` smoke test.** Runs the whole harness against a dummy driver with no instrument
+      attached — checks the checks are wired to the right methods, the skips fire, and the prompts
+      read sensibly. It **cannot write records**, enforced in the fixture rather than trusting the
+      operator to remember `--no-record`: a dummy instrument is not evidence, and a fabricated
+      record is worse than none.
+- [x] **Tests for all of the above, without hardware** — `tests/test_verification_writer.py` (the
+      merge rules) and `tests/test_hardware_suite.py` (what a run concludes). The logic that
+      decides what gets believed later must not be checkable only by someone holding a scope.
+      Includes a test that `build_record()` satisfies the provenance cross-check in
+      `test_verification_records.py`, so a run cannot stamp records its own suite would reject.
+- [x] **Fixed `DirectSCPIRelay.close()`** raising `AttributeError` when `inst` is None — closing a
+      dummy driver, or one whose `connect()` failed, crashed instead of being a no-op. Found by the
+      `--dummy` run.
 - [x] **Expiry / staleness layer — implemented.** Three independent invalidations, checked most-
       specific first: `stale-code` (normalized AST hash of the driver method's own source),
       `stale-framework` (`VERIFICATION_EPOCH` recorded with the run), `stale-firmware` (live
@@ -1429,12 +1451,27 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
 
       Known and accepted gaps, documented rather than papered over: a changed **helper in the same
       file**, a behaviour change in a **dependency**, and the **instrument itself** drifting.
+
+### Open
+
+- [ ] **Confirm package data actually ships.** There was no `[tool.setuptools.package-data]`
+      section before this, and no `MANIFEST.in` — so `src/constellation/assets/*` (the GUI's
+      indicator icons) may never have been included in the wheel. The new section covers both
+      `assets/` and `verification.yaml`, but **this has not been verified against a built
+      wheel**. Build one and check. If the icons were missing, that's a live bug in installed
+      copies, independent of this priority.
 - [ ] **Consider a whole-class advisory hash** for the same-file-helper gap — invalidates far more
       coarsely, so only worth it if that case actually bites.
 - [ ] **Coverage table.** Script that renders every `verification.yaml` into a matrix for the
       README — the "what has actually been tested" view that motivated this.
-- [ ] **Roll out to the remaining drivers.** `TRACKED_DRIVERS` in the test is a deliberate opt-in
-      list so un-migrated drivers don't fail the suite; every driver should end up in it.
+- [ ] **Roll out to the remaining drivers.** `TRACKED_DRIVERS` in `tests/test_verification_records.py`
+      and `driver_registry()` in `tests/hardware/conftest.py` are deliberate opt-in lists so
+      un-migrated drivers don't fail the suite; every driver should end up in both.
+- [ ] **Roll out to the remaining categories.** One `tests/hardware/test_<category>_hw.py` each;
+      the fixtures are already category-agnostic. `examples/vna_hardware_demo.py` is the VNA half
+      written as a script with the assertions replaced by eyeballing.
+- [ ] **Run it.** Nothing in the oscilloscope `verification.yaml` is anything but `unverified` —
+      the machinery exists, no instrument has been in front of it yet.
 - [ ] **GUI integration** — `capability_report()` is what the widget layer needs to grey out
       `unavailable` controls and badge `unverified` ones with a caution marker. See P17.
 

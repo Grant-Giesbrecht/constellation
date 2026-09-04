@@ -273,7 +273,7 @@ def record_staleness(driver_cls, name:str, record:dict, idn:str=None):
 	Returns:
 		VerificationStatus: One of the STALE_* values, or None if the record still stands.
 	'''
-
+	
 	try:
 		status = VerificationStatus(record.get("status"))
 	except ValueError:

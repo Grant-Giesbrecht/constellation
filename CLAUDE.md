@@ -170,6 +170,11 @@ connected instruments.
   everything its category declares stays constructible and introspectable.
 - `docs/hardware_verification.md` — `verification.yaml` and the two "verified" flavours: which
   driver methods have been checked against real hardware, and why that's separate from capability.
+  `tests/hardware/` is the suite that produces those records: skipped unless `--address` is given,
+  round-trip mode by default, `--confirm` for the human-moderated mode that is the only way to earn
+  a `confirmed` record. `--dummy` smoke-tests the harness with no instrument attached and cannot
+  write records. `src/constellation/verification_writer.py` does the writing — never lowering a
+  status within the same code, always recording failures, never destroying the file's header.
 - `docs/superreturn.md` — how drivers hand parsed values up to their category class.
 - `docs/networking_data_paths.md` — RPC vs DataBank: which channel bulk data should take, and why
   binary on the RPC path is base64.
