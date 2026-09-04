@@ -122,6 +122,31 @@ class CommandRelay:
 		# RemoteTextCommandRelayClient fills both in.
 		self.link_online = True
 		self.instrument_online = None
+		
+		# The most recent command sent and the most recent reply received, kept purely so a GUI
+		# can show a user the actual SCPI behind a control (see ParameterDetailDialog in ui.py).
+		# Observation only - nothing here is read back by the driver or the relay, and nothing
+		# branches on it, so recording it cannot change what an instrument receives.
+		self.last_command = None
+		self.last_response = None
+	
+	def note_command(self, cmd:str, response=None) -> None:
+		''' Records the command just sent, and its reply if there was one.
+		
+		Args:
+			cmd (str): The command string.
+			response: The reply, for a query. Truncated when stored - a full-memory waveform read
+				returns hundreds of thousands of points and none of them belong in a tooltip.
+		'''
+		
+		self.last_command = cmd
+		
+		if response is None:
+			self.last_response = None
+			return
+		
+		text = response if isinstance(response, str) else repr(response)
+		self.last_response = text if len(text) <= 200 else text[:200] + f"... [{len(text)} chars]"
 	
 	def note_failure(self, e:Exception) -> RelayErrorKind:
 		''' Records the kind of a failure. Call from a relay method's except block.
@@ -406,6 +431,7 @@ class DirectSCPIRelay(CommandRelay):
 		
 		try:
 			self.inst.write(cmd)
+			self.note_command(cmd)
 			self.log.lowdebug(f"DirectSCPIRelay wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
 		except Exception as e:
 			self.note_failure(e)
@@ -425,6 +451,7 @@ class DirectSCPIRelay(CommandRelay):
 		
 		try:
 			rv = self.inst.read()
+			self.note_command("<read>", rv)
 			self.log.lowdebug(f"DirectSCPIRelay read from instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
 			self.note_failure(e)
@@ -447,6 +474,7 @@ class DirectSCPIRelay(CommandRelay):
 		
 		try:
 			rv = self.inst.query(cmd)
+			self.note_command(cmd, rv)
 			self.log.lowdebug(f"DirectSCPIRelay queried instrument: >@:LOCK{rv}@:UNLOCK<.")
 		except Exception as e:
 			self.note_failure(e)
@@ -471,6 +499,7 @@ class DirectSCPIRelay(CommandRelay):
 
 		try:
 			rv = self.inst.query_binary_values(cmd, datatype=datatype, container=list)
+			self.note_command(cmd, f"<{len(rv)} binary values>")
 			self.log.lowdebug(f"DirectSCPIRelay queried binary block from instrument: >:a{len(rv)} values<.")
 		except Exception as e:
 			self.note_failure(e)
@@ -498,6 +527,7 @@ class DirectSCPIRelay(CommandRelay):
 			# is_big_endian=False matches the little-endian convention used across the network
 			# relay, so a block reads back identically whether it was sent locally or remotely.
 			self.inst.write_binary_values(cmd, values, datatype=datatype, is_big_endian=False)
+			self.note_command(f"{cmd} <{len(values)} binary values>")
 			self.log.lowdebug(f"DirectSCPIRelay wrote binary block to instrument: >:a{len(values)} values<.")
 		except Exception as e:
 			self.note_failure(e)

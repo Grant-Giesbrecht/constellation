@@ -1,4 +1,5 @@
 from constellation.base import *
+import os
 import sys
 import time
 import threading
@@ -7,7 +8,8 @@ import asyncio
 from PyQt6 import QtCore, QtGui
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QMainWindow, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton,
-	QSlider, QGroupBox, QWidget, QTabWidget, QDockWidget, QLabel, QLineEdit, QComboBox)
+	QSlider, QGroupBox, QWidget, QTabWidget, QDockWidget, QLabel, QLineEdit, QComboBox, QDialog,
+	QDialogButtonBox, QSizePolicy, QFrame)
 from PyQt6.QtGui import QAction
 
 import matplotlib.pyplot as plt
@@ -100,6 +102,14 @@ class OwningBridge(InstrumentBridge):
 		self._thread = None
 		self._stop_event = threading.Event()
 
+		# {method_name: (command, response)} - the actual SCPI behind the last call to each driver
+		# method, for ParameterDetailDialog to show a user what a control really sends. Captured
+		# here rather than read live off the relay because the relay only knows the most recent
+		# command *globally*, which would attribute one control's SCPI to whichever control asked
+		# last. Written on this worker thread and read from the GUI thread; both are whole-object
+		# dict operations on a str tuple, so no lock is needed for a display-only value.
+		self.last_scpi = {}
+
 	def start(self):
 		if self._thread is not None:
 			return
@@ -136,13 +146,26 @@ class OwningBridge(InstrumentBridge):
 		try:
 			method = getattr(self.driver, method_name)
 			result = method(*args, **kwargs)
+			self._record_scpi(method_name)
 			self.command_result.emit(method_name, args, True, result)
 		except Exception as e:
+			self._record_scpi(method_name)
 			self.command_result.emit(method_name, args, False, e)
 
 		# The command may have changed instrument state - refresh and push it right away rather
 		# than waiting for the next scheduled poll.
 		self._poll_and_emit()
+
+	def _record_scpi(self, method_name:str):
+		''' Notes the SCPI the driver just sent, attributed to the method that sent it. '''
+
+		relay = getattr(self.driver, "relay", None)
+		if relay is None:
+			return
+
+		command = getattr(relay, "last_command", None)
+		if command is not None:
+			self.last_scpi[method_name] = (command, getattr(relay, "last_response", None))
 
 	def _poll_and_emit(self):
 
@@ -556,21 +579,43 @@ class TrackedChoice(_TrackedControlBase):
 # what the instrument reports - are never on screen at the same time, and the one lamp answers
 # three different questions at once.
 #
-# The Parameter* family below separates them. Two rows (SP above, PV below) and three independent
-# lamps, because they fail independently and a user needs to know WHICH failed:
+# The Parameter* family below separates them, and then lets you choose how much of that
+# separation to actually show. One set of plumbing, three densities:
 #
+#   FULL                        COMPACT                 MINIMAL
 #     Parameter Name
-#   <|SP [ 2.0            ]  * <- can this driver method be trusted at all?
-#     PV|> [ 2.0          ]  * <- did the setpoint reach the instrument?
-#                            * <- does the instrument agree with the setpoint?
+#   <|SP [ 0.55   ] V  * * *    Name: <|SP [0.55] V * *   [0.55] V *
+#     PV|> [ 0.5   ] V
 #
-# A command that was sent successfully to a driver method nobody has ever verified, whose
-# read-back then disagrees, is three different colours here and one ambiguous amber above.
-#
-# The SP and PV labels are buttons: clicking SP re-sends the current setpoint, clicking PV
-# re-queries the instrument. Both are things a user reaches for the moment a lamp goes the wrong
-# colour, and neither was reachable before without restarting the panel.
+# The mode is a constructor argument AND changeable live (click any lamp), so a panel can be
+# built dense and expanded in place when something looks wrong - which is exactly when the extra
+# rows are worth their space.
 # ============================================================================
+
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+class ParameterView:
+	''' How much of a parameter's state to show. See the diagram above.
+
+	FULL:    title, setpoint row, measured row, three independent lamps. Everything.
+	COMPACT: inline label, setpoint row, two lamps (verification + a merged runtime status). The
+	         default, and what the category widgets use - a front panel is mostly settings you
+	         are not currently suspicious of.
+	MINIMAL: the editor and one lamp. For dense per-channel grids where the parameter name is
+	         already implied by the column it sits in.
+	'''
+
+	FULL = "full"
+	COMPACT = "compact"
+	MINIMAL = "minimal"
+
+	ORDER = (MINIMAL, COMPACT, FULL)
+
+	LABELS = {
+		FULL: "Full",
+		COMPACT: "Compact",
+		MINIMAL: "Minimal",
+	}
 
 # Verification: can this driver method be trusted? Sourced from the hardware-verification records
 # (see docs/hardware_verification.md), NOT from anything happening at runtime.
@@ -603,6 +648,41 @@ VALUE_COLORS = {
 # colouring it as an error would leave a panel full of red lamps that everyone learns to ignore -
 # and the one that means something would be lost among them. Grey says "these two numbers differ,
 # look at them", which is exactly what it means.
+
+# One-line explanations, shown in tooltips and spelled out in the detail dialog.
+VERIFICATION_TEXT = {
+	"confirmed": "A person watched the instrument and confirmed this actually works.",
+	"roundtrip": "Set and read back correctly on real hardware - but nobody watched the front panel, so this only proves the set/get pair agrees with itself.",
+	"untested": "Implemented, but never checked against real hardware - or the check has expired because the code or the instrument changed since.",
+	"broken": "Checked against real hardware and it did not work.",
+	"unavailable": "This instrument cannot do this, or nobody has written it yet. The control is disabled.",
+	"unknown": "No local driver to ask - this panel is observing an instrument owned by another process.",
+}
+
+SEND_TEXT = {
+	"sent": "The driver call returned successfully.",
+	"unsent": "Nothing has been requested yet, or a request is still in flight.",
+	"failed": "The driver call failed.",
+}
+
+VALUE_TEXT = {
+	"match": "The instrument's value agrees with the setpoint.",
+	"unqueried": "The setpoint changed and nothing has been read back since.",
+	"mismatch": "The instrument answered, but with a different value. Usually the instrument snapping to its own grid rather than an error - compare the two numbers.",
+	"query_error": "The value could not be read at all.",
+}
+
+# Worst-first, for the merged lamp in the less verbose views. A hard failure outranks a
+# disagreement, which outranks not having looked yet.
+_MERGE_RANK = ("query_error", "failed", "broken", "mismatch", "unqueried", "unsent", "unknown",
+	"untested", "unavailable", "roundtrip", "sent", "match", "confirmed")
+
+def _worst(*keys):
+	''' The most alarming of several status keys. '''
+
+	present = [k for k in keys if k in _MERGE_RANK]
+
+	return min(present, key=_MERGE_RANK.index) if present else "unknown"
 
 _VERIFICATION_REPORT_CACHE = {}
 
@@ -643,7 +723,8 @@ def verification_indicator(bridge, method_names) -> tuple:
 			pair.
 
 	Returns:
-		tuple: (key, tooltip_html). `key` indexes VERIFICATION_COLORS.
+		tuple: (key, detail_lines). `key` indexes VERIFICATION_COLORS; `detail_lines` is a list of
+			"method(): status - why" strings.
 
 	Both halves of a set/get pair are considered and the WEAKEST wins, matching how the hardware
 	suite records them: neither half can be verified without the other, so a confirmed setter
@@ -652,7 +733,7 @@ def verification_indicator(bridge, method_names) -> tuple:
 
 	driver = getattr(bridge, "driver", None)
 	if driver is None:
-		return "unknown", "Verification: <b>unknown</b><br>No local driver - this panel is observing an instrument owned by another process."
+		return "unknown", ["no local driver - this panel is observing an instrument owned by another process"]
 
 	idn = getattr(getattr(driver, "id", None), "idn_model", None) or None
 	report = _verification_report(type(driver), idn=idn)
@@ -673,15 +754,12 @@ def verification_indicator(bridge, method_names) -> tuple:
 		else:
 			key, detail = _verification_key(entry)
 
-		lines.append(f"<b>{name}()</b>: {key} - {detail}")
+		lines.append(f"{name}(): {key} - {detail}")
 
 		if worst is None or order.index(key) < order.index(worst):
 			worst = key
 
-	if worst is None:
-		worst = "unknown"
-
-	return worst, f"Verification: <b>{worst}</b><br>" + "<br>".join(lines)
+	return (worst or "unknown"), lines
 
 def _verification_key(entry:dict) -> tuple:
 	''' Maps one capability_report() entry onto a lamp colour and an explanation. '''
@@ -692,7 +770,7 @@ def _verification_key(entry:dict) -> tuple:
 	detail = entry.get("detail")
 
 	# The decorator's reason string, or the winning record - both are worth showing verbatim,
-	# because "why" is the whole reason someone moused over the lamp.
+	# because "why" is the whole reason someone opened the detail window.
 	if isinstance(detail, dict):
 		note = ", ".join(f"{k}={detail[k]}" for k in ("model", "firmware", "date", "by") if detail.get(k))
 	else:
@@ -715,29 +793,123 @@ def _verification_key(entry:dict) -> tuple:
 
 	return "untested", note or "implemented, never checked against hardware"
 
-class StatusLamp(QLabel):
-	''' One coloured dot with a rich tooltip. Pure visuals - knows nothing about instruments. '''
+class StatusLamp(QWidget):
+	''' One coloured dot with a tooltip, clickable to open a parameter's detail window.
+
+	Painted rather than styled. An earlier version was a QLabel carrying a stylesheet with
+	`min-width`/`max-width` set to the dot's size - and Qt resolves a widget's stylesheet for its
+	tooltip window too, so the tooltip inherited an 11px width cap and rendered as a single
+	clipped letter. Painting the dot means the widget carries no stylesheet at all, so there is
+	nothing for the tooltip to inherit.
+	'''
+
+	clicked = pyqtSignal()
 
 	def __init__(self, size:int=11, parent=None):
 		super().__init__(parent)
 
 		self._size = size
+		self._color = "#888888"
+
 		self.setFixedSize(size, size)
-		self.set("#888888", "")
+		self.setCursor(QtGui.QCursor(Qt.CursorShape.PointingHandCursor))
+
+	@property
+	def color(self) -> str:
+		return self._color
 
 	def set(self, color:str, tooltip:str):
-		r = self._size // 2
-		self.setStyleSheet(f"background-color:{color}; border-radius:{r}px; min-width:{self._size}px; min-height:{self._size}px; max-width:{self._size}px; max-height:{self._size}px;")
+		self._color = color
 		self.setToolTip(tooltip)
+		self.update()
+
+	def mousePressEvent(self, event):
+		if event.button() == Qt.MouseButton.LeftButton:
+			self.clicked.emit()
+		super().mousePressEvent(event)
+
+	def paintEvent(self, event):
+
+		painter = QtGui.QPainter(self)
+		painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+		painter.setBrush(QtGui.QBrush(QtGui.QColor(self._color)))
+		painter.setPen(Qt.PenStyle.NoPen)
+		painter.drawEllipse(0, 0, self._size - 1, self._size - 1)
+		painter.end()
+
+class IndicatorLight(QWidget):
+	''' A large on/off lamp for a push button, drawn from the `indicator_1.png` /
+	`indicator_0.png` artwork in `assets/`.
+
+	Exists because a checked QPushButton is nearly indistinguishable from an unchecked one under
+	several dark themes - the state is carried entirely by a subtle background shade. A separate
+	lamp does not depend on the palette at all.
+
+	Deliberately falls back to a painted circle if the artwork cannot be loaded: the `assets/`
+	package-data situation has never been verified against a built wheel (todo P18), and a
+	control whose state becomes invisible on a bad install is worse than one that looks plain.
+	'''
+
+	def __init__(self, size:int=22, on_pixmap=None, off_pixmap=None, parent=None):
+		super().__init__(parent)
+
+		self._size = size
+		self._state = None
+
+		self._on = self._load(on_pixmap, "indicator_1.png")
+		self._off = self._load(off_pixmap, "indicator_0.png")
+
+		self.setFixedSize(size, size)
+
+	def _load(self, supplied, filename:str):
+		''' Accepts a QPixmap or a path from the caller, else loads the packaged artwork. '''
+
+		if isinstance(supplied, QtGui.QPixmap):
+			pixmap = supplied
+		elif supplied:
+			pixmap = QtGui.QPixmap(str(supplied))
+		else:
+			pixmap = QtGui.QPixmap(os.path.join(ASSETS_DIR, filename))
+
+		if pixmap.isNull():
+			return None
+
+		return pixmap.scaled(self._size, self._size, Qt.AspectRatioMode.KeepAspectRatio,
+			Qt.TransformationMode.SmoothTransformation)
+
+	def set_state(self, state):
+		''' `state`: True (on), False (off), or None (unknown - nothing heard from the
+		instrument yet). '''
+
+		self._state = state
+		self.setToolTip({True: "ON", False: "OFF", None: "unknown"}[state if state is None else bool(state)])
+		self.update()
+
+	def paintEvent(self, event):
+
+		pixmap = self._on if self._state else self._off
+
+		painter = QtGui.QPainter(self)
+		painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+		if pixmap is not None and self._state is not None:
+			x = (self.width() - pixmap.width()) // 2
+			y = (self.height() - pixmap.height()) // 2
+			painter.drawPixmap(x, y, pixmap)
+		else:
+			color = "#888888" if self._state is None else ("#2ecc71" if self._state else "#3a3a3a")
+			painter.setBrush(QtGui.QBrush(QtGui.QColor(color)))
+			painter.setPen(QtGui.QPen(QtGui.QColor("#00000060")))
+			painter.drawEllipse(1, 1, self._size - 3, self._size - 3)
+
+		painter.end()
 
 class ActionIcon(QWidget):
 	''' The clickable "SP"/"PV" label beside a field: a short caption and a triangle pointing the
 	way the data flows - out to the instrument for SP, back from it for PV.
 
-	Drawn rather than loaded from a PNG. The package-data situation for `assets/` has never been
-	verified against a built wheel (see todo P18), so a control that needs an image file to
-	function would be one bad install away from an invisible button; drawing also stays crisp on
-	a HiDPI display and can recolour on hover to show it is clickable. `pixmap=` accepts a
+	Drawn rather than loaded from a PNG so it stays crisp on a HiDPI display, follows the
+	palette's text colour, and can recolour on hover to show it is clickable. `pixmap=` accepts a
 	QPixmap for anyone who does want artwork.
 	'''
 
@@ -822,19 +994,175 @@ class ActionIcon(QWidget):
 		painter.drawPolygon(triangle)
 		painter.end()
 
+class ParameterDetailDialog(QDialog):
+	''' The "more info" window a parameter's lamps open.
+
+	Three jobs, all of them things a user wants at the moment a lamp goes the wrong colour and
+	none of which fit in a tooltip: say what each lamp actually means for *this* parameter, show
+	the raw traffic (what was sent, what came back, and the SCPI behind it), and let the density
+	be turned up so the measured value is on screen while the problem is being looked at.
+	'''
+
+	def __init__(self, control, parent=None):
+		super().__init__(parent)
+
+		self.control = control
+
+		self.setWindowTitle(f"{control.label} - details")
+		self.setMinimumWidth(520)
+
+		layout = QVBoxLayout()
+
+		header = QLabel(f"<b>{control.label}</b><br><span style='color:gray'>{control.set_method}() / {control.get_method or 'no getter'}()</span>")
+		header.setTextFormat(Qt.TextFormat.RichText)
+		layout.addWidget(header)
+		layout.addWidget(self._separator())
+
+		# --- density ---
+		density = QHBoxLayout()
+		density.addWidget(QLabel("Detail shown:"))
+		self.view_combo = QComboBox()
+		for mode in ParameterView.ORDER:
+			self.view_combo.addItem(ParameterView.LABELS[mode], mode)
+		self.view_combo.setCurrentIndex(ParameterView.ORDER.index(control.view))
+		self.view_combo.activated.connect(self._on_view_chosen)
+		density.addWidget(self.view_combo, 1)
+		layout.addLayout(density)
+		layout.addWidget(self._separator())
+
+		# --- the three lamps, spelled out ---
+		self.lamp_rows = {}
+		grid = QGridLayout()
+		grid.setColumnStretch(2, 1)
+
+		for row, (key, title) in enumerate((
+				("verification", "Verification"),
+				("send", "Setpoint sent"),
+				("value", "Measured value"))):
+
+			lamp = StatusLamp(13)
+			lamp.setCursor(QtGui.QCursor(Qt.CursorShape.ArrowCursor))
+			name = QLabel(f"<b>{title}</b>")
+			name.setTextFormat(Qt.TextFormat.RichText)
+			text = QLabel()
+			text.setWordWrap(True)
+
+			grid.addWidget(lamp, row, 0)
+			grid.addWidget(name, row, 1)
+			grid.addWidget(text, row, 2)
+
+			self.lamp_rows[key] = (lamp, text)
+
+		layout.addLayout(grid)
+		layout.addWidget(self._separator())
+
+		# --- traffic ---
+		self.traffic = QLabel()
+		self.traffic.setTextFormat(Qt.TextFormat.RichText)
+		self.traffic.setWordWrap(True)
+		self.traffic.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+		layout.addWidget(self.traffic)
+
+		# --- actions ---
+		buttons = QHBoxLayout()
+		self.resend_button = QPushButton("Re-send setpoint")
+		self.resend_button.clicked.connect(control.resend)
+		self.requery_button = QPushButton("Re-read value")
+		self.requery_button.clicked.connect(control.requery)
+		self.requery_button.setEnabled(control.get_method is not None)
+		buttons.addWidget(self.resend_button)
+		buttons.addWidget(self.requery_button)
+		buttons.addStretch(1)
+
+		close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+		close.rejected.connect(self.reject)
+		buttons.addWidget(close)
+		layout.addLayout(buttons)
+
+		self.setLayout(layout)
+
+		# Live, so a dialog left open while the instrument is poked keeps telling the truth.
+		control.changed.connect(self.refresh)
+		self.refresh()
+
+	def _separator(self):
+		line = QFrame()
+		line.setFrameShape(QFrame.Shape.HLine)
+		line.setFrameShadow(QFrame.Shadow.Sunken)
+		return line
+
+	def _on_view_chosen(self, index:int):
+		self.control.set_view(self.view_combo.itemData(index))
+
+	def refresh(self):
+
+		control = self.control
+
+		verification_key = control.verification_key
+		send_key = control.send_status()
+		value_key = control.value_status()
+
+		self._set_row("verification", VERIFICATION_COLORS.get(verification_key, "#888888"),
+			f"<b>{verification_key}</b> - {VERIFICATION_TEXT.get(verification_key, '')}<br>"
+			+ "<br>".join(control.verification_lines))
+
+		self._set_row("send", SEND_COLORS[send_key], f"<b>{send_key}</b> - {SEND_TEXT[send_key]}"
+			+ (f"<br><span style='color:#e74c3c'>{control.send_error}</span>" if control.send_error else ""))
+
+		self._set_row("value", VALUE_COLORS[value_key], f"<b>{value_key}</b> - {VALUE_TEXT[value_key]}"
+			+ (f"<br><span style='color:#e74c3c'>{control.query_error}</span>" if control.query_error else ""))
+
+		self.resend_button.setEnabled(control.setpoint is not None and verification_key != "unavailable")
+
+		command, response = control.last_scpi()
+
+		rows = [
+			f"<b>Last sent:</b> {_html(control.setpoint)}",
+			f"<b>Last received:</b> {_html(control.confirmed)}",
+			f"<b>Driver call:</b> <code>{_html(control.call_signature())}</code>",
+		]
+
+		if command is not None:
+			rows.append(f"<b>SCPI sent:</b> <code>{_html(command)}</code>")
+			if response is not None:
+				rows.append(f"<b>SCPI reply:</b> <code>{_html(response)}</code>")
+		else:
+			# Not an error - a dummy driver never touches a relay, and an ObserverBridge issues
+			# the call in another process entirely, so there is no local SCPI to show.
+			rows.append("<span style='color:gray'>No SCPI recorded for this parameter yet.</span>")
+
+		self.traffic.setText("<br>".join(rows))
+
+	def _set_row(self, key:str, color:str, text:str):
+		lamp, label = self.lamp_rows[key]
+		lamp.set(color, "")
+		label.setText(text)
+
+def _html(value) -> str:
+	''' Escapes a value for the rich-text labels above. An IDN or a SCPI string can legitimately
+	contain characters that would otherwise be read as markup. '''
+
+	import html
+
+	return html.escape("None" if value is None else str(value))
+
 class _ParameterControlBase(_TrackedControlBase):
-	''' Shared machinery for the SP/PV family: the three-lamp state, the lamp column, the title,
-	and the two action buttons. Subclasses supply the SP editor and how to render a value.
+	''' Shared machinery for the SP/PV family: the three-lamp state, the switchable layout, and
+	the two action buttons. Subclasses supply the SP editor and how to render a value.
 
 	Deliberately built on _TrackedControlBase rather than replacing it - the setpoint/confirmed
 	bookkeeping there is already correct, and the existing Tracked* controls keep working
-	untouched. What is added is the decomposition of one status into three, plus a tolerance that
-	the single-lamp version never had.
+	untouched. What is added is the decomposition of one status into three, a tolerance the
+	single-lamp version never had, and the density switch.
 	'''
+
+	# Emitted whenever any displayed state changes, so an open detail dialog can follow along.
+	changed = pyqtSignal()
 
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
 			set_args:callable=None, get_method:str=None, get_args:tuple=(), unit:str="",
-			tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0):
+			tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0,
+			view:str=ParameterView.COMPACT, edit_width:int=90):
 
 		super().__init__(bridge, label, get, set_method, set_args, stale_after_s)
 
@@ -843,23 +1171,33 @@ class _ParameterControlBase(_TrackedControlBase):
 		if get_method is None and set_method.startswith("set_"):
 			get_method = "get_" + set_method[4:]
 
+		self.label = label
 		self.get_method = get_method
 		self.get_args = tuple(get_args)
 		self.tolerance = tolerance
 		self.abs_tolerance = abs_tolerance
+		self.unit = unit
+		self.view = view
+		self.edit_width = edit_width
 
+		self.send_error = ""
+		self.query_error = ""
 		self._send_state = "unsent"
-		self._send_error = ""
 		self._awaiting_readback = False
-		self._query_error = ""
 		self._online = True
 
-		self.title = QLabel(label)
-		self.title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+		self.title_label = QLabel(label)
+		self.title_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+		self.inline_label = QLabel(f"{label}:")
 
 		self.lamp_verification = StatusLamp()
 		self.lamp_send = StatusLamp()
 		self.lamp_value = StatusLamp()
+		self.lamp_merged = StatusLamp()
+
+		for lamp in (self.lamp_verification, self.lamp_send, self.lamp_value, self.lamp_merged):
+			lamp.clicked.connect(self.show_details)
 
 		self.sp_icon = ActionIcon("SP", points_left=True, tooltip="Send this setpoint to the instrument again")
 		self.pv_icon = ActionIcon("PV", points_left=False, tooltip="Re-read this value from the instrument")
@@ -870,59 +1208,183 @@ class _ParameterControlBase(_TrackedControlBase):
 		self.pv_display = QLineEdit()
 		self.pv_display.setReadOnly(True)
 		self.pv_display.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+		self.pv_display.setFixedWidth(edit_width)
 
-		self.unit = unit
+		self.unit_sp = QLabel(unit)
+		self.unit_pv = QLabel(unit)
+
+		self._dialog = None
 
 		# Resolved once: verification is a property of the code and the records, not of anything
 		# happening at runtime, so it cannot change while a panel is open.
-		self._verification_key, self._verification_tip = verification_indicator(bridge, (set_method, get_method))
+		self.verification_key, self.verification_lines = verification_indicator(bridge, (set_method, get_method))
+
+	# --- read-only views of the state, for the detail dialog ----------------
+
+	@property
+	def setpoint(self):
+		return self._setpoint
+
+	@property
+	def confirmed(self):
+		return self._confirmed
+
+	def call_signature(self) -> str:
+		''' The driver call this control makes, as it would be written by hand. '''
+
+		if self._setpoint is None:
+			return f"{self.set_method}(...)"
+
+		args = ", ".join(repr(a) for a in self.set_args(self._setpoint))
+
+		return f"{self.set_method}({args})"
+
+	def last_scpi(self) -> tuple:
+		''' (command, response) for whichever of this parameter's methods last talked to the
+		instrument, or (None, None). Read from the bridge, which attributes SCPI per method - the
+		relay only knows the most recent command globally. '''
+
+		journal = getattr(self.bridge, "last_scpi", None)
+		if not journal:
+			return None, None
+
+		for name in (self.set_method, self.get_method):
+			if name in journal:
+				return journal[name]
+
+		return None, None
+
+	# --- layout / density ---------------------------------------------------
 
 	def _build_layout(self, sp_editor):
-		''' Assembles the two rows and the lamp column around whatever editor the subclass built. '''
+		''' Called once by each subclass, after it has built its editor. '''
 
-		lamps = QVBoxLayout()
-		lamps.setSpacing(3)
-		lamps.addWidget(self.lamp_verification)
-		lamps.addWidget(self.lamp_send)
-		lamps.addWidget(self.lamp_value)
-		lamps.addStretch(1)
+		self.sp_editor = sp_editor
+		sp_editor.setFixedWidth(self.edit_width)
 
-		sp_row = QHBoxLayout()
-		sp_row.setContentsMargins(0, 0, 0, 0)
-		sp_row.addWidget(self.sp_icon)
-		sp_row.addWidget(sp_editor, 1)
+		# Extra space in a container goes BETWEEN controls, not inside them: every piece here has
+		# a fixed or natural width, and the widget as a whole refuses to stretch. Without this the
+		# editor absorbed the slack and a resized panel re-spaced every control's internals.
+		self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
 
-		pv_row = QHBoxLayout()
-		pv_row.setContentsMargins(0, 0, 0, 0)
-		pv_row.addWidget(self.pv_icon)
-		pv_row.addWidget(self.pv_display, 1)
+		self._root = QHBoxLayout()
+		self._root.setContentsMargins(4, 2, 4, 2)
+		self._root.setSpacing(6)
+		self.setLayout(self._root)
 
-		if self.unit:
-			for row in (sp_row, pv_row):
-				row.addWidget(QLabel(self.unit))
-
-		rows = QVBoxLayout()
-		rows.setSpacing(3)
-		rows.addWidget(self.title)
-		rows.addLayout(sp_row)
-		rows.addLayout(pv_row)
-
-		layout = QHBoxLayout()
-		layout.setContentsMargins(4, 4, 4, 4)
-		layout.addLayout(rows, 1)
-		layout.addLayout(lamps)
-		self.setLayout(layout)
+		self._apply_view()
 
 		# A method the hardware cannot do, or that nobody has written, gets a visibly dead
 		# control rather than one that raises FeatureUnavailable when clicked.
-		if self._verification_key == "unavailable":
-			for widget in (sp_editor, self.sp_icon, self.pv_icon):
+		if self.verification_key == "unavailable":
+			for widget in (self.sp_editor, self.sp_icon, self.pv_icon):
 				widget.setEnabled(False)
-			self.setToolTip(self._verification_tip)
 
 		self._refresh_display()
 
+	def set_view(self, view:str):
+		''' Switches density in place. Safe to call at any time, including from the detail
+		dialog while the panel is live. '''
+
+		if view not in ParameterView.ORDER or view == self.view:
+			return
+
+		self.view = view
+		self._apply_view()
+		self._refresh_display()
+
+	def _apply_view(self):
+
+		_clear_layout(self._root)
+
+		full = self.view == ParameterView.FULL
+		compact = self.view == ParameterView.COMPACT
+
+		for widget in (self.title_label, self.inline_label, self.sp_icon, self.pv_icon,
+				self.pv_display, self.unit_pv, self.lamp_verification, self.lamp_send,
+				self.lamp_value, self.lamp_merged):
+			widget.setVisible(False)
+
+		self.unit_sp.setVisible(bool(self.unit))
+
+		rows = QVBoxLayout()
+		rows.setSpacing(2)
+
+		if full:
+			self.title_label.setVisible(True)
+			rows.addWidget(self.title_label)
+
+		sp_row = QHBoxLayout()
+		sp_row.setSpacing(4)
+
+		if compact:
+			self.inline_label.setVisible(True)
+			sp_row.addWidget(self.inline_label)
+
+		if full or compact:
+			self.sp_icon.setVisible(True)
+			sp_row.addWidget(self.sp_icon)
+
+		sp_row.addWidget(self.sp_editor)
+		if self.unit:
+			sp_row.addWidget(self.unit_sp)
+		rows.addLayout(sp_row)
+
+		if full:
+			pv_row = QHBoxLayout()
+			pv_row.setSpacing(4)
+			self.pv_icon.setVisible(True)
+			self.pv_display.setVisible(True)
+			pv_row.addWidget(self.pv_icon)
+			pv_row.addWidget(self.pv_display)
+			if self.unit:
+				self.unit_pv.setVisible(True)
+				pv_row.addWidget(self.unit_pv)
+			rows.addLayout(pv_row)
+
+		# Stretch on BOTH sides centres the lamp column against the rows it annotates. With a
+		# stretch only underneath, the lamps rode the top of whatever cell the control was placed
+		# in and drifted away from the control they describe as soon as the row got taller.
+		lamps = QVBoxLayout()
+		lamps.setSpacing(3)
+		lamps.addStretch(1)
+
+		for lamp in self.visible_lamps():
+			lamp.setVisible(True)
+			lamps.addWidget(lamp)
+
+		lamps.addStretch(1)
+
+		self._root.addLayout(rows)
+		self._root.addLayout(lamps)
+
+	def visible_lamps(self) -> list:
+		''' Which lamps this density shows. FULL keeps the three questions apart; the shorter
+		views merge them, worst-first, and the tooltip still names every contributing status. '''
+
+		if self.view == ParameterView.FULL:
+			return [self.lamp_verification, self.lamp_send, self.lamp_value]
+
+		if self.view == ParameterView.COMPACT:
+			return [self.lamp_verification, self.lamp_merged]
+
+		return [self.lamp_merged]
+
 	# --- user actions -------------------------------------------------------
+
+	def show_details(self):
+		''' Opens (or raises) this parameter's detail window. '''
+
+		if self._dialog is None:
+			self._dialog = ParameterDetailDialog(self, parent=self.window())
+			self._dialog.finished.connect(self._on_dialog_closed)
+
+		self._dialog.show()
+		self._dialog.raise_()
+		self._dialog.activateWindow()
+
+	def _on_dialog_closed(self, result):
+		self._dialog = None
 
 	def resend(self):
 		''' Re-sends the current setpoint. Does nothing if the user has never set one - there is
@@ -932,8 +1394,8 @@ class _ParameterControlBase(_TrackedControlBase):
 		if self._setpoint is None:
 			return
 
-		self._pending = True
 		self._send_state = "unsent"
+		self.send_error = ""
 		self._awaiting_readback = True
 		self._refresh_display()
 		self.bridge.request(self.set_method, *self.set_args(self._setpoint))
@@ -972,7 +1434,7 @@ class _ParameterControlBase(_TrackedControlBase):
 
 	def _user_changed(self, new_value):
 		self._send_state = "unsent"
-		self._send_error = ""
+		self.send_error = ""
 		self._awaiting_readback = True
 		super()._user_changed(new_value)
 
@@ -980,10 +1442,10 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		if method_name == self.set_method:
 			self._send_state = "sent" if success else "failed"
-			self._send_error = "" if success else str(result)
+			self.send_error = "" if success else str(result)
 
 		if method_name == self.get_method:
-			self._query_error = "" if success else str(result)
+			self.query_error = "" if success else str(result)
 
 		super()._on_command_result(method_name, args, success, result)
 		self._refresh_display()
@@ -996,7 +1458,7 @@ class _ParameterControlBase(_TrackedControlBase):
 			return
 
 		self._awaiting_readback = False
-		self._query_error = ""
+		self.query_error = ""
 		super()._on_state_changed(state)
 
 	def _on_connection_changed(self, online):
@@ -1004,9 +1466,15 @@ class _ParameterControlBase(_TrackedControlBase):
 		super()._on_connection_changed(online)
 		self._refresh_display()
 
-	def _value_status(self) -> str:
+	def send_status(self) -> str:
+		# Deliberately NOT gated on self._pending. In the base class `_pending` means "waiting for
+		# a read-back", which is the value lamp's question - letting it mask the send lamp would
+		# re-merge the two facts this widget exists to keep apart.
+		return self._send_state
 
-		if self._query_error or not self._online:
+	def value_status(self) -> str:
+
+		if self.query_error or not self._online:
 			return "query_error"
 		if self._confirmed is None or self._awaiting_readback:
 			return "unqueried"
@@ -1020,40 +1488,71 @@ class _ParameterControlBase(_TrackedControlBase):
 
 	def _refresh_lamps(self):
 
-		self.lamp_verification.set(VERIFICATION_COLORS.get(self._verification_key, "#888888"), self._verification_tip)
+		verification = self.verification_key
+		send = self.send_status()
+		value = self.value_status()
 
-		# Deliberately NOT gated on self._pending. In the base class `_pending` means "waiting for
-		# a read-back", which is the value lamp's question - letting it mask the send lamp would
-		# re-merge the two facts this widget exists to keep apart. `_send_state` is "unsent" until
-		# a command_result arrives, which already covers "in flight".
-		send = self._send_state
-		send_tip = {
-			"sent": "Setpoint: <b>sent</b><br>The driver call returned successfully.",
-			"unsent": "Setpoint: <b>not sent</b><br>Nothing requested yet, or a request is in flight.",
-			"failed": f"Setpoint: <b>send failed</b><br>{self._send_error}",
-		}[send]
-		self.lamp_send.set(SEND_COLORS[send], send_tip + f"<br>Click SP to re-send. (setpoint={self._setpoint})")
+		hint = "  (click for details)"
 
-		value = self._value_status()
-		value_tip = {
-			"match": "Measured: <b>agrees with setpoint</b>",
-			"unqueried": "Measured: <b>not re-read since the setpoint changed</b>",
-			"mismatch": "Measured: <b>differs from setpoint</b><br>Often just the instrument quantizing to its own grid - compare the two rows.",
-			"query_error": f"Measured: <b>could not be read</b><br>{self._query_error or 'instrument offline'}",
-		}[value]
-		self.lamp_value.set(VALUE_COLORS[value], value_tip + f"<br>Click PV to re-read. (measured={self._confirmed})")
+		self.lamp_verification.set(VERIFICATION_COLORS.get(verification, "#888888"),
+			f"Verification: {verification}\n{VERIFICATION_TEXT.get(verification, '')}\n"
+			+ "\n".join(self.verification_lines) + hint)
+
+		self.lamp_send.set(SEND_COLORS[send],
+			f"Setpoint: {send}\n{SEND_TEXT[send]}\nsetpoint = {self._setpoint}"
+			+ (f"\n{self.send_error}" if self.send_error else "") + hint)
+
+		self.lamp_value.set(VALUE_COLORS[value],
+			f"Measured: {value}\n{VALUE_TEXT[value]}\nmeasured = {self._confirmed}"
+			+ (f"\n{self.query_error}" if self.query_error else "") + hint)
+
+		# The merged lamp used by the shorter views. Its tooltip lists every status it stands in
+		# for, so compressing the display never compresses the explanation.
+		if self.view == ParameterView.COMPACT:
+			merged = _worst(send, value)
+			parts = [f"Setpoint: {send} - {SEND_TEXT[send]}", f"Measured: {value} - {VALUE_TEXT[value]}"]
+		else:
+			merged = _worst(verification, send, value)
+			parts = [f"Verification: {verification} - {VERIFICATION_TEXT.get(verification, '')}",
+				f"Setpoint: {send} - {SEND_TEXT[send]}", f"Measured: {value} - {VALUE_TEXT[value]}"]
+
+		colors = {}
+		colors.update(VERIFICATION_COLORS)
+		colors.update(SEND_COLORS)
+		colors.update(VALUE_COLORS)
+
+		self.lamp_merged.set(colors.get(merged, "#888888"), "\n".join(parts) + hint)
 
 	def _display(self, confirmed_value, setpoint_value, status):
 
 		self._display_setpoint(setpoint_value if setpoint_value is not None else confirmed_value)
 		self.pv_display.setText(self._format(confirmed_value))
 		self._refresh_lamps()
+		self.changed.emit()
 
 	def _display_setpoint(self, value):
 		raise NotImplementedError
 
+def _clear_layout(layout):
+	''' Empties a layout without destroying the widgets in it, so a density switch can re-place
+	the same widgets rather than rebuilding (and re-wiring) them. '''
+
+	while layout.count():
+
+		item = layout.takeAt(0)
+
+		widget = item.widget()
+		if widget is not None:
+			widget.setParent(None)
+			continue
+
+		child = item.layout()
+		if child is not None:
+			_clear_layout(child)
+			child.setParent(None)
+
 class ParameterBox(_ParameterControlBase):
-	''' A numeric parameter with its setpoint and its measured value both on screen. Example:
+	''' A numeric parameter. Example:
 
 		ParameterBox(bridge, "Volts/div", get=lambda s: s.channels[1].div_volt,
 			set_method="set_div_volt", set_args=lambda v: (1, v), get_args=(1,), unit="V")
@@ -1061,10 +1560,11 @@ class ParameterBox(_ParameterControlBase):
 
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
 			set_args:callable=None, get_method:str=None, get_args:tuple=(), validator=None,
-			unit:str="", tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0):
+			unit:str="", tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0,
+			view:str=ParameterView.COMPACT, edit_width:int=90):
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args, unit,
-			tolerance, abs_tolerance, stale_after_s)
+			tolerance, abs_tolerance, stale_after_s, view, edit_width)
 
 		self.edit = QLineEdit()
 		if validator is not None:
@@ -1091,25 +1591,52 @@ class ParameterBox(_ParameterControlBase):
 			self.edit.setText(self._format(value))
 
 class ParameterToggle(_ParameterControlBase):
-	''' An on/off parameter in the same three-lamp frame. The PV row is a read-only field showing
-	what the instrument actually reports, so "I clicked it and nothing happened" is visible
-	rather than inferred. '''
+	''' An on/off parameter, with a large state lamp to the left of the button.
+
+	The lamp is there because a checked QPushButton is nearly indistinguishable from an unchecked
+	one under several dark themes - the state is carried entirely by a subtle background shade,
+	which is exactly the information a user most needs from an output-enable control. The lamp
+	does not depend on the palette at all. Artwork is `assets/indicator_{0,1}.png`, overridable
+	per control via `on_pixmap=`/`off_pixmap=`.
+
+	Its state follows the *instrument*, not the button: it shows what was last read back, so a
+	button that was clicked and did nothing is visible rather than inferred.
+	'''
 
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
 			set_args:callable=None, get_method:str=None, get_args:tuple=(),
-			on_text:str="ON", off_text:str="OFF", stale_after_s:float=5.0):
+			on_text:str=None, off_text:str=None, stale_after_s:float=5.0,
+			view:str=ParameterView.COMPACT, edit_width:int=90,
+			on_pixmap=None, off_pixmap=None, indicator_size:int=22):
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args,
-			unit="", stale_after_s=stale_after_s)
+			unit="", stale_after_s=stale_after_s, view=view, edit_width=edit_width)
 
-		self.on_text = on_text
-		self.off_text = off_text
+		self.on_text = on_text if on_text is not None else label
+		self.off_text = off_text if off_text is not None else self.on_text
 
-		self.button = QPushButton(off_text)
+		self.indicator = IndicatorLight(indicator_size, on_pixmap=on_pixmap, off_pixmap=off_pixmap)
+		self.indicator.setToolTip("Instrument's reported state")
+
+		self.button = QPushButton(self.off_text)
 		self.button.setCheckable(True)
 		self.button.toggled.connect(self._on_toggled)
 
-		self._build_layout(self.button)
+		holder = QWidget()
+		row = QHBoxLayout()
+		row.setContentsMargins(0, 0, 0, 0)
+		row.setSpacing(4)
+		row.addWidget(self.indicator)
+		row.addWidget(self.button)
+		holder.setLayout(row)
+
+		self._build_layout(holder)
+
+	def _build_layout(self, holder):
+		# The button, not the holder, is what should carry the width - the lamp sits outside it.
+		super()._build_layout(holder)
+		holder.setFixedWidth(self.edit_width + self.indicator.width() + 4)
+		self.button.setFixedWidth(self.edit_width)
 
 	def _on_toggled(self, checked):
 		self.button.setText(self.on_text if checked else self.off_text)
@@ -1130,20 +1657,26 @@ class ParameterToggle(_ParameterControlBase):
 			self.button.blockSignals(False)
 		self.button.setText(self.on_text if checked else self.off_text)
 
+	def _display(self, confirmed_value, setpoint_value, status):
+		super()._display(confirmed_value, setpoint_value, status)
+		self.indicator.set_state(None if confirmed_value is None else bool(confirmed_value))
+
 class ParameterChoice(_ParameterControlBase):
-	''' An enumerated parameter in the same three-lamp frame. Worth having a PV row for: an
-	instrument that silently refuses an unsupported mode looks identical to one that accepted it,
-	until you can see what it actually reports. '''
+	''' An enumerated parameter. Worth a PV row in FULL view: an instrument that silently refuses
+	an unsupported mode looks identical to one that accepted it, until you can see what it
+	actually reports. '''
 
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
 			choices:list, set_args:callable=None, get_method:str=None, get_args:tuple=(),
-			labels:dict=None, stale_after_s:float=5.0):
+			labels:dict=None, stale_after_s:float=5.0, view:str=ParameterView.COMPACT,
+			edit_width:int=90):
+
+		self._labels = labels or {}
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args,
-			unit="", stale_after_s=stale_after_s)
+			unit="", stale_after_s=stale_after_s, view=view, edit_width=edit_width)
 
 		self._choices = list(choices)
-		self._labels = labels or {}
 
 		self.combo = QComboBox()
 		self.combo.addItems([self._format(c) for c in self._choices])
@@ -1170,6 +1703,7 @@ class ParameterChoice(_ParameterControlBase):
 			self.combo.blockSignals(True)
 			self.combo.setCurrentIndex(idx)
 			self.combo.blockSignals(False)
+
 
 # ============================================================================
 # Category -> widget registration, so ConstellationWindow.add_instrument(driver) works without

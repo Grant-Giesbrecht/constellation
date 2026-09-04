@@ -31,8 +31,9 @@ after the P3 dummy-seeding follow-ups: 252 passed, 3 xfailed;
 after hardware-verification tracking: 270 passed, 3 xfailed;
 after the staleness layer: 286 passed, 3 xfailed;
 after the oscilloscope hardware suite: 317 passed, 19 skipped, 3 xfailed;
-after the Parameter* GUI controls: **342 passed, 19 skipped, 3 xfailed** - the 19 skips are the
-hardware tests, which need `--address`).
+after the Parameter* GUI controls: 342 passed, 19 skipped, 3 xfailed;
+after Parameter* display modes + detail window: **366 passed, 19 skipped, 3 xfailed** - the 19
+skips are the hardware tests, which need `--address`).
 
 ---
 
@@ -1476,6 +1477,37 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
         package-data situation is still unverified against a built wheel (see above) and a
         control that needs an image file to function would be one bad install away from an
         invisible button. `ActionIcon(pixmap=...)` accepts artwork for anyone who wants it.
+- [x] **`Parameter*` v2 — display modes, detail window, PNG toggle lamp** (2026-09-04), to the
+      owner's spec. `oscilloscope_gui.py` rebuilt on it in COMPACT view.
+      - **`ParameterView.FULL/COMPACT/MINIMAL`**, set per control and switchable live via
+        `set_view()` or the detail window. One set of plumbing, three densities — so a panel is
+        built dense and turned up in place at the moment something looks wrong, which is exactly
+        when the extra rows earn their space. COMPACT carries an inline label, so a category
+        widget places one widget per setting instead of a `QLabel` plus a control.
+      - Compression never loses information: the merged lamp takes the **worst** contributing
+        status and its tooltip still names every status it stands for.
+      - **Lamps are clickable** → `ParameterDetailDialog`: all three statuses spelled out for that
+        parameter, the density dropdown, last sent / last received, the driver call, and the SCPI
+        behind it. Follows the control live, so it can be left open while the instrument is poked.
+      - **`ParameterToggle` state lamp** from `assets/indicator_{0,1}.png`, larger than the status
+        lamps and to the left of the button, because a checked QPushButton is nearly invisible
+        under some dark themes. Overridable via `on_pixmap=`/`off_pixmap=`; falls back to a
+        painted circle if the artwork can't load, since a control whose state is invisible is
+        worse than one that looks plain.
+      - **Sizing fixed**: the control refuses to stretch (`QSizePolicy.Maximum`) and its editor
+        has a fixed width, so slack in a container lands *between* controls instead of re-spacing
+        every control's internals on resize.
+      - **Tooltip bug fixed**: `StatusLamp` was a QLabel styled with `min-width`/`max-width` at
+        the dot's size, and Qt resolves a widget's stylesheet for its tooltip window too - so the
+        tooltip inherited an 11px cap and rendered as one clipped letter. The lamp is painted now
+        and carries no stylesheet at all.
+      - **SCPI attribution**: `CommandRelay.note_command()` records the last command/response
+        (truncated), and `OwningBridge` journals it *per driver method* - the relay only knows the
+        most recent command globally, which would credit one control's SCPI to whichever control
+        asked last.
+- [x] **Fixed `examples/osc_gui_demo.py`**, which had been broken since the bridge layer landed —
+      it passed the Driver where a bridge belongs and died on `AttributeError`. Now uses
+      `add_instrument()` with `--dummy`/`--resource` flags like the PSU demo.
 
 ### Open
 
@@ -1497,8 +1529,8 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
       written as a script with the assertions replaced by eyeballing.
 - [ ] **Run it.** Nothing in the oscilloscope `verification.yaml` is anything but `unverified` —
       the machinery exists, no instrument has been in front of it yet.
-- [ ] **Roll the `Parameter*` controls into the category widgets.** `oscilloscope_gui.py` and
-      `power_supply_gui.py` still use `Tracked*` throughout.
+- [ ] **Roll `Parameter*` into `power_supply_gui.py`**, which still uses `Tracked*`. Its measured
+      voltage/current labels are a good test of whether a read-only variant is worth adding.
 
 ## Execution order (agreed)
 

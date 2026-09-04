@@ -222,7 +222,16 @@ def test_a_failure_is_not_outranked_into_silence(tmp_path):
 #   - yes -> bump VERIFICATION_EPOCH in verification.py, then update this constant;
 #   - no  -> just update this constant.
 # Either way the decision is recorded, which is the point. See docs/hardware_verification.md.
-EXPECTED_FRAMEWORK_FINGERPRINT = "fc220ace5e6e2e22"
+# Update this when the shared I/O path changes, having decided whether the change could alter what
+# a driver does to hardware. Log of the decisions taken so far:
+#
+#   fc220ace5e6e2e22  initial pin.
+#   6e2d9683f7295b29  2026-09-04: CommandRelay.note_command() calls added to DirectSCPIRelay's
+#                     write/read/query/query_binary/write_binary, so a GUI can show a user the
+#                     actual SCPI behind a control. Epoch NOT bumped: the calls only assign two
+#                     strings, nothing on the I/O path reads them and nothing branches on them, so
+#                     no instrument can receive anything different. Pure observation.
+EXPECTED_FRAMEWORK_FINGERPRINT = "6e2d9683f7295b29"
 EXPECTED_EPOCH = 1
 
 def _record(status="confirmed", **kw):

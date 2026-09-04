@@ -49,7 +49,7 @@ Registration is keyed by **category**, not by driver model - once `YourCategoryW
 every current and future driver in `YourCategory` gets a working GUI automatically via
 `window.add_instrument(any_driver_of_that_category)`.
 
-### 3. Lay out controls with `Tracked*`, grouped like a front panel
+### 3. Lay out controls with `Parameter*`, grouped like a front panel
 
 Group related controls into `QGroupBox`/`QFrame` sections the way a real instrument's front panel
 would (trigger controls together, per-channel controls together, run/stop controls set apart) -
@@ -59,17 +59,21 @@ Three control types, all take a `bridge`, a `label`, a `get(state) -> value` cal
 `set_method` name (the driver method to call on write):
 
 ```python
-TrackedToggle(bridge, "Output", get=lambda s: s.channels[1].enable,
-              set_method="set_output_enable", set_args=lambda v: (1, v))
+ParameterToggle(bridge, "Output", get=lambda s: s.channels[1].enable,
+                set_method="set_output_enable", set_args=lambda v: (1, v), get_args=(1,))
 
-TrackedValue(bridge, "Voltage", get=lambda s: s.channels[1].voltage_set,
-             set_method="set_voltage", set_args=lambda v: (1, v),
+ParameterBox(bridge, "Voltage", get=lambda s: s.channels[1].voltage_set,
+             set_method="set_voltage", set_args=lambda v: (1, v), get_args=(1,),
              validator=QDoubleValidator(), unit="V")
 
-TrackedChoice(bridge, "Coupling", get=lambda s: s.channels[1].coupling,
-              set_method="set_coupling", set_args=lambda v: (1, v),
-              choices=[Oscilloscope.COUPLING_AC, Oscilloscope.COUPLING_DC])
+ParameterChoice(bridge, "Coupling", get=lambda s: s.channels[1].coupling,
+                set_method="set_coupling", set_args=lambda v: (1, v), get_args=(1,),
+                choices=[Oscilloscope.COUPLING_AC, Oscilloscope.COUPLING_DC])
 ```
+
+Full details, including the density modes and what each lamp means, are in **The `Parameter*`
+controls** below. The older `Tracked*` family is still present and still works, but is not what new
+widgets should use.
 
 `set_args` maps the raw UI value to the driver call's full argument list - default is `lambda v:
 (v,)`, override it when the driver method needs extra positional args (a channel number, as above).
@@ -80,14 +84,15 @@ write `lambda s, ch=ch: s.channels[ch].voltage_set`, never `lambda s: s.channels
 (the latter captures the loop variable itself, so every channel's control ends up reading the last
 channel). Both `power_supply_gui.py` and `oscilloscope_gui.py` do this throughout.
 
-### 4. Not everything is a `TrackedControl`
+### 4. Not everything is a parameter control
 
-Two things that deliberately are *not* wrapped in `Tracked*`:
+Two things that deliberately are *not* wrapped in a `Parameter*` control:
 
 - **Actions without a setpoint** - Run/Stop/Single-trigger, "Capture Waveforms". These are plain
   `QPushButton`s wired straight to `bridge.request(...)` in a `clicked` handler (see
   `oscilloscope_gui.py`'s acquisition box). There's no "confirmed vs. requested" concept for an
-  action.
+  action - which is also why the hardware suite can only ever mark them `confirmed`, never
+  `roundtrip`.
 - **Read-only measured values** - a power supply's measured voltage/current, for example. There's
   no setpoint for a measurement, only a reported number, so the pending/mismatch/stale machinery
   doesn't apply. Just a plain `QLabel` updated from `on_state_changed()` (see
@@ -126,7 +131,10 @@ Conversely, if your category's "expensive" read is actually cheap (e.g. `PowerSu
 arrives for free with every `state_changed`), don't add a needless capture button - just read it in
 `on_state_changed`, as `power_supply_gui.py` does.
 
-## The status indicator convention
+## The older `Tracked*` status convention
+
+`Tracked*` predates `Parameter*` and is documented here because both category GUIs used it until
+recently and it is still in `ui.py`. New widgets should use `Parameter*`.
 
 Every `Tracked*` control shows two small lights (or, for `TrackedToggle`'s `IndicatorButton`, one
 light plus the button's own on/off face): a **setpoint** light (green=last-requested-ON,
@@ -148,87 +156,127 @@ Note the `mismatch` comparison here is exact equality, which means an instrument
 with a tolerance, and separate this one lamp into the three independent questions it is currently
 collapsing.
 
-## Dense controls: the `Parameter*` family
+## The `Parameter*` controls
 
-The `Tracked*` controls above show one box and one lamp. That box holds *either* your setpoint or
-the instrument's value — never both — and the one lamp answers three different questions at once.
-For a simple panel that is fine. For diagnosing an instrument it isn't: the two numbers you need to
-compare are never on screen together, and an amber lamp doesn't tell you whether the command failed
-to send or the instrument disagreed with it.
-
-`ParameterBox` / `ParameterToggle` / `ParameterChoice` are the dense version. Two rows and three
-independent lamps:
-
-```
-        Parameter Name
-  ◀SP [ 0.55        ] V   ●  can this driver method be trusted at all?
-  PV▶ [ 0.5         ] V   ●  did the setpoint reach the instrument?
-                          ●  does the instrument agree with the setpoint?
-```
-
-Same constructor shape as the `Tracked*` controls, plus a couple of extras:
+`ParameterBox` / `ParameterToggle` / `ParameterChoice` are what a category widget should place for
+every instrument *setting*. Each one carries its own label, its own lamps and its own detail
+window, so the panel code places one widget per setting rather than a label plus a control plus
+hand-placed indicators.
 
 ```python
-ParameterBox(bridge, "Volts/div", get=lambda s: s.channels[1].div_volt,
+ParameterBox(bridge, "V/div", get=lambda s: s.channels[1].div_volt,
              set_method="set_div_volt", set_args=lambda v: (1, v),
              get_args=(1,), unit="V", tolerance=0.01)
 ```
 
-`get_method` is derived from `set_method` by the `set_x`/`get_x` convention every category API
-follows — pass it explicitly for anything that doesn't. `get_args` are the arguments the *getter*
-needs (a channel number), and are what the PV button re-queries with.
+Same `bridge`/`get`/`set_method`/`set_args` interface as the older `Tracked*` controls, plus:
+
+| argument | meaning |
+| --- | --- |
+| `get_method` | the getter to call for a re-read. Derived from `set_method` by the `set_x`/`get_x` convention; pass it for anything that doesn't follow it. |
+| `get_args` | the **getter's** arguments (a channel number), used by the PV button. Not the same as `set_args`. |
+| `tolerance` / `abs_tolerance` | how close a read-back has to be to count as agreeing. |
+| `view` | initial density — see below. |
+| `edit_width` | width of the editor, in px. |
+
+### Density: `ParameterView`
+
+The same control renders at three densities, set per control and changeable live:
+
+```
+FULL                          COMPACT                     MINIMAL
+  Parameter Name
+◀SP [ 0.55  ] V  ● ● ●        Name: ◀SP [0.55] V  ● ●     [0.55] V  ●
+PV▶ [ 0.5   ] V
+```
+
+- **`ParameterView.FULL`** — title, setpoint row, measured row, three independent lamps.
+- **`ParameterView.COMPACT`** — the default, and what the category GUIs use. Inline label,
+  setpoint row, two lamps (verification, plus one merged runtime status). A front panel is mostly
+  settings you are not currently suspicious of.
+- **`ParameterView.MINIMAL`** — editor and one lamp, for dense per-channel grids where the column
+  already says what the parameter is.
+
+Because the label is inside the control in COMPACT, a panel places one widget per row rather than a
+`QLabel` and a control:
+
+```python
+for row, control in enumerate((enable, vdiv, voff, coupling)):
+    layout.addWidget(control, row, 0)
+layout.setColumnStretch(1, 1)     # slack goes into the empty column, not into the controls
+```
+
+`control.set_view(ParameterView.FULL)` switches density in place, keeping setpoint and read-back.
+Compression never loses information: the merged lamp takes the **worst** contributing status and
+its tooltip still names every status it stands for.
 
 ### The three lamps
 
-**Verification** — from the hardware-verification records, not from anything happening at runtime.
-Green `confirmed`, blue `roundtrip`, yellow `untested`, red `broken`, dark `unavailable`, grey
-`unknown`. Both halves of the set/get pair are consulted and **the weaker one wins**: neither half
-can be verified without the other, so a confirmed setter with an unverified getter is not a verified
-parameter. Anything stale reads as `untested` — a record whose code has since changed no longer
-stands. See `docs/hardware_verification.md`.
+**Verification** — from the hardware-verification records, not from anything at runtime. Green
+`confirmed`, blue `roundtrip`, yellow `untested`, red `broken`, dark `unavailable`, grey `unknown`.
+Both halves of the set/get pair are consulted and **the weaker wins**: neither half can be verified
+without the other. Anything stale reads as `untested`. See `docs/hardware_verification.md`.
 
 An `unavailable` method (`@feature_unavailable`/`@feature_unimplemented`) also **disables the
 control**, so a DS1000E's timebase field is visibly dead rather than raising `FeatureUnavailable`
-when a user touches it.
+when a user touches it. An `ObserverBridge` has no local driver to ask, so its lamp is grey —
+guessing here would guess optimistically, which is the failure the verification scheme exists to
+prevent.
 
-An `ObserverBridge` has no local driver to ask, so its verification lamp is grey/`unknown`. That is
-the honest answer; guessing here would guess optimistically, which is the exact failure the
-verification scheme exists to prevent.
+**Setpoint sent** — green `sent`, yellow `unsent`/in flight, red `failed`. Deliberately *not* gated
+on whether a read-back arrived: that is the third lamp's question.
 
-**Setpoint sent** — green `sent`, yellow `unsent`/in flight, red `failed` (with the error in the
-tooltip). Deliberately *not* gated on whether a read-back has arrived: that is the third lamp's
-question, and merging them would re-create the ambiguity this widget exists to remove.
-
-**Measured** — green `match`, yellow `unqueried` (setpoint changed, nothing read back since), grey
-`mismatch`, red `query_error`.
+**Measured** — green `match`, yellow `unqueried`, grey `mismatch`, red `query_error`.
 
 `mismatch` is **grey, not red**, and this is the design decision most worth understanding. Ask a
 scope for 0.55 V/div and it will report 0.5 — forever. That is the instrument working correctly. A
-red lamp there would leave a panel full of permanent red that everyone learns to ignore, and the one
-that means something would be lost among them. Grey says "these two numbers differ, look at them",
-which is exactly what it means — and both numbers are on screen, so looking takes no clicks.
+red lamp there would leave a panel full of permanent red that everyone learns to ignore. Grey says
+"these two numbers differ, look at them". For the same reason these controls compare with a
+**tolerance**; the `Tracked*` controls use exact `!=`, which marks a quantizing instrument as
+mismatched forever.
 
-For the same reason these controls compare with a **tolerance** (`tolerance=` relative, default 1%,
-plus `abs_tolerance=` for values that legitimately sit at zero). The `Tracked*` controls use exact
-`!=`, which marks a correctly-quantizing instrument as mismatched forever.
+### Clicking things
 
-### The SP and PV buttons
+- **Any lamp** opens that parameter's detail window: all three statuses spelled out for this
+  parameter, the density dropdown, the last value sent and received, the driver call, and the SCPI
+  behind it when there is any. It follows live, so it can be left open while the instrument is
+  poked. There is no SCPI to show for a dummy driver (nothing touches a relay) or an
+  `ObserverBridge` (the call happens in another process) — the window says so rather than showing a
+  blank field.
+- **SP** re-sends the current setpoint; **PV** re-queries the instrument. SP does nothing when no
+  setpoint has been set — a refresh-looking click must never invent a value and write it to
+  hardware.
 
-The row labels are buttons. **SP re-sends** the current setpoint; **PV re-queries** the instrument.
-Both are what a user reaches for the moment a lamp goes the wrong colour, and neither was reachable
-before without restarting the panel.
+### `ParameterToggle`'s state lamp
 
-SP does nothing when the user has never set a setpoint — clicking something that looks like a
-refresh must not invent a value and write it to an instrument.
+A checked `QPushButton` is nearly indistinguishable from an unchecked one under several dark
+themes, which is unfortunate for an output-enable control. `ParameterToggle` puts a large lamp to
+the left of the button, drawn from `assets/indicator_1.png` / `indicator_0.png` and overridable per
+control:
 
-### Which family to use
+```python
+ParameterToggle(bridge, "Output", ..., on_pixmap=my_pixmap, off_pixmap=my_other, indicator_size=28)
+```
 
-Use `Parameter*` for anything a user might need to diagnose — essentially every real instrument
-setting. Use `Tracked*` where space is tight and the parameter is uncontroversial. They share the
-same `bridge`/`get`/`set_method`/`set_args` interface and can be mixed freely in one panel.
+It follows the **instrument**, not the button — it shows what was last read back, so a button that
+was clicked and did nothing is visible rather than inferred. If the artwork can't be loaded it
+falls back to a painted circle rather than becoming an invisible control.
 
-`examples/parameter_widgets_demo.py` runs the whole family against two dummy scopes, with buttons
-that simulate a failed send and a dropped connection so the lamps can be watched doing their job.
+### Sizing
+
+A `Parameter*` control refuses to stretch (`QSizePolicy.Maximum`) and its editor has a fixed width.
+Extra space in a container therefore goes **between** controls rather than inside them — give the
+container an empty stretch column. Without this a resized panel re-spaces every control's internals
+and the whole layout crawls.
+
+### `Tracked*` vs `Parameter*`
+
+`Tracked*` is the older, simpler family: one box, two lamps, no read-back row, no detail window, and
+exact-equality comparison. It still works and is used nowhere structural. Prefer `Parameter*` for
+new work.
+
+`examples/parameter_widgets_demo.py` runs the whole family at all three densities against two dummy
+scopes, with buttons that simulate a failed send and a dropped connection.
 
 ## Testing your widget headlessly
 
@@ -266,9 +314,9 @@ real hardware or a visible display.
 - [ ] `@register_gui(YourCategory)` on the widget class
 - [ ] No code path touches `bridge.driver` or any `Driver` method/attribute directly
 - [ ] Per-channel/per-index closures bind the loop variable as a default argument
-- [ ] Actions (no setpoint) are plain buttons; settings (have a setpoint) are `Parameter*` (or
-      `Tracked*` where space is tight); read-only measurements are plain labels updated from
-      `on_state_changed`
+- [ ] Actions (no setpoint) are plain buttons; settings (have a setpoint) are `Parameter*`;
+      read-only measurements are plain labels updated from `on_state_changed`
+- [ ] Containers give `Parameter*` controls an empty stretch column so slack lands between them
 - [ ] Numeric controls that an instrument will quantize carry a sensible `tolerance`/`abs_tolerance`
 - [ ] Anything slow is behind an explicit button, not folded into automatic polling
 - [ ] Channel/index counts come from `state`, not from a driver attribute

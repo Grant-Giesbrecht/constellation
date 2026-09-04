@@ -4,6 +4,11 @@ Read this file alongside docs/gui_architecture_proposal.md and docs/gui_authorin
 you're building a GUI for a different category - the pattern here (Tracked* controls wired to a
 bridge, lazy per-channel construction from the first state update, front-panel-style grouping) is
 meant to be copied, not reinvented per category.
+
+Controls are `Parameter*` in their COMPACT view: each one carries its own label, its own lamps,
+and its own detail window, so this file places one widget per setting rather than a label plus a
+control plus hand-placed indicators. Click any lamp to turn a control up to FULL and see the
+instrument's own reported value next to the setpoint.
 """
 
 from constellation.base import *
@@ -83,12 +88,12 @@ class OscilloscopeWidget(InstrumentWidget):
 		super().__init__(main_window, bridge, log)
 
 		self._channels_built = False
-		self.channel_controls = {}  # channel_num -> dict of Tracked* controls, for anyone who wants to reach in
+		self.channel_controls = {}  # channel_num -> dict of Parameter* controls, for anyone who wants to reach in
 		self._waveform_cache = {}   # channel_num -> last captured waveform dict
 
 		bridge.command_result.connect(self._on_command_result)
 
-		# --- Acquisition controls: deliberately plain buttons, not Tracked* - these are actions
+		# --- Acquisition controls: deliberately plain buttons, not Parameter* - these are actions
 		# (run/stop/single/capture), not settings with a confirmable setpoint. ---
 		self.run_button = QPushButton("Run")
 		self.run_button.clicked.connect(lambda: bridge.request("run_acquisition"))
@@ -108,31 +113,33 @@ class OscilloscopeWidget(InstrumentWidget):
 		# --- Trigger group ---
 		self.trigger_box = QGroupBox("Trigger")
 		trig_layout = QGridLayout()
-		self.trigger_mode = TrackedChoice(
+		self.trigger_mode = ParameterChoice(
 			bridge, "Mode", get=lambda s: s.trigger_mode, set_method="set_trigger_mode",
-			choices=[Oscilloscope.TRIG_AUTO, Oscilloscope.TRIG_NORM, Oscilloscope.TRIG_SINGLE])
-		self.trigger_level = TrackedValue(
+			choices=[Oscilloscope.TRIG_AUTO, Oscilloscope.TRIG_NORM, Oscilloscope.TRIG_SINGLE],
+			labels={Oscilloscope.TRIG_AUTO: "AUTO", Oscilloscope.TRIG_NORM: "NORMAL", Oscilloscope.TRIG_SINGLE: "SINGLE"})
+		self.trigger_level = ParameterBox(
 			bridge, "Level", get=lambda s: s.trigger_level, set_method="set_trigger_level",
-			validator=QDoubleValidator(), unit="V")
-		trig_layout.addWidget(QLabel("Mode:"), 0, 0)
-		trig_layout.addWidget(self.trigger_mode, 0, 1)
-		trig_layout.addWidget(QLabel("Level:"), 1, 0)
-		trig_layout.addWidget(self.trigger_level, 1, 1)
+			validator=QDoubleValidator(), unit="V", abs_tolerance=0.01)
+		trig_layout.addWidget(self.trigger_mode, 0, 0)
+		trig_layout.addWidget(self.trigger_level, 1, 0)
+		# Controls keep their natural width and stay left; the slack goes into the empty column.
+		trig_layout.setColumnStretch(1, 1)
+		trig_layout.setRowStretch(2, 1)
 		self.trigger_box.setLayout(trig_layout)
 
 		# --- Horizontal / timebase group ---
 		self.horiz_box = QGroupBox("Horizontal")
 		horiz_layout = QGridLayout()
-		self.time_div = TrackedValue(
+		self.time_div = ParameterBox(
 			bridge, "Time/div", get=lambda s: s.div_time, set_method="set_div_time",
 			validator=QDoubleValidator(), unit="s")
-		self.time_offset = TrackedValue(
+		self.time_offset = ParameterBox(
 			bridge, "Offset", get=lambda s: s.offset_time, set_method="set_offset_time",
-			validator=QDoubleValidator(), unit="s")
-		horiz_layout.addWidget(QLabel("Time/div:"), 0, 0)
-		horiz_layout.addWidget(self.time_div, 0, 1)
-		horiz_layout.addWidget(QLabel("Offset:"), 1, 0)
-		horiz_layout.addWidget(self.time_offset, 1, 1)
+			validator=QDoubleValidator(), unit="s", abs_tolerance=1e-9)
+		horiz_layout.addWidget(self.time_div, 0, 0)
+		horiz_layout.addWidget(self.time_offset, 1, 0)
+		horiz_layout.setColumnStretch(1, 1)
+		horiz_layout.setRowStretch(2, 1)
 		self.horiz_box.setLayout(horiz_layout)
 
 		# --- Channels group - populated lazily in _build_channels() once the first state update
@@ -169,29 +176,31 @@ class OscilloscopeWidget(InstrumentWidget):
 			group = QGroupBox(f"Channel {ch}")
 			layout = QGridLayout()
 
-			enable = TrackedToggle(
+			# get_args are the *getter's* arguments, which is what the PV button re-queries with -
+			# same channel number, but the getter takes it alone rather than alongside a value.
+			enable = ParameterToggle(
 				self.bridge, "Enable", get=(lambda s, ch=ch: s.channels[ch].chan_en),
-				set_method="set_chan_enable", set_args=(lambda v, ch=ch: (ch, v)))
-			vdiv = TrackedValue(
+				set_method="set_chan_enable", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,),
+				on_text="Enabled", off_text="Disabled")
+			vdiv = ParameterBox(
 				self.bridge, "V/div", get=(lambda s, ch=ch: s.channels[ch].div_volt),
-				set_method="set_div_volt", set_args=(lambda v, ch=ch: (ch, v)),
+				set_method="set_div_volt", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,),
 				validator=QDoubleValidator(), unit="V")
-			voff = TrackedValue(
+			voff = ParameterBox(
 				self.bridge, "Offset", get=(lambda s, ch=ch: s.channels[ch].offset_volt),
-				set_method="set_offset_volt", set_args=(lambda v, ch=ch: (ch, v)),
-				validator=QDoubleValidator(), unit="V")
-			coupling = TrackedChoice(
+				set_method="set_offset_volt", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,),
+				validator=QDoubleValidator(), unit="V", abs_tolerance=0.01)
+			coupling = ParameterChoice(
 				self.bridge, "Coupling", get=(lambda s, ch=ch: s.channels[ch].coupling),
-				set_method="set_coupling", set_args=(lambda v, ch=ch: (ch, v)),
-				choices=[Oscilloscope.COUPLING_DC, Oscilloscope.COUPLING_AC, Oscilloscope.COUPLING_GND])
+				set_method="set_coupling", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,),
+				choices=[Oscilloscope.COUPLING_DC, Oscilloscope.COUPLING_AC, Oscilloscope.COUPLING_GND],
+				labels={Oscilloscope.COUPLING_DC: "DC", Oscilloscope.COUPLING_AC: "AC", Oscilloscope.COUPLING_GND: "GND"})
 
-			layout.addWidget(enable, 0, 0, 1, 2)
-			layout.addWidget(QLabel("V/div:"), 1, 0)
-			layout.addWidget(vdiv, 1, 1)
-			layout.addWidget(QLabel("Offset:"), 2, 0)
-			layout.addWidget(voff, 2, 1)
-			layout.addWidget(QLabel("Coupling:"), 3, 0)
-			layout.addWidget(coupling, 3, 1)
+			for row, control in enumerate((enable, vdiv, voff, coupling)):
+				layout.addWidget(control, row, 0)
+
+			layout.setColumnStretch(1, 1)
+			layout.setRowStretch(4, 1)
 			group.setLayout(layout)
 
 			self.channels_layout.addWidget(group)

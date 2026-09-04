@@ -3,12 +3,18 @@
 Runs with no instrument attached. What it demonstrates is the thing a single-box control cannot
 show: what you asked for and what the instrument reports, side by side, with three independent
 lamps saying whether the method can be trusted at all, whether the command got there, and whether
-the instrument agrees.
+the instrument agrees - plus the density switch that lets you show as little or as much of that
+as a panel deserves.
 
 	python examples/parameter_widgets_demo.py
 
 Things to try once it's up:
 
+  - Click any lamp. The detail window explains all three, shows the last value sent and received
+    and the SCPI behind them, and has a "Detail shown" dropdown that changes that control's
+    density live - minimal, compact, or full.
+  - The three panels are the same controls at the three densities, so you can see what each one
+    costs and buys.
   - Set volts/div to 0.55. A real scope quantizes to 0.5 - the PV row shows the instrument's
     answer next to yours and the bottom lamp goes GREY, not red. Grey means "these differ, look at
     them", which is usually the instrument snapping to its own grid rather than anything wrong.
@@ -31,12 +37,13 @@ from PyQt6 import QtWidgets
 from PyQt6.QtWidgets import QGroupBox, QGridLayout, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 
 from constellation.all import *
-from constellation.ui import OwningBridge, ParameterBox, ParameterToggle, ParameterChoice
+from constellation.ui import (OwningBridge, ParameterBox, ParameterToggle, ParameterChoice,
+	ParameterView)
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import Oscilloscope
 
 CHANNEL = 1
 
-def build_panel(bridge, title:str) -> QGroupBox:
+def build_panel(bridge, title:str, view:str=ParameterView.FULL) -> QGroupBox:
 	''' One instrument's worth of controls. Nothing here is scope-specific machinery - each
 	control is one `get` lambda plus the driver method name it drives. '''
 
@@ -68,8 +75,14 @@ def build_panel(bridge, title:str) -> QGroupBox:
 			labels={Oscilloscope.TRIG_AUTO: "AUTO", Oscilloscope.TRIG_NORM: "NORMAL", Oscilloscope.TRIG_SINGLE: "SINGLE"}),
 	]
 
+	for control in controls:
+		control.set_view(view)
+
 	for i, control in enumerate(controls):
 		grid.addWidget(control, i // 3, i % 3)
+
+	# Extra width goes into the gaps between controls, not into the controls themselves.
+	grid.setColumnStretch(3, 1)
 
 	box.setLayout(grid)
 	box.controls = controls
@@ -121,15 +134,20 @@ layout = QVBoxLayout()
 # yellow. That is the honest state of this repository today.
 scope = RigolDS1000Z("DUMMY", log=log, dummy=True)
 bridge = OwningBridge(scope, poll_interval_s=1.0)
-panel = build_panel(bridge, "RigolDS1000Z (dummy) - nothing verified against hardware yet")
+panel = build_panel(bridge, "FULL - RigolDS1000Z (dummy), nothing verified against hardware yet", ParameterView.FULL)
 layout.addWidget(panel)
 layout.addWidget(build_fault_buttons(bridge, panel))
+
+# The same controls, same bridge, at the two shorter densities. Click a lamp on any of them to
+# change that control's density in place.
+layout.addWidget(build_panel(bridge, "COMPACT - the default, and what the category GUIs use", ParameterView.COMPACT))
+layout.addWidget(build_panel(bridge, "MINIMAL - for dense per-channel grids", ParameterView.MINIMAL))
 
 # A DS1000E: the timebase controls are genuinely impossible over SCPI on this instrument, so they
 # come up dark and disabled rather than raising FeatureUnavailable when clicked.
 scope_e = RigolDS1000E("DUMMY", log=log, dummy=True)
 bridge_e = OwningBridge(scope_e, poll_interval_s=1.0)
-layout.addWidget(build_panel(bridge_e, "RigolDS1000E (dummy) - timebase is unavailable on this hardware"))
+layout.addWidget(build_panel(bridge_e, "RigolDS1000E (dummy) - timebase is unavailable on this hardware", ParameterView.COMPACT))
 
 central = QWidget()
 central.setLayout(layout)
@@ -138,6 +156,7 @@ window.setCentralWidget(central)
 bridge.start()
 bridge_e.start()
 
+window.resize(1150, 900)
 window.show()
 app.exec()
 
