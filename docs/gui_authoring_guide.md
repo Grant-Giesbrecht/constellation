@@ -178,24 +178,35 @@ Same `bridge`/`get`/`set_method`/`set_args` interface as the older `Tracked*` co
 | `tolerance` / `abs_tolerance` | how close a read-back has to be to count as agreeing. |
 | `view` | initial density — see below. |
 | `edit_width` | width of the editor, in px. |
+| `prefixes` / `auto_prefix` | unit-prefix selector — see below. |
+| `lcd` | show the measured value on a `QLCDNumber` (`ParameterBox` only). |
+
+A control never overwrites input the user has typed but not committed. (The guard for this used to
+be `hasFocus()`, which is False whenever the window is not the *active* window — so a background
+poll silently replaced half-typed text with the last known value, and a field sitting at `0` ate
+`0.002` and looked like it had rounded. It tracks uncommitted edits via `textEdited` now.)
 
 ### Density: `ParameterView`
 
-The same control renders at three densities, set per control and changeable live:
+The same control renders at two densities, set per control and changeable live:
 
 ```
-FULL                          COMPACT                     MINIMAL
+FULL                              COMPACT
   Parameter Name
-◀SP [ 0.55  ] V  ● ● ●        Name: ◀SP [0.55] V  ● ●     [0.55] V  ●
+◀SP [ 0.55  ] V    ● ● ●          Name: [ 0.55 ] V   ● ●
 PV▶ [ 0.5   ] V
 ```
 
-- **`ParameterView.FULL`** — title, setpoint row, measured row, three independent lamps.
+- **`ParameterView.FULL`** — title, setpoint row, measured row, three lamps.
 - **`ParameterView.COMPACT`** — the default, and what the category GUIs use. Inline label,
-  setpoint row, two lamps (verification, plus one merged runtime status). A front panel is mostly
-  settings you are not currently suspicious of.
-- **`ParameterView.MINIMAL`** — editor and one lamp, for dense per-channel grids where the column
-  already says what the parameter is.
+  setpoint row, two lamps.
+
+COMPACT drops the **verification** lamp, not one of the runtime lamps. Verification is a fixed
+property of the driver and its records — it cannot change while a panel is open, so it is reference
+material rather than something to monitor. Which of "did my command land" and "does the instrument
+agree" is failing is the live question, and both have different fixes, so a compact panel keeps
+both. Verification stays one lamp-click away in the detail window, and a method the hardware cannot
+do still comes up as a disabled control either way.
 
 Because the label is inside the control in COMPACT, a panel places one widget per row rather than a
 `QLabel` and a control:
@@ -207,33 +218,36 @@ layout.setColumnStretch(1, 1)     # slack goes into the empty column, not into t
 ```
 
 `control.set_view(ParameterView.FULL)` switches density in place, keeping setpoint and read-back.
-Compression never loses information: the merged lamp takes the **worst** contributing status and
-its tooltip still names every status it stands for.
 
-### The three lamps
+### Unit prefixes
 
-**Verification** — from the hardware-verification records, not from anything at runtime. Green
-`confirmed`, blue `roundtrip`, yellow `untested`, red `broken`, dark `unavailable`, grey `unknown`.
-Both halves of the set/get pair are consulted and **the weaker wins**: neither half can be verified
-without the other. Anything stale reads as `untested`. See `docs/hardware_verification.md`.
+Pass `prefixes=True` for the full SI set, or a tuple of symbols to narrow it. The selector sits
+immediately right of the setpoint field and doubles as its unit label; the measured row gets a
+matching label, so **both rows always read in the same units** — which is the entire point of having
+two rows to compare.
 
-An `unavailable` method (`@feature_unavailable`/`@feature_unimplemented`) also **disables the
-control**, so a DS1000E's timebase field is visibly dead rather than raising `FeatureUnavailable`
-when a user touches it. An `ObserverBridge` has no local driver to ask, so its lamp is grey —
-guessing here would guess optimistically, which is the failure the verification scheme exists to
-prevent.
+```python
+ParameterBox(bridge, "Offset", get=lambda s: s.offset_time,
+             set_method="set_offset_time", unit="s", prefixes=("", "m", "µ", "n"))
+```
 
-**Setpoint sent** — green `sent`, yellow `unsent`/in flight, red `failed`. Deliberately *not* gated
-on whether a read-back arrived: that is the third lamp's question.
+The user types `2`, picks `ms`, and the driver is asked for `0.002`. Scaling is display-only:
+changing the prefix sends nothing, because the user asked to see the same quantity in different
+units, not to change it.
 
-**Measured** — green `match`, yellow `unqueried`, grey `mismatch`, red `query_error`.
+`auto_prefix=True` (the default) picks a readable prefix from the **first** non-zero value and then
+stops — a control whose units keep moving while you read it is worse than one that shows `0.002`,
+and it never overrides a prefix the user chose. Zero is ignored, since zero is zero in every prefix
+and would otherwise pin the selector at femto.
 
-`mismatch` is **grey, not red**, and this is the design decision most worth understanding. Ask a
-scope for 0.55 V/div and it will report 0.5 — forever. That is the instrument working correctly. A
-red lamp there would leave a panel full of permanent red that everyone learns to ignore. Grey says
-"these two numbers differ, look at them". For the same reason these controls compare with a
-**tolerance**; the `Tracked*` controls use exact `!=`, which marks a quantizing instrument as
-mismatched forever.
+Reach for this on anything whose natural values are far from 1: timebases, currents, frequencies.
+
+### LCD readout
+
+`ParameterBox(..., lcd=True)` shows the measured value on a `QLCDNumber` instead of a text field,
+in the full view. There is also a checkbox in the detail window, so it can be turned on for one
+parameter while watching it. Only numeric parameters offer it — there is nothing for seven segments
+to show for a coupling mode, and `supports_lcd` is False on the toggle and choice controls.
 
 ### Clicking things
 
@@ -247,7 +261,7 @@ mismatched forever.
   setpoint has been set — a refresh-looking click must never invent a value and write it to
   hardware.
 
-### `ParameterToggle`'s state lamp
+### `ParameterToggle`
 
 A checked `QPushButton` is nearly indistinguishable from an unchecked one under several dark
 themes, which is unfortunate for an output-enable control. `ParameterToggle` puts a large lamp to
@@ -255,19 +269,42 @@ the left of the button, drawn from `assets/indicator_1.png` / `indicator_0.png` 
 control:
 
 ```python
-ParameterToggle(bridge, "Output", ..., on_pixmap=my_pixmap, off_pixmap=my_other, indicator_size=28)
+ParameterToggle(bridge, "Channel 1", ..., on_text="LIVE", off_text="SAFE",
+                on_pixmap=my_pixmap, off_pixmap=my_other, indicator_size=28)
 ```
 
-It follows the **instrument**, not the button — it shows what was last read back, so a button that
-was clicked and did nothing is visible rather than inferred. If the artwork can't be loaded it
-falls back to a painted circle rather than becoming an invisible control.
+Both lamps follow the **instrument**, not the button — they show what was last read back, so a
+button that was clicked and did nothing is visible rather than inferred. If the artwork can't be
+loaded it falls back to a painted circle rather than becoming an invisible control.
+
+The two views label things differently, because in each one the button is the only element free to
+say something:
+
+- **FULL** — the title carries the parameter name, so the button carries the **state**
+  (`on_text`/`off_text`, defaulting to "Enabled"/"Disabled"), and the measured row is a second
+  indicator lamp showing what the instrument reports. Both rows are icon-then-lamp with identically
+  sized lamps, so the two line up in a column and read as "asked" above "actually".
+- **COMPACT** — there is no title, so the button carries the **name** and the state lives entirely
+  in the lamp beside it. No inline label, since that would say the name twice.
 
 ### Sizing
 
-A `Parameter*` control refuses to stretch (`QSizePolicy.Maximum`) and its editor has a fixed width.
-Extra space in a container therefore goes **between** controls rather than inside them — give the
-container an empty stretch column. Without this a resized panel re-spaces every control's internals
-and the whole layout crawls.
+A `Parameter*` control does not absorb slack in either direction: horizontally `QSizePolicy.Maximum`
+(may shrink in a cramped panel, never grows), vertically `Fixed` (never grows *or* shrinks — plain
+`Maximum` also permits shrinking, which squashed a control switched to the taller full view into the
+row height the compact one had needed). Its editor and PV widget have fixed widths, and the internal
+row spacing is constant.
+
+So extra space in a container lands **between** whole controls rather than being spread through one
+control's internals. Give containers an empty stretch column and row:
+
+```python
+layout.setColumnStretch(1, 1)
+layout.setRowStretch(len(controls), 1)
+```
+
+The lamp column centres on the **field rows only**, not the title — the lamps report on those rows,
+so centring over the title too pushed them out of line with what they describe.
 
 ### `Tracked*` vs `Parameter*`
 
@@ -318,6 +355,7 @@ real hardware or a visible display.
       read-only measurements are plain labels updated from `on_state_changed`
 - [ ] Containers give `Parameter*` controls an empty stretch column so slack lands between them
 - [ ] Numeric controls that an instrument will quantize carry a sensible `tolerance`/`abs_tolerance`
+- [ ] Parameters whose natural values are far from 1 (timebases, currents) carry `prefixes=`
 - [ ] Anything slow is behind an explicit button, not folded into automatic polling
 - [ ] Channel/index counts come from `state`, not from a driver attribute
 - [ ] Smoke-tested headlessly against a `dummy=True` driver

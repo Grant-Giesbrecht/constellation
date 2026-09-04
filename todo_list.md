@@ -32,8 +32,10 @@ after hardware-verification tracking: 270 passed, 3 xfailed;
 after the staleness layer: 286 passed, 3 xfailed;
 after the oscilloscope hardware suite: 317 passed, 19 skipped, 3 xfailed;
 after the Parameter* GUI controls: 342 passed, 19 skipped, 3 xfailed;
-after Parameter* display modes + detail window: **366 passed, 19 skipped, 3 xfailed** - the 19
-skips are the hardware tests, which need `--address`).
+after Parameter* display modes + detail window: 366 passed, 19 skipped, 3 xfailed;
+after Parameter* v3 (units, LCD, toggle PV, input-eating fix): 386 passed, 19 skipped, 3 xfailed;
+after Parameter* v4 (vertical layout, widget-lifetime fixes): **391 passed, 19 skipped, 3
+xfailed** - the 19 skips are the hardware tests, which need `--address`).
 
 ---
 
@@ -1508,6 +1510,47 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
 - [x] **Fixed `examples/osc_gui_demo.py`**, which had been broken since the bridge layer landed —
       it passed the Driver where a bridge belongs and died on `AttributeError`. Now uses
       `add_instrument()` with `--dummy`/`--resource` flags like the PSU demo.
+- [x] **`Parameter*` v3 — refinements to the owner's spec** (2026-09-04).
+      - **Dropped `MINIMAL`**; two views only. COMPACT now keeps the parameter label, drops the
+        `◀SP` button, and shows the two *runtime* lamps (sent, measured) instead of verification +
+        a merged one. Rationale: verification cannot change while a panel is open, so it is
+        reference material; which of "did my command land" and "does the instrument agree" is
+        failing is the live question, and the two have different fixes.
+      - **`ParameterToggle` PV bug fixed** — the measured row was rendering the parameter *name*
+        as text, so FULL view said it three times. It is now a second `IndicatorLight` showing the
+        instrument's state, aligned in a column with the SP lamp (both rows are icon-then-lamp).
+        In FULL the button carries the state ("Enabled"/"Disabled", overridable via
+        `on_text`/`off_text`) since the title carries the name; in COMPACT the button carries the
+        name since there is no title.
+      - **`lcd=True`** shows the measured value on a `QLCDNumber`, plus a checkbox in the detail
+        window. Numeric parameters only (`supports_lcd`).
+      - **Unit-prefix selector** (`prefixes=`), sitting immediately right of the SP field and
+        doubling as its unit label, with a matching label on the PV row so both rows always read
+        in the same units. Display-only: changing the prefix sends nothing. `auto_prefix` picks a
+        readable prefix from the first non-zero value, once, and never overrides a user choice.
+        Timebase and voltage controls in `oscilloscope_gui.py` now use it.
+      - **Row alignment fixed**: the SP row had no trailing stretch while the PV row did, so the
+        SP row spread its slack between widgets and the two rows' indicators drifted out of
+        column.
+- [x] **Fixed a real input-eating bug** (2026-09-04) — reported as "Offset rounds decimals to an
+      integer". The editor's overwrite guard was `edit.hasFocus()`, which is **False whenever the
+      window is not the active window**, so a background poll replaced half-typed text with the
+      last known value. Offset sat at `0`, so a half-typed `0.002` became `0`; Time/div only
+      looked fine because its value was already a decimal. Now guarded on uncommitted edits via
+      `textEdited`, which is user-input-only and independent of window activation. This affected
+      **every** `ParameterBox` in every panel, not just the timebase.
+- [x] **`Parameter*` v4 — vertical layout** (2026-09-04). Lamps now centre on the SP/PV rows
+      only, with the title above the row-plus-lamps block rather than inside it; centring over the
+      title pushed them out of line with the rows they report on. Internal row spacing is now
+      fixed: the control is `QSizePolicy.Fixed` vertically (not `Maximum` — that also permits
+      *shrinking*, which squashed a control switched to the taller full view), leftover height
+      pools in a trailing stretch, and `updateGeometry()` tells the parent when a density switch
+      changes how much room is needed.
+      Also fixed two lifetime bugs in the layout rebuild, both surfacing as "wrapped C/C++ object
+      has been deleted" on the next value update: reparenting sublayouts to `None` destroyed
+      widgets the current view had not placed (an unused `QLCDNumber` has no other owner), and
+      handing a still-populated layout to a throwaway widget re-parented everything onto it. The
+      layout is now drained item-by-item first, which leaves widget parents untouched.
 
 ### Open
 
@@ -1531,6 +1574,9 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
       the machinery exists, no instrument has been in front of it yet.
 - [ ] **Roll `Parameter*` into `power_supply_gui.py`**, which still uses `Tracked*`. Its measured
       voltage/current labels are a good test of whether a read-only variant is worth adding.
+- [ ] **The `Tracked*` family still has the `hasFocus()` bug** in `TrackedValue._display()`, and
+      still compares with exact `!=`. Either fix it or retire the family once
+      `power_supply_gui.py` moves off it.
 
 ## Execution order (agreed)
 

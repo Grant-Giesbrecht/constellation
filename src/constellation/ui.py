@@ -9,7 +9,7 @@ from PyQt6 import QtCore, QtGui
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QMainWindow, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton,
 	QSlider, QGroupBox, QWidget, QTabWidget, QDockWidget, QLabel, QLineEdit, QComboBox, QDialog,
-	QDialogButtonBox, QSizePolicy, QFrame)
+	QDialogButtonBox, QSizePolicy, QFrame, QCheckBox, QLCDNumber)
 from PyQt6.QtGui import QAction
 
 import matplotlib.pyplot as plt
@@ -580,41 +580,43 @@ class TrackedChoice(_TrackedControlBase):
 # three different questions at once.
 #
 # The Parameter* family below separates them, and then lets you choose how much of that
-# separation to actually show. One set of plumbing, three densities:
+# separation to show. One set of plumbing, two densities:
 #
-#   FULL                        COMPACT                 MINIMAL
+#   FULL                              COMPACT
 #     Parameter Name
-#   <|SP [ 0.55   ] V  * * *    Name: <|SP [0.55] V * *   [0.55] V *
-#     PV|> [ 0.5   ] V
+#   <|SP [ 0.55  ] V   * * *          Name: [ 0.55 ] V   * *
+#     PV|> [ 0.5  ] V
 #
-# The mode is a constructor argument AND changeable live (click any lamp), so a panel can be
-# built dense and expanded in place when something looks wrong - which is exactly when the extra
-# rows are worth their space.
+# The mode is a constructor argument AND changeable live (click any lamp), so a panel can be built
+# dense and expanded in place when something looks wrong - which is exactly when the extra row is
+# worth its space.
 # ============================================================================
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 class ParameterView:
-	''' How much of a parameter's state to show. See the diagram above.
+	''' How much of a parameter's state to show.
 
-	FULL:    title, setpoint row, measured row, three independent lamps. Everything.
-	COMPACT: inline label, setpoint row, two lamps (verification + a merged runtime status). The
-	         default, and what the category widgets use - a front panel is mostly settings you
-	         are not currently suspicious of.
-	MINIMAL: the editor and one lamp. For dense per-channel grids where the parameter name is
-	         already implied by the column it sits in.
+	FULL:    title, setpoint row, measured row, three lamps (verification, sent, measured).
+	COMPACT: inline label, setpoint row, two lamps (sent, measured). The default, and what the
+	         category widgets use.
+
+	COMPACT deliberately drops the *verification* lamp rather than one of the runtime lamps.
+	Verification is a fixed property of the driver and the records - it cannot change while a
+	panel is open, so it is reference material rather than something to monitor. Which of "did my
+	command land" and "does the instrument agree" is failing is the live question, and that is
+	what a compact panel keeps. Verification is still one lamp-click away in the detail window,
+	and a method the hardware cannot do still comes up as a disabled control either way.
 	'''
 
 	FULL = "full"
 	COMPACT = "compact"
-	MINIMAL = "minimal"
 
-	ORDER = (MINIMAL, COMPACT, FULL)
+	ORDER = (COMPACT, FULL)
 
 	LABELS = {
-		FULL: "Full",
-		COMPACT: "Compact",
-		MINIMAL: "Minimal",
+		FULL: "Full - setpoint, measured value, three lamps",
+		COMPACT: "Compact - setpoint only, two lamps",
 	}
 
 # Verification: can this driver method be trusted? Sourced from the hardware-verification records
@@ -672,17 +674,12 @@ VALUE_TEXT = {
 	"query_error": "The value could not be read at all.",
 }
 
-# Worst-first, for the merged lamp in the less verbose views. A hard failure outranks a
-# disagreement, which outranks not having looked yet.
-_MERGE_RANK = ("query_error", "failed", "broken", "mismatch", "unqueried", "unsent", "unknown",
-	"untested", "unavailable", "roundtrip", "sent", "match", "confirmed")
-
-def _worst(*keys):
-	''' The most alarming of several status keys. '''
-
-	present = [k for k in keys if k in _MERGE_RANK]
-
-	return min(present, key=_MERGE_RANK.index) if present else "unknown"
+# SI prefixes offered by the unit selector, largest first. `µ` is spelled with the MICRO SIGN so it
+# renders on every platform without a font that has GREEK SMALL LETTER MU.
+UNIT_PREFIXES = (
+	("T", 1e12), ("G", 1e9), ("M", 1e6), ("k", 1e3), ("", 1.0),
+	("m", 1e-3), ("µ", 1e-6), ("n", 1e-9), ("p", 1e-12), ("f", 1e-15),
+)
 
 _VERIFICATION_REPORT_CACHE = {}
 
@@ -838,8 +835,8 @@ class StatusLamp(QWidget):
 		painter.end()
 
 class IndicatorLight(QWidget):
-	''' A large on/off lamp for a push button, drawn from the `indicator_1.png` /
-	`indicator_0.png` artwork in `assets/`.
+	''' A large on/off lamp, drawn from the `indicator_1.png` / `indicator_0.png` artwork in
+	`assets/`.
 
 	Exists because a checked QPushButton is nearly indistinguishable from an unchecked one under
 	several dark themes - the state is carried entirely by a subtle background shade. A separate
@@ -860,6 +857,7 @@ class IndicatorLight(QWidget):
 		self._off = self._load(off_pixmap, "indicator_0.png")
 
 		self.setFixedSize(size, size)
+		self.set_state(None)
 
 	def _load(self, supplied, filename:str):
 		''' Accepts a QPixmap or a path from the caller, else loads the packaged artwork. '''
@@ -881,8 +879,9 @@ class IndicatorLight(QWidget):
 		''' `state`: True (on), False (off), or None (unknown - nothing heard from the
 		instrument yet). '''
 
-		self._state = state
-		self.setToolTip({True: "ON", False: "OFF", None: "unknown"}[state if state is None else bool(state)])
+		self._state = None if state is None else bool(state)
+		self.setToolTip({True: "instrument reports ON", False: "instrument reports OFF",
+			None: "nothing read back from the instrument yet"}[self._state])
 		self.update()
 
 	def paintEvent(self, event):
@@ -999,8 +998,8 @@ class ParameterDetailDialog(QDialog):
 
 	Three jobs, all of them things a user wants at the moment a lamp goes the wrong colour and
 	none of which fit in a tooltip: say what each lamp actually means for *this* parameter, show
-	the raw traffic (what was sent, what came back, and the SCPI behind it), and let the density
-	be turned up so the measured value is on screen while the problem is being looked at.
+	the raw traffic (what was sent, what came back, and the SCPI behind it), and let the display
+	be reconfigured while the problem is being looked at.
 	'''
 
 	def __init__(self, control, parent=None):
@@ -1018,7 +1017,7 @@ class ParameterDetailDialog(QDialog):
 		layout.addWidget(header)
 		layout.addWidget(self._separator())
 
-		# --- density ---
+		# --- display options ---
 		density = QHBoxLayout()
 		density.addWidget(QLabel("Detail shown:"))
 		self.view_combo = QComboBox()
@@ -1028,6 +1027,13 @@ class ParameterDetailDialog(QDialog):
 		self.view_combo.activated.connect(self._on_view_chosen)
 		density.addWidget(self.view_combo, 1)
 		layout.addLayout(density)
+
+		self.lcd_check = QCheckBox("Show the measured value on an LCD readout (full view only)")
+		self.lcd_check.setChecked(bool(getattr(control, "lcd", False)))
+		self.lcd_check.setEnabled(getattr(control, "supports_lcd", False))
+		self.lcd_check.toggled.connect(control.set_lcd)
+		layout.addWidget(self.lcd_check)
+
 		layout.addWidget(self._separator())
 
 		# --- the three lamps, spelled out ---
@@ -1114,6 +1120,9 @@ class ParameterDetailDialog(QDialog):
 
 		self.resend_button.setEnabled(control.setpoint is not None and verification_key != "unavailable")
 
+		if self.view_combo.currentIndex() != ParameterView.ORDER.index(control.view):
+			self.view_combo.setCurrentIndex(ParameterView.ORDER.index(control.view))
+
 		command, response = control.last_scpi()
 
 		rows = [
@@ -1147,13 +1156,13 @@ def _html(value) -> str:
 	return html.escape("None" if value is None else str(value))
 
 class _ParameterControlBase(_TrackedControlBase):
-	''' Shared machinery for the SP/PV family: the three-lamp state, the switchable layout, and
-	the two action buttons. Subclasses supply the SP editor and how to render a value.
+	''' Shared machinery for the SP/PV family: the lamp state, the switchable layout, the optional
+	unit-prefix scaling, and the two action buttons. Subclasses supply the SP editor, the PV
+	widget, and how to render a value.
 
 	Deliberately built on _TrackedControlBase rather than replacing it - the setpoint/confirmed
 	bookkeeping there is already correct, and the existing Tracked* controls keep working
-	untouched. What is added is the decomposition of one status into three, a tolerance the
-	single-lamp version never had, and the density switch.
+	untouched.
 	'''
 
 	# Emitted whenever any displayed state changes, so an open detail dialog can follow along.
@@ -1162,7 +1171,8 @@ class _ParameterControlBase(_TrackedControlBase):
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
 			set_args:callable=None, get_method:str=None, get_args:tuple=(), unit:str="",
 			tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0,
-			view:str=ParameterView.COMPACT, edit_width:int=90):
+			view:str=ParameterView.COMPACT, edit_width:int=90,
+			prefixes=None, auto_prefix:bool=True):
 
 		super().__init__(bridge, label, get, set_method, set_args, stale_after_s)
 
@@ -1179,12 +1189,18 @@ class _ParameterControlBase(_TrackedControlBase):
 		self.unit = unit
 		self.view = view
 		self.edit_width = edit_width
+		self.supports_lcd = False
+		self.lcd = False
 
 		self.send_error = ""
 		self.query_error = ""
 		self._send_state = "unsent"
 		self._awaiting_readback = False
 		self._online = True
+
+		# True while the user has typed something they haven't committed. See _display_setpoint:
+		# a background poll must never overwrite half-typed input.
+		self._dirty = False
 
 		self.title_label = QLabel(label)
 		self.title_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -1194,9 +1210,8 @@ class _ParameterControlBase(_TrackedControlBase):
 		self.lamp_verification = StatusLamp()
 		self.lamp_send = StatusLamp()
 		self.lamp_value = StatusLamp()
-		self.lamp_merged = StatusLamp()
 
-		for lamp in (self.lamp_verification, self.lamp_send, self.lamp_value, self.lamp_merged):
+		for lamp in (self.lamp_verification, self.lamp_send, self.lamp_value):
 			lamp.clicked.connect(self.show_details)
 
 		self.sp_icon = ActionIcon("SP", points_left=True, tooltip="Send this setpoint to the instrument again")
@@ -1205,10 +1220,18 @@ class _ParameterControlBase(_TrackedControlBase):
 		self.pv_icon.clicked.connect(self.requery)
 		self.pv_icon.setEnabled(self.get_method is not None)
 
-		self.pv_display = QLineEdit()
-		self.pv_display.setReadOnly(True)
-		self.pv_display.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-		self.pv_display.setFixedWidth(edit_width)
+		# --- unit prefix selector ---
+		self._prefixes = self._resolve_prefixes(prefixes)
+		self.auto_prefix = auto_prefix and self._prefixes is not None
+		self._prefix_chosen = False
+		self.scale = 1.0
+
+		self.prefix_combo = QComboBox()
+		if self._prefixes is not None:
+			for symbol, factor in self._prefixes:
+				self.prefix_combo.addItem(f"{symbol}{unit}", factor)
+			self.prefix_combo.setCurrentIndex([f for _, f in self._prefixes].index(1.0) if any(f == 1.0 for _, f in self._prefixes) else 0)
+			self.prefix_combo.activated.connect(self._on_prefix_chosen)
 
 		self.unit_sp = QLabel(unit)
 		self.unit_pv = QLabel(unit)
@@ -1218,6 +1241,24 @@ class _ParameterControlBase(_TrackedControlBase):
 		# Resolved once: verification is a property of the code and the records, not of anything
 		# happening at runtime, so it cannot change while a panel is open.
 		self.verification_key, self.verification_lines = verification_indicator(bridge, (set_method, get_method))
+
+	def _resolve_prefixes(self, prefixes):
+		''' `prefixes=True` gives the standard SI set, a sequence of symbols narrows it, and None
+		(the default) turns the selector off entirely. '''
+
+		if prefixes is None or prefixes is False:
+			return None
+
+		if prefixes is True:
+			return UNIT_PREFIXES
+
+		wanted = set(prefixes)
+
+		return tuple((symbol, factor) for symbol, factor in UNIT_PREFIXES if symbol in wanted)
+
+	@property
+	def has_prefixes(self) -> bool:
+		return self._prefixes is not None
 
 	# --- read-only views of the state, for the detail dialog ----------------
 
@@ -1254,30 +1295,84 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		return None, None
 
+	# --- unit scaling -------------------------------------------------------
+
+	def _on_prefix_chosen(self, index:int):
+		''' Changing the prefix rescales the display only. Nothing is sent: the user asked to see
+		the same quantity in different units, not to change it. '''
+
+		self._prefix_chosen = True
+		self.scale = self.prefix_combo.itemData(index)
+		self.unit_pv.setText(self.prefix_combo.currentText())
+		self._dirty = False
+		self._refresh_display()
+
+	def _maybe_autoscale(self, value):
+		''' Picks the prefix that puts the first real value in a readable range.
+
+		Only ever fires once, and never after the user has touched the selector - a control whose
+		units move under you while you are reading it is worse than one that shows 0.002.
+		'''
+
+		if not self.auto_prefix or self._prefix_chosen or self._prefixes is None:
+			return
+
+		try:
+			magnitude = abs(float(value))
+		except (TypeError, ValueError):
+			return
+
+		if magnitude == 0:
+			return   # 0 is 0 in every prefix, and would otherwise pin the selector at femto
+
+		for index, (symbol, factor) in enumerate(self._prefixes):
+			if magnitude >= factor:
+				self.prefix_combo.setCurrentIndex(index)
+				self.scale = factor
+				self.unit_pv.setText(self.prefix_combo.currentText())
+				break
+
+		self._prefix_chosen = True
+
+	def _to_display(self, value):
+		''' Instrument units -> the units the user is looking at. '''
+
+		if value is None or self.scale == 1.0:
+			return value
+
+		try:
+			return float(value) / self.scale
+		except (TypeError, ValueError):
+			return value
+
+	def _from_display(self, value):
+		''' The units the user typed in -> instrument units. '''
+
+		return value if self.scale == 1.0 else value * self.scale
+
 	# --- layout / density ---------------------------------------------------
 
-	def _build_layout(self, sp_editor):
-		''' Called once by each subclass, after it has built its editor. '''
+	def _build_layout(self, sp_editor, pv_widget):
+		''' Called once by each subclass, after it has built its editor and PV widget. '''
 
 		self.sp_editor = sp_editor
-		sp_editor.setFixedWidth(self.edit_width)
+		self.pv_widget = pv_widget
 
-		# Extra space in a container goes BETWEEN controls, not inside them: every piece here has
-		# a fixed or natural width, and the widget as a whole refuses to stretch. Without this the
-		# editor absorbed the slack and a resized panel re-spaced every control's internals.
-		self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
-
-		self._root = QHBoxLayout()
-		self._root.setContentsMargins(4, 2, 4, 2)
-		self._root.setSpacing(6)
-		self.setLayout(self._root)
+		# Extra space in a container goes BETWEEN controls, not inside them - in BOTH directions.
+		# Every piece here has a fixed or natural size and the widget as a whole refuses to grow,
+		# so a resized panel spreads its slack across the gaps between controls instead of
+		# re-spacing each control's internals.
+		# Horizontally Maximum (may shrink in a cramped panel, never grows); vertically Fixed,
+		# because Maximum also permits SHRINKING - and a control switched to the taller full view
+		# was then squashed into the row height the compact one had needed.
+		self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 
 		self._apply_view()
 
 		# A method the hardware cannot do, or that nobody has written, gets a visibly dead
 		# control rather than one that raises FeatureUnavailable when clicked.
 		if self.verification_key == "unavailable":
-			for widget in (self.sp_editor, self.sp_icon, self.pv_icon):
+			for widget in (self.sp_editor, self.sp_icon, self.pv_icon, self.prefix_combo):
 				widget.setEnabled(False)
 
 		self._refresh_display()
@@ -1293,53 +1388,140 @@ class _ParameterControlBase(_TrackedControlBase):
 		self._apply_view()
 		self._refresh_display()
 
+	def set_lcd(self, enabled:bool):
+		''' Switches the measured-value readout between a text field and a QLCDNumber. Only
+		meaningful for numeric parameters, and only visible in the full view. '''
+
+		if not self.supports_lcd or bool(enabled) == self.lcd:
+			return
+
+		self.lcd = bool(enabled)
+		self._apply_view()
+		self._refresh_display()
+
+	def show_sp_icon(self) -> bool:
+		''' The SP button is a full-view affordance. In compact the label is doing that job, and
+		the detail window still offers "Re-send setpoint". '''
+
+		return self.view == ParameterView.FULL
+
+	def show_inline_label(self) -> bool:
+		return self.view == ParameterView.COMPACT
+
+	def visible_lamps(self) -> list:
+		''' Which lamps this density shows. See ParameterView for why compact drops the
+		verification lamp rather than a runtime one. '''
+
+		if self.view == ParameterView.FULL:
+			return [self.lamp_verification, self.lamp_send, self.lamp_value]
+
+		return [self.lamp_send, self.lamp_value]
+
+	def _pv_row_widget(self):
+		''' Which widget shows the measured value. Subclasses override to swap in an LCD or an
+		indicator lamp. '''
+
+		return self.pv_widget
+
+	def _managed_widgets(self) -> tuple:
+		''' Every widget this control owns, placed in the current view or not.
+
+		Used to keep C++ ownership with the control across a layout rebuild. A widget the current
+		view does not place (an unused LCD, say) has no parent layout holding it, and only this
+		keeps it alive.
+		'''
+
+		return (self.title_label, self.inline_label, self.sp_icon, self.pv_icon, self.sp_editor,
+			self.pv_widget, self.unit_sp, self.unit_pv, self.prefix_combo,
+			self.lamp_verification, self.lamp_send, self.lamp_value) + self._extra_hidable()
+
 	def _apply_view(self):
 
-		_clear_layout(self._root)
-
 		full = self.view == ParameterView.FULL
-		compact = self.view == ParameterView.COMPACT
 
-		for widget in (self.title_label, self.inline_label, self.sp_icon, self.pv_icon,
-				self.pv_display, self.unit_pv, self.lamp_verification, self.lamp_send,
-				self.lamp_value, self.lamp_merged):
+		# Rebuilding the layout must not take the widgets with it. Two traps here, both of which
+		# manifest as "wrapped C/C++ object ... has been deleted" on the next value update:
+		#
+		#  - emptying the layout in place and reparenting its SUBLAYOUTS to None destroys widgets
+		#    the current view had not placed (an unused LCD has no other owner);
+		#  - handing a still-populated layout to a throwaway widget re-parents everything it
+		#    manages onto that widget, which then dies with it.
+		#
+		# So: drain every item out first (widgets stay children of this control), pin ownership
+		# explicitly, and only then dispose of the empty husk.
+		old_layout = self.layout()
+		if old_layout is not None:
+			_drain_layout(old_layout)
+
+		for widget in self._managed_widgets():
+			widget.setParent(self)
 			widget.setVisible(False)
 
-		self.unit_sp.setVisible(bool(self.unit))
+		if old_layout is not None:
+			QWidget().setLayout(old_layout)
+
+		self._root = QVBoxLayout()
+		self._root.setContentsMargins(4, 2, 4, 2)
+		self._root.setSpacing(2)
+		self.setLayout(self._root)
+
+		# The title sits ABOVE the row-plus-lamps block rather than inside it, so the lamp column
+		# centres on the fields it annotates. Centring it over the title as well pushed the lamps
+		# up out of line with the rows whose status they report.
+		if full and self.show_title():
+			self.title_label.setVisible(True)
+			self._root.addWidget(self.title_label)
 
 		rows = QVBoxLayout()
 		rows.setSpacing(2)
 
-		if full:
-			self.title_label.setVisible(True)
-			rows.addWidget(self.title_label)
-
 		sp_row = QHBoxLayout()
 		sp_row.setSpacing(4)
 
-		if compact:
+		if self.show_inline_label():
 			self.inline_label.setVisible(True)
 			sp_row.addWidget(self.inline_label)
 
-		if full or compact:
+		if self.show_sp_icon():
 			self.sp_icon.setVisible(True)
 			sp_row.addWidget(self.sp_icon)
 
-		sp_row.addWidget(self.sp_editor)
-		if self.unit:
+		self._add_sp_editor(sp_row)
+
+		# The prefix selector sits immediately right of the setpoint field, and doubles as the
+		# unit label - so there is exactly one place the units are stated for the SP row.
+		if self.has_prefixes:
+			self.prefix_combo.setVisible(True)
+			sp_row.addWidget(self.prefix_combo)
+		elif self.unit:
+			self.unit_sp.setVisible(True)
 			sp_row.addWidget(self.unit_sp)
+
+		# Both rows get a trailing stretch so both pack LEFT. Without it the SP row spread its
+		# slack between its widgets while the PV row (which has one) stayed put, and the two rows'
+		# indicators drifted out of column - which is exactly the alignment that makes an SP row
+		# above a PV row readable as "asked" above "actually".
+		sp_row.addStretch(1)
 		rows.addLayout(sp_row)
 
-		if full:
+		if full and self.show_pv_row():
 			pv_row = QHBoxLayout()
 			pv_row.setSpacing(4)
 			self.pv_icon.setVisible(True)
-			self.pv_display.setVisible(True)
 			pv_row.addWidget(self.pv_icon)
-			pv_row.addWidget(self.pv_display)
-			if self.unit:
+
+			pv = self._pv_row_widget()
+			pv.setVisible(True)
+			pv_row.addWidget(pv)
+
+			# The PV row's unit label mirrors the selector, so both rows always read in the same
+			# units - which is the entire point of scaling them together.
+			if self.has_prefixes or self.unit:
+				self.unit_pv.setText(self.prefix_combo.currentText() if self.has_prefixes else self.unit)
 				self.unit_pv.setVisible(True)
 				pv_row.addWidget(self.unit_pv)
+
+			pv_row.addStretch(1)
 			rows.addLayout(pv_row)
 
 		# Stretch on BOTH sides centres the lamp column against the rows it annotates. With a
@@ -1355,20 +1537,34 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		lamps.addStretch(1)
 
-		self._root.addLayout(rows)
-		self._root.addLayout(lamps)
+		body = QHBoxLayout()
+		body.setSpacing(6)
+		body.addLayout(rows)
+		body.addLayout(lamps)
 
-	def visible_lamps(self) -> list:
-		''' Which lamps this density shows. FULL keeps the three questions apart; the shorter
-		views merge them, worst-first, and the tooltip still names every contributing status. '''
+		self._root.addLayout(body)
 
-		if self.view == ParameterView.FULL:
-			return [self.lamp_verification, self.lamp_send, self.lamp_value]
+		# Any height beyond what the rows need pools here rather than being shared out between
+		# them. The size policy above already stops a well-behaved container from growing the
+		# widget at all; this keeps the rows packed even when something resizes it directly.
+		self._root.addStretch(1)
 
-		if self.view == ParameterView.COMPACT:
-			return [self.lamp_verification, self.lamp_merged]
+		# Switching density changes how much room this control needs. Without telling the parent,
+		# a container keeps the old row height and clips the taller view.
+		self.updateGeometry()
 
-		return [self.lamp_merged]
+	def show_title(self) -> bool:
+		return True
+
+	def show_pv_row(self) -> bool:
+		return True
+
+	def _extra_hidable(self) -> tuple:
+		return ()
+
+	def _add_sp_editor(self, sp_row):
+		sp_row.addWidget(self.sp_editor)
+		self.sp_editor.setVisible(True)
 
 	# --- user actions -------------------------------------------------------
 
@@ -1436,6 +1632,7 @@ class _ParameterControlBase(_TrackedControlBase):
 		self._send_state = "unsent"
 		self.send_error = ""
 		self._awaiting_readback = True
+		self._dirty = False
 		super()._user_changed(new_value)
 
 	def _on_command_result(self, method_name, args, success, result):
@@ -1453,10 +1650,11 @@ class _ParameterControlBase(_TrackedControlBase):
 	def _on_state_changed(self, state):
 
 		try:
-			self.get(state)
+			value = self.get(state)
 		except Exception:
 			return
 
+		self._maybe_autoscale(value)
 		self._awaiting_readback = False
 		self.query_error = ""
 		super()._on_state_changed(state)
@@ -1506,140 +1704,203 @@ class _ParameterControlBase(_TrackedControlBase):
 			f"Measured: {value}\n{VALUE_TEXT[value]}\nmeasured = {self._confirmed}"
 			+ (f"\n{self.query_error}" if self.query_error else "") + hint)
 
-		# The merged lamp used by the shorter views. Its tooltip lists every status it stands in
-		# for, so compressing the display never compresses the explanation.
-		if self.view == ParameterView.COMPACT:
-			merged = _worst(send, value)
-			parts = [f"Setpoint: {send} - {SEND_TEXT[send]}", f"Measured: {value} - {VALUE_TEXT[value]}"]
-		else:
-			merged = _worst(verification, send, value)
-			parts = [f"Verification: {verification} - {VERIFICATION_TEXT.get(verification, '')}",
-				f"Setpoint: {send} - {SEND_TEXT[send]}", f"Measured: {value} - {VALUE_TEXT[value]}"]
-
-		colors = {}
-		colors.update(VERIFICATION_COLORS)
-		colors.update(SEND_COLORS)
-		colors.update(VALUE_COLORS)
-
-		self.lamp_merged.set(colors.get(merged, "#888888"), "\n".join(parts) + hint)
-
 	def _display(self, confirmed_value, setpoint_value, status):
 
 		self._display_setpoint(setpoint_value if setpoint_value is not None else confirmed_value)
-		self.pv_display.setText(self._format(confirmed_value))
+		self._display_measured(confirmed_value)
 		self._refresh_lamps()
 		self.changed.emit()
 
 	def _display_setpoint(self, value):
 		raise NotImplementedError
 
-def _clear_layout(layout):
-	''' Empties a layout without destroying the widgets in it, so a density switch can re-place
-	the same widgets rather than rebuilding (and re-wiring) them. '''
+	def _display_measured(self, value):
+		raise NotImplementedError
+
+
+def _drain_layout(layout):
+	''' Removes every item from a layout tree without disturbing any widget's parent.
+
+	takeAt() detaches a QWidgetItem but leaves the widget itself parented where it was, which is
+	exactly what a layout rebuild needs: the control keeps its widgets, the layout keeps nothing.
+	'''
 
 	while layout.count():
 
 		item = layout.takeAt(0)
 
-		widget = item.widget()
-		if widget is not None:
-			widget.setParent(None)
-			continue
-
 		child = item.layout()
 		if child is not None:
-			_clear_layout(child)
-			child.setParent(None)
+			_drain_layout(child)
 
 class ParameterBox(_ParameterControlBase):
 	''' A numeric parameter. Example:
 
 		ParameterBox(bridge, "Volts/div", get=lambda s: s.channels[1].div_volt,
 			set_method="set_div_volt", set_args=lambda v: (1, v), get_args=(1,), unit="V")
+
+	With a unit-prefix selector, so a user types "2" and picks "ms" rather than typing "0.002":
+
+		ParameterBox(bridge, "Offset", get=lambda s: s.offset_time,
+			set_method="set_offset_time", unit="s", prefixes=True)
 	'''
 
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
 			set_args:callable=None, get_method:str=None, get_args:tuple=(), validator=None,
 			unit:str="", tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0,
-			view:str=ParameterView.COMPACT, edit_width:int=90):
+			view:str=ParameterView.COMPACT, edit_width:int=90, prefixes=None,
+			auto_prefix:bool=True, lcd:bool=False, lcd_digits:int=6):
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args, unit,
-			tolerance, abs_tolerance, stale_after_s, view, edit_width)
+			tolerance, abs_tolerance, stale_after_s, view, edit_width, prefixes, auto_prefix)
+
+		self.supports_lcd = True
+		self.lcd = bool(lcd)
 
 		self.edit = QLineEdit()
 		if validator is not None:
 			self.edit.setValidator(validator)
+		self.edit.setFixedWidth(edit_width)
 		self.edit.editingFinished.connect(self._on_edited)
 
-		self._build_layout(self.edit)
+		# textEdited fires only for user typing, never for setText() - which is exactly the
+		# distinction _display_setpoint needs.
+		self.edit.textEdited.connect(self._on_text_edited)
+
+		self.pv_display = QLineEdit()
+		self.pv_display.setReadOnly(True)
+		self.pv_display.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+		self.pv_display.setFixedWidth(edit_width)
+
+		self.pv_lcd = QLCDNumber()
+		self.pv_lcd.setDigitCount(lcd_digits)
+		self.pv_lcd.setSegmentStyle(QLCDNumber.SegmentStyle.Flat)
+		self.pv_lcd.setSmallDecimalPoint(True)
+		# Taller than the text field it replaces - seven-segment digits are unreadable at
+		# line-edit height, which defeats the point of asking for an LCD.
+		self.pv_lcd.setFixedSize(max(edit_width, lcd_digits * 16), 36)
+
+		self._build_layout(self.edit, self.pv_display)
+
+	def _extra_hidable(self):
+		return (self.pv_lcd,)
+
+	def _pv_row_widget(self):
+		return self.pv_lcd if self.lcd else self.pv_display
+
+	def _on_text_edited(self, text):
+		self._dirty = True
 
 	def _on_edited(self):
 
 		try:
-			value = float(self.edit.text())
+			value = self._from_display(float(self.edit.text()))
 		except ValueError:
+			self._dirty = False
 			self._refresh_display()   # revert to the last known-good display
 			return
 
 		if value == self._setpoint:
+			self._dirty = False
+			self._refresh_display()
 			return
 
 		self._user_changed(value)
 
 	def _display_setpoint(self, value):
-		if value is not None and not self.edit.hasFocus():
-			self.edit.setText(self._format(value))
+
+		# Never clobber input the user has typed but not committed. This used to be guarded on
+		# `hasFocus()`, which is False whenever the window is not the active one - so a background
+		# poll would silently replace half-typed text with the last known value. A field showing
+		# "0" ate "0.002" and looked like it had rounded.
+		if value is None or self._dirty:
+			return
+
+		self.edit.setText(self._format(self._to_display(value)))
+
+	def _display_measured(self, value):
+
+		shown = self._to_display(value)
+
+		self.pv_display.setText(self._format(shown))
+
+		if shown is None:
+			self.pv_lcd.display("")
+		else:
+			try:
+				self.pv_lcd.display(float(shown))
+			except (TypeError, ValueError):
+				self.pv_lcd.display("")
 
 class ParameterToggle(_ParameterControlBase):
 	''' An on/off parameter, with a large state lamp to the left of the button.
 
 	The lamp is there because a checked QPushButton is nearly indistinguishable from an unchecked
 	one under several dark themes - the state is carried entirely by a subtle background shade,
-	which is exactly the information a user most needs from an output-enable control. The lamp
-	does not depend on the palette at all. Artwork is `assets/indicator_{0,1}.png`, overridable
-	per control via `on_pixmap=`/`off_pixmap=`.
+	which is exactly the information a user most needs from an output-enable control. Artwork is
+	`assets/indicator_{0,1}.png`, overridable per control via `on_pixmap=`/`off_pixmap=`.
 
-	Its state follows the *instrument*, not the button: it shows what was last read back, so a
+	Both lamps follow the *instrument*, not the button: they show what was last read back, so a
 	button that was clicked and did nothing is visible rather than inferred.
+
+	The two views label things differently, because in each one the button is the only element
+	free to say something:
+	  FULL:    the title carries the parameter name, so the button carries the STATE
+	           ("Enabled"/"Disabled", or whatever on_text/off_text say), and the PV row is a
+	           second indicator lamp showing what the instrument reports.
+	  COMPACT: there is no title, so the button carries the NAME and the state lives entirely in
+	           the indicator lamp beside it.
 	'''
 
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
 			set_args:callable=None, get_method:str=None, get_args:tuple=(),
-			on_text:str=None, off_text:str=None, stale_after_s:float=5.0,
+			on_text:str="Enabled", off_text:str="Disabled", stale_after_s:float=5.0,
 			view:str=ParameterView.COMPACT, edit_width:int=90,
 			on_pixmap=None, off_pixmap=None, indicator_size:int=22):
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args,
 			unit="", stale_after_s=stale_after_s, view=view, edit_width=edit_width)
 
-		self.on_text = on_text if on_text is not None else label
-		self.off_text = off_text if off_text is not None else self.on_text
+		self.on_text = on_text
+		self.off_text = off_text
 
 		self.indicator = IndicatorLight(indicator_size, on_pixmap=on_pixmap, off_pixmap=off_pixmap)
-		self.indicator.setToolTip("Instrument's reported state")
+		self.pv_indicator = IndicatorLight(indicator_size, on_pixmap=on_pixmap, off_pixmap=off_pixmap)
 
 		self.button = QPushButton(self.off_text)
 		self.button.setCheckable(True)
+		self.button.setFixedWidth(edit_width)
 		self.button.toggled.connect(self._on_toggled)
 
-		holder = QWidget()
-		row = QHBoxLayout()
-		row.setContentsMargins(0, 0, 0, 0)
-		row.setSpacing(4)
-		row.addWidget(self.indicator)
-		row.addWidget(self.button)
-		holder.setLayout(row)
+		self._build_layout(self.button, self.pv_indicator)
 
-		self._build_layout(holder)
+	def _extra_hidable(self):
+		return (self.indicator,)
 
-	def _build_layout(self, holder):
-		# The button, not the holder, is what should carry the width - the lamp sits outside it.
-		super()._build_layout(holder)
-		holder.setFixedWidth(self.edit_width + self.indicator.width() + 4)
-		self.button.setFixedWidth(self.edit_width)
+	def _add_sp_editor(self, sp_row):
+		''' The SP row is [indicator][button]. The PV row is [indicator]. Both indicators are the
+		same widget size in the same position after the SP/PV icon, so they line up in a column -
+		which is what makes the two rows readable as "asked" above "actually". '''
+
+		self.indicator.setVisible(True)
+		sp_row.addWidget(self.indicator)
+		sp_row.addWidget(self.button)
+		self.button.setVisible(True)
+
+	def show_inline_label(self) -> bool:
+		# In compact the button itself carries the parameter name, so a separate label would say
+		# it twice.
+		return False
+
+	def _button_text(self, checked:bool) -> str:
+
+		if self.view == ParameterView.COMPACT:
+			return self.label
+
+		return self.on_text if checked else self.off_text
 
 	def _on_toggled(self, checked):
-		self.button.setText(self.on_text if checked else self.off_text)
+		self.button.setText(self._button_text(checked))
 		if checked == self._setpoint:
 			return
 		self._user_changed(checked)
@@ -1655,15 +1916,16 @@ class ParameterToggle(_ParameterControlBase):
 			self.button.blockSignals(True)
 			self.button.setChecked(checked)
 			self.button.blockSignals(False)
-		self.button.setText(self.on_text if checked else self.off_text)
+		self.button.setText(self._button_text(checked))
 
-	def _display(self, confirmed_value, setpoint_value, status):
-		super()._display(confirmed_value, setpoint_value, status)
-		self.indicator.set_state(None if confirmed_value is None else bool(confirmed_value))
+	def _display_measured(self, value):
+		state = None if value is None else bool(value)
+		self.indicator.set_state(state)
+		self.pv_indicator.set_state(state)
 
 class ParameterChoice(_ParameterControlBase):
-	''' An enumerated parameter. Worth a PV row in FULL view: an instrument that silently refuses
-	an unsupported mode looks identical to one that accepted it, until you can see what it
+	''' An enumerated parameter. Worth a PV row in the full view: an instrument that silently
+	refuses an unsupported mode looks identical to one that accepted it, until you can see what it
 	actually reports. '''
 
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
@@ -1680,9 +1942,15 @@ class ParameterChoice(_ParameterControlBase):
 
 		self.combo = QComboBox()
 		self.combo.addItems([self._format(c) for c in self._choices])
+		self.combo.setFixedWidth(edit_width)
 		self.combo.activated.connect(self._on_activated)
 
-		self._build_layout(self.combo)
+		self.pv_display = QLineEdit()
+		self.pv_display.setReadOnly(True)
+		self.pv_display.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+		self.pv_display.setFixedWidth(edit_width)
+
+		self._build_layout(self.combo, self.pv_display)
 
 	def _on_activated(self, index:int):
 		value = self._choices[index]
@@ -1704,6 +1972,8 @@ class ParameterChoice(_ParameterControlBase):
 			self.combo.setCurrentIndex(idx)
 			self.combo.blockSignals(False)
 
+	def _display_measured(self, value):
+		self.pv_display.setText(self._format(value))
 
 # ============================================================================
 # Category -> widget registration, so ConstellationWindow.add_instrument(driver) works without

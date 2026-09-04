@@ -13,8 +13,11 @@ Things to try once it's up:
   - Click any lamp. The detail window explains all three, shows the last value sent and received
     and the SCPI behind them, and has a "Detail shown" dropdown that changes that control's
     density live - minimal, compact, or full.
-  - The three panels are the same controls at the three densities, so you can see what each one
-    costs and buys.
+  - The two panels are the same controls at both densities, so you can see what each one costs
+    and buys. Compact keeps the two runtime lamps and drops the verification one - verification
+    can't change while the panel is open, so it is reference material, not something to monitor.
+  - Time/div and Offset carry a unit-prefix selector: type "2", pick "ms". SP and PV always read
+    in the same units.
   - Set volts/div to 0.55. A real scope quantizes to 0.5 - the PV row shows the instrument's
     answer next to yours and the bottom lamp goes GREY, not red. Grey means "these differ, look at
     them", which is usually the instrument snapping to its own grid rather than anything wrong.
@@ -51,15 +54,18 @@ def build_panel(bridge, title:str, view:str=ParameterView.FULL) -> QGroupBox:
 	grid = QGridLayout()
 
 	controls = [
+		# A unit-prefix selector, so a user types "2" and picks "ms" rather than counting zeros.
 		ParameterBox(bridge, "Time/div", get=lambda s: s.div_time,
-			set_method="set_div_time", set_args=lambda v: (v,), unit="s"),
+			set_method="set_div_time", set_args=lambda v: (v,), unit="s",
+			prefixes=("", "m", "\u00b5", "n")),
 
 		ParameterBox(bridge, "Volts/div", get=lambda s: s.channels[CHANNEL].div_volt,
 			set_method="set_div_volt", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,), unit="V"),
 
+		# ...and the same value on an LCD readout instead of a text field.
 		ParameterBox(bridge, "Offset", get=lambda s: s.channels[CHANNEL].offset_volt,
 			set_method="set_offset_volt", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,),
-			unit="V", abs_tolerance=0.01),
+			unit="V", abs_tolerance=0.01, prefixes=("", "m"), lcd=True),
 
 		ParameterToggle(bridge, f"Channel {CHANNEL}", get=lambda s: s.channels[CHANNEL].chan_en,
 			set_method="set_chan_enable", set_args=lambda v: (CHANNEL, v), get_args=(CHANNEL,)),
@@ -141,7 +147,6 @@ layout.addWidget(build_fault_buttons(bridge, panel))
 # The same controls, same bridge, at the two shorter densities. Click a lamp on any of them to
 # change that control's density in place.
 layout.addWidget(build_panel(bridge, "COMPACT - the default, and what the category GUIs use", ParameterView.COMPACT))
-layout.addWidget(build_panel(bridge, "MINIMAL - for dense per-channel grids", ParameterView.MINIMAL))
 
 # A DS1000E: the timebase controls are genuinely impossible over SCPI on this instrument, so they
 # come up dark and disabled rather than raising FeatureUnavailable when clicked.
@@ -156,7 +161,7 @@ window.setCentralWidget(central)
 bridge.start()
 bridge_e.start()
 
-window.resize(1150, 900)
+window.resize(1150, 780)
 window.show()
 app.exec()
 

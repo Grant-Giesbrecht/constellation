@@ -376,6 +376,8 @@ def test_choice_shows_setpoint_and_readback_separately(qt_app):
 	assert _color(widget.lamp_value) == VALUE_COLORS["mismatch"]
 
 def test_toggle_reports_what_the_instrument_actually_says(qt_app):
+	""" The PV row is a second indicator lamp, not text: it shows the instrument's state, so a
+	button that was clicked and did nothing is visible rather than inferred. """
 
 	bridge = FakeBridge()
 	widget = ParameterToggle(bridge, "Enable", get=lambda s: s.value, set_method="set_chan_enable",
@@ -386,7 +388,7 @@ def test_toggle_reports_what_the_instrument_actually_says(qt_app):
 
 	bridge.state_changed.emit(FakeState(False))
 
-	assert widget.pv_display.text() == "OFF"
+	assert widget.pv_indicator._state is False
 	assert _color(widget.lamp_value) == VALUE_COLORS["mismatch"]
 
 def test_action_icons_are_clickable_and_carry_tooltips(qt_app):
@@ -406,18 +408,27 @@ def test_full_view_shows_everything(qt_app):
 	assert widget.pv_display.isVisible() or not widget.isVisible()   # hidden only because unshown
 	assert widget.visible_lamps() == [widget.lamp_verification, widget.lamp_send, widget.lamp_value]
 
-def test_compact_view_drops_the_measured_row_and_merges_two_lamps(qt_app):
-	""" The default. A front panel is mostly settings you are not currently suspicious of. """
+def test_compact_view_keeps_the_two_runtime_lamps(qt_app):
+	""" Compact drops the VERIFICATION lamp, not a runtime one. Verification is a fixed property
+	of the driver and records - it cannot change while a panel is open, so it is reference
+	material. Which of "did my command land" and "does the instrument agree" is failing is the
+	live question, and that is what a compact panel has to keep. """
 
 	widget = _box(FakeBridge(), view=ParameterView.COMPACT)
 
-	assert widget.visible_lamps() == [widget.lamp_verification, widget.lamp_merged]
+	assert widget.visible_lamps() == [widget.lamp_send, widget.lamp_value]
 
-def test_minimal_view_is_one_lamp(qt_app):
+def test_compact_keeps_the_parameter_label_but_drops_the_sp_button(qt_app):
 
-	widget = _box(FakeBridge(), view=ParameterView.MINIMAL)
+	widget = _box(FakeBridge(), view=ParameterView.COMPACT)
 
-	assert widget.visible_lamps() == [widget.lamp_merged]
+	assert widget.show_inline_label()
+	assert not widget.show_sp_icon()
+
+def test_only_two_views_exist(qt_app):
+	""" MINIMAL was dropped - two densities, both of which keep the runtime lamps. """
+
+	assert set(ParameterView.ORDER) == {ParameterView.COMPACT, ParameterView.FULL}
 
 def test_compact_is_the_default(qt_app):
 
@@ -430,7 +441,7 @@ def test_the_view_can_be_switched_live_without_losing_state(qt_app):
 	rebuilding the panel or losing what it already knows. """
 
 	bridge = FakeBridge()
-	widget = _box(bridge, view=ParameterView.MINIMAL)
+	widget = _box(bridge, view=ParameterView.COMPACT)
 
 	widget.edit.setText("2.0")
 	widget.edit.editingFinished.emit()
@@ -444,7 +455,7 @@ def test_the_view_can_be_switched_live_without_losing_state(qt_app):
 	assert widget.visible_lamps() == [widget.lamp_verification, widget.lamp_send, widget.lamp_value]
 
 	# ...and back down again, repeatedly, without the layout accumulating anything.
-	for mode in (ParameterView.MINIMAL, ParameterView.COMPACT, ParameterView.FULL):
+	for mode in (ParameterView.COMPACT, ParameterView.FULL, ParameterView.COMPACT):
 		widget.set_view(mode)
 
 	assert widget.setpoint == 2.0
@@ -456,31 +467,19 @@ def test_an_unknown_view_is_ignored(qt_app):
 
 	assert widget.view == ParameterView.COMPACT
 
-def test_the_merged_lamp_takes_the_worst_contributing_status(qt_app):
-	""" Compressing the display must not hide a problem - only the explanation of which problem,
-	which the tooltip and the detail window still carry. """
+def test_compact_still_reports_both_runtime_failures_separately(qt_app):
+	""" Compressing the display must not merge the two questions - they have different fixes. """
 
 	bridge = FakeBridge()
 	widget = _box(bridge, view=ParameterView.COMPACT)
 
-	# Sent fine, but the instrument disagrees -> the merged lamp must show the disagreement.
 	widget.edit.setText("0.55")
 	widget.edit.editingFinished.emit()
 	bridge.command_result.emit("set_div_volt", (1, 0.55), True, None)
 	bridge.state_changed.emit(FakeState(0.5))
 
-	assert _color(widget.lamp_merged) == VALUE_COLORS["mismatch"]
-
-	# A hard failure outranks a disagreement.
-	bridge.command_result.emit("set_div_volt", (1, 0.55), False, RuntimeError("boom"))
-	assert _color(widget.lamp_merged) == SEND_COLORS["failed"]
-
-def test_the_merged_tooltip_still_names_every_status_it_stands_for(qt_app):
-
-	widget = _box(FakeBridge(), view=ParameterView.COMPACT)
-	tip = widget.lamp_merged.toolTip()
-
-	assert "Setpoint:" in tip and "Measured:" in tip
+	assert _color(widget.lamp_send) == SEND_COLORS["sent"]
+	assert _color(widget.lamp_value) == VALUE_COLORS["mismatch"]
 
 # --- lamps are clickable, and the detail window ---------------------------------------------------
 
@@ -491,7 +490,7 @@ def test_lamps_carry_no_stylesheet(qt_app):
 
 	widget = _box(FakeBridge())
 
-	for lamp in (widget.lamp_verification, widget.lamp_send, widget.lamp_value, widget.lamp_merged):
+	for lamp in (widget.lamp_verification, widget.lamp_send, widget.lamp_value):
 		assert lamp.styleSheet() == ""
 		assert lamp.toolTip()
 
@@ -516,7 +515,7 @@ def test_all_lamps_open_the_same_window(qt_app):
 
 def test_the_detail_window_switches_the_view(qt_app):
 
-	widget = _box(FakeBridge(), view=ParameterView.MINIMAL)
+	widget = _box(FakeBridge(), view=ParameterView.COMPACT)
 	widget.show_details()
 
 	dialog = widget._dialog
@@ -697,3 +696,354 @@ def test_a_long_response_is_truncated_before_being_stored():
 
 	assert len(relay.last_response) < 300
 	assert "5000 chars" in relay.last_response
+
+# --- the uncommitted-input bug --------------------------------------------------------------------
+
+def test_a_poll_does_not_clobber_uncommitted_typing(qt_app):
+	""" Regression, and a nasty one: the guard used to be `edit.hasFocus()`, which is False
+	whenever the window is not the *active* window. A background poll then overwrote half-typed
+	text with the last known value - a field sitting at "0" ate "0.002" and looked like it had
+	rounded to an integer. The correct question is "has the user typed something uncommitted",
+	which `textEdited` answers and window activation does not. """
+
+	bridge = FakeBridge()
+	widget = _box(bridge)
+
+	bridge.state_changed.emit(FakeState(0.0))
+	assert widget.edit.text() == "0.0"
+
+	# The user types, without committing. `textEdited` is what a real keystroke emits.
+	widget.edit.setText("0.002")
+	widget.edit.textEdited.emit("0.002")
+
+	# ...and a poll lands mid-typing.
+	bridge.state_changed.emit(FakeState(0.0))
+
+	assert widget.edit.text() == "0.002"
+
+def test_committing_clears_the_dirty_flag(qt_app):
+	""" Once committed, polls own the field again - otherwise a control would freeze at whatever
+	was last typed and stop reflecting the instrument. """
+
+	bridge = FakeBridge()
+	widget = _box(bridge)
+
+	widget.edit.setText("0.002")
+	widget.edit.textEdited.emit("0.002")
+	widget.edit.editingFinished.emit()
+
+	assert not widget._dirty
+
+	widget._setpoint = None
+	bridge.state_changed.emit(FakeState(7.0))
+	assert widget.edit.text() == "7.0"
+
+def test_invalid_input_reverts_rather_than_sticking(qt_app):
+
+	bridge = FakeBridge()
+	widget = _box(bridge)
+
+	bridge.state_changed.emit(FakeState(2.0))
+	widget.edit.setText("banana")
+	widget.edit.textEdited.emit("banana")
+	widget.edit.editingFinished.emit()
+
+	assert widget.edit.text() == "2.0"
+	assert bridge.requests == []
+
+# --- unit prefix selector -------------------------------------------------------------------------
+
+def _scaled(bridge, **kwargs):
+
+	kwargs.setdefault("view", ParameterView.FULL)
+	kwargs.setdefault("prefixes", True)
+	kwargs.setdefault("auto_prefix", False)
+
+	return ParameterBox(bridge, "Offset", get=lambda s: s.value, set_method="set_offset_time",
+		unit="s", **kwargs)
+
+def test_no_selector_unless_asked_for(qt_app):
+
+	assert not _box(FakeBridge()).has_prefixes
+	assert _scaled(FakeBridge()).has_prefixes
+
+def test_the_typed_value_is_scaled_by_the_chosen_prefix(qt_app):
+	""" The whole point: type "2", pick "ms", and the driver is asked for 0.002 s. """
+
+	bridge = FakeBridge()
+	widget = _scaled(bridge)
+
+	widget.prefix_combo.setCurrentIndex([s for s, _ in widget._prefixes].index("m"))
+	widget.prefix_combo.activated.emit(widget.prefix_combo.currentIndex())
+
+	widget.edit.setText("2")
+	widget.edit.editingFinished.emit()
+
+	assert bridge.requests == [("set_offset_time", (0.002,))]
+	assert widget.setpoint == 0.002
+
+def test_the_measured_value_is_scaled_the_same_way(qt_app):
+	""" SP and PV must read in the same units - comparing them is the reason both rows exist. """
+
+	bridge = FakeBridge()
+	widget = _scaled(bridge)
+
+	widget.prefix_combo.setCurrentIndex([s for s, _ in widget._prefixes].index("m"))
+	widget.prefix_combo.activated.emit(widget.prefix_combo.currentIndex())
+
+	bridge.state_changed.emit(FakeState(0.002))
+
+	assert widget.pv_display.text() == "2.0"
+	assert widget.unit_pv.text() == widget.prefix_combo.currentText() == "ms"
+
+def test_changing_the_prefix_sends_nothing(qt_app):
+	""" The user asked to see the same quantity in different units, not to change it. """
+
+	bridge = FakeBridge()
+	widget = _scaled(bridge)
+
+	widget.edit.setText("0.002")
+	widget.edit.editingFinished.emit()
+	bridge.requests.clear()
+
+	widget.prefix_combo.setCurrentIndex([s for s, _ in widget._prefixes].index("m"))
+	widget.prefix_combo.activated.emit(widget.prefix_combo.currentIndex())
+
+	assert bridge.requests == []
+	assert widget.setpoint == 0.002           # unchanged in instrument units
+	assert widget.edit.text() == "2.0"        # ...but shown in the new ones
+
+def test_the_prefix_set_can_be_narrowed(qt_app):
+
+	widget = _scaled(FakeBridge(), prefixes=("", "m", "µ"))
+
+	assert [s for s, _ in widget._prefixes] == ["", "m", "µ"]
+	assert [widget.prefix_combo.itemText(i) for i in range(widget.prefix_combo.count())] == ["s", "ms", "µs"]
+
+def test_autoscale_picks_a_readable_prefix_once(qt_app):
+	""" 0.002 s should present itself as 2 ms without the user hunting for the selector. """
+
+	bridge = FakeBridge()
+	widget = _scaled(bridge, auto_prefix=True)
+
+	bridge.state_changed.emit(FakeState(0.002))
+
+	assert widget.prefix_combo.currentText() == "ms"
+	assert widget.pv_display.text() == "2.0"
+
+	# ...and it must not keep moving afterwards, or the units shift under the reader.
+	bridge.state_changed.emit(FakeState(2.0))
+	assert widget.prefix_combo.currentText() == "ms"
+
+def test_autoscale_never_overrides_a_user_choice(qt_app):
+
+	bridge = FakeBridge()
+	widget = _scaled(bridge, auto_prefix=True)
+
+	widget.prefix_combo.setCurrentIndex([s for s, _ in widget._prefixes].index("µ"))
+	widget.prefix_combo.activated.emit(widget.prefix_combo.currentIndex())
+
+	bridge.state_changed.emit(FakeState(0.002))
+
+	assert widget.prefix_combo.currentText() == "µs"
+
+def test_autoscale_ignores_zero(qt_app):
+	""" Zero is zero in every prefix, and would otherwise pin the selector at femto - which is
+	exactly the case that bit us, since a timebase offset sits at 0 by default. """
+
+	bridge = FakeBridge()
+	widget = _scaled(bridge, auto_prefix=True)
+
+	bridge.state_changed.emit(FakeState(0.0))
+
+	assert widget.prefix_combo.currentText() == "s"
+
+# --- LCD readout ------------------------------------------------------------------------------------
+
+def test_the_lcd_is_off_by_default_and_switchable(qt_app):
+
+	bridge = FakeBridge()
+	widget = _box(bridge)
+
+	assert widget.supports_lcd and not widget.lcd
+	assert widget._pv_row_widget() is widget.pv_display
+
+	widget.set_lcd(True)
+
+	assert widget._pv_row_widget() is widget.pv_lcd
+
+def test_the_lcd_shows_the_measured_value(qt_app):
+
+	bridge = FakeBridge()
+	widget = _box(bridge, lcd=True)
+
+	bridge.state_changed.emit(FakeState(2.5))
+
+	assert widget.pv_lcd.value() == 2.5
+
+def test_the_lcd_follows_the_unit_prefix(qt_app):
+
+	bridge = FakeBridge()
+	widget = _scaled(bridge, lcd=True, auto_prefix=True)
+
+	bridge.state_changed.emit(FakeState(0.002))
+
+	assert widget.pv_lcd.value() == 2.0
+
+def test_the_detail_window_toggles_the_lcd(qt_app):
+
+	widget = _box(FakeBridge())
+	widget.show_details()
+
+	assert widget._dialog.lcd_check.isEnabled()
+	widget._dialog.lcd_check.setChecked(True)
+
+	assert widget.lcd
+
+def test_non_numeric_controls_do_not_offer_an_lcd(qt_app):
+	""" There is nothing for seven segments to show for a coupling mode. """
+
+	toggle = ParameterToggle(FakeBridge(), "Out", get=lambda s: s.value, set_method="set_output_enable")
+	choice = ParameterChoice(FakeBridge(), "Coupling", get=lambda s: s.value,
+		set_method="set_coupling", choices=["a", "b"])
+
+	for control in (toggle, choice):
+		assert not control.supports_lcd
+		control.show_details()
+		assert not control._dialog.lcd_check.isEnabled()
+
+# --- toggle labelling and alignment ------------------------------------------------------------------
+
+def test_the_toggle_button_says_the_state_in_full_and_the_name_in_compact(qt_app):
+	""" In each view the button is the only element free to say something: FULL has a title
+	carrying the name, so the button carries the state; COMPACT has no title, so the button
+	carries the name and the state lives in the indicator lamp. """
+
+	bridge = FakeBridge()
+	widget = ParameterToggle(bridge, "Channel 1", get=lambda s: s.value,
+		set_method="set_chan_enable", set_args=lambda v: (1, v), view=ParameterView.FULL)
+
+	assert widget.button.text() == "Disabled"
+	widget.button.setChecked(True)
+	assert widget.button.text() == "Enabled"
+
+	widget.set_view(ParameterView.COMPACT)
+	assert widget.button.text() == "Channel 1"
+
+def test_the_toggle_state_labels_are_customisable(qt_app):
+
+	widget = ParameterToggle(FakeBridge(), "Output", get=lambda s: s.value,
+		set_method="set_output_enable", on_text="LIVE", off_text="SAFE", view=ParameterView.FULL)
+
+	assert widget.button.text() == "SAFE"
+	widget.button.setChecked(True)
+	assert widget.button.text() == "LIVE"
+
+def test_compact_toggle_shows_no_separate_label(qt_app):
+	""" The button already carries the name; a second label would say it twice. """
+
+	widget = ParameterToggle(FakeBridge(), "Channel 1", get=lambda s: s.value,
+		set_method="set_chan_enable", view=ParameterView.COMPACT)
+
+	assert not widget.show_inline_label()
+	assert not widget.show_sp_icon()
+
+def test_the_toggle_sp_and_pv_indicators_line_up(qt_app):
+	""" Both rows are icon-then-indicator, with identically sized indicators, so the two lamps sit
+	in one column - which is what makes the rows readable as "asked" above "actually". """
+
+	widget = ParameterToggle(FakeBridge(), "Channel 1", get=lambda s: s.value,
+		set_method="set_chan_enable", view=ParameterView.FULL)
+	widget.show()
+	qt_app.processEvents()
+
+	assert widget.indicator.size() == widget.pv_indicator.size()
+	assert widget.indicator.x() == widget.pv_indicator.x()
+
+	widget.hide()
+
+# --- vertical layout ------------------------------------------------------------------------------
+
+def test_the_lamps_centre_on_the_field_rows_not_the_title(qt_app):
+	""" The lamps report on the SP and PV rows, so they have to sit beside them. Centring over the
+	title as well pushed them up out of line with the rows they describe. """
+
+	widget = _box(FakeBridge(), view=ParameterView.FULL)
+	widget.show()
+	qt_app.processEvents()
+
+	rows_top = widget.sp_editor.geometry().top()
+	rows_bottom = widget.pv_display.geometry().bottom()
+	rows_middle = (rows_top + rows_bottom) / 2
+
+	lamps = [widget.lamp_verification, widget.lamp_send, widget.lamp_value]
+	lamp_middle = (lamps[0].geometry().top() + lamps[-1].geometry().bottom()) / 2
+
+	assert abs(lamp_middle - rows_middle) <= 2
+	# ...and the title is above all of it, not part of what they centre on.
+	assert widget.title_label.geometry().bottom() <= rows_top
+
+	widget.hide()
+
+def test_the_control_neither_stretches_nor_squashes_vertically(qt_app):
+	""" Vertical slack in a container must land between whole controls, not be spread through one
+	control's internals - otherwise a taller window walks the rows apart. Fixed rather than
+	Maximum, because Maximum also permits *shrinking*: a control switched to the taller full view
+	was squashed into the row height the compact one had needed. """
+
+	from PyQt6.QtWidgets import QSizePolicy
+
+	widget = _box(FakeBridge(), view=ParameterView.FULL)
+
+	assert widget.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
+
+def test_switching_to_the_taller_view_asks_for_more_room(qt_app):
+	""" A container keeps the old row height unless the control tells it its size hint changed. """
+
+	widget = _box(FakeBridge(), view=ParameterView.COMPACT)
+	compact_height = widget.sizeHint().height()
+
+	widget.set_view(ParameterView.FULL)
+
+	assert widget.sizeHint().height() > compact_height
+
+def test_internal_spacing_does_not_change_with_height(qt_app):
+
+	widget = _box(FakeBridge(), view=ParameterView.FULL)
+	widget.show()
+	qt_app.processEvents()
+
+	def gap():
+		return widget.pv_display.geometry().top() - widget.sp_editor.geometry().bottom()
+
+	widget.resize(widget.width(), widget.height())
+	qt_app.processEvents()
+	before = gap()
+
+	widget.resize(widget.width(), widget.height() + 200)
+	qt_app.processEvents()
+
+	assert gap() == before
+
+	widget.hide()
+
+def test_switching_views_repeatedly_does_not_destroy_unplaced_widgets(qt_app):
+	""" Regression: rebuilding the layout used to take widgets the current view had not placed
+	down with it. A control with an LCD, switched compact -> full, lost its QLCDNumber, and the
+	next value update raised "wrapped C/C++ object of type QLCDNumber has been deleted". """
+
+	bridge = FakeBridge()
+	widget = _box(bridge, view=ParameterView.COMPACT, lcd=True)
+
+	for _ in range(3):
+		widget.set_view(ParameterView.FULL)
+		widget.set_view(ParameterView.COMPACT)
+		widget.set_lcd(False)
+		widget.set_lcd(True)
+
+	# Every managed widget must still be alive and usable.
+	bridge.state_changed.emit(FakeState(2.5))
+
+	assert widget.pv_lcd.value() == 2.5
+	assert widget.edit.text() == "2.5"
+	assert widget.lamp_send.color

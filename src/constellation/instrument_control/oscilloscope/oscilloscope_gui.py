@@ -119,7 +119,7 @@ class OscilloscopeWidget(InstrumentWidget):
 			labels={Oscilloscope.TRIG_AUTO: "AUTO", Oscilloscope.TRIG_NORM: "NORMAL", Oscilloscope.TRIG_SINGLE: "SINGLE"})
 		self.trigger_level = ParameterBox(
 			bridge, "Level", get=lambda s: s.trigger_level, set_method="set_trigger_level",
-			validator=QDoubleValidator(), unit="V", abs_tolerance=0.01)
+			validator=QDoubleValidator(), unit="V", abs_tolerance=0.01, prefixes=("", "m"))
 		trig_layout.addWidget(self.trigger_mode, 0, 0)
 		trig_layout.addWidget(self.trigger_level, 1, 0)
 		# Controls keep their natural width and stay left; the slack goes into the empty column.
@@ -130,12 +130,15 @@ class OscilloscopeWidget(InstrumentWidget):
 		# --- Horizontal / timebase group ---
 		self.horiz_box = QGroupBox("Horizontal")
 		horiz_layout = QGridLayout()
+		# Timebase values are microseconds to milliseconds in practice, so both of these carry a
+		# prefix selector: a user types "2" and picks "ms" rather than counting zeros in 0.002.
 		self.time_div = ParameterBox(
 			bridge, "Time/div", get=lambda s: s.div_time, set_method="set_div_time",
-			validator=QDoubleValidator(), unit="s")
+			validator=QDoubleValidator(), unit="s", prefixes=("", "m", "\u00b5", "n"))
 		self.time_offset = ParameterBox(
 			bridge, "Offset", get=lambda s: s.offset_time, set_method="set_offset_time",
-			validator=QDoubleValidator(), unit="s", abs_tolerance=1e-9)
+			validator=QDoubleValidator(), unit="s", abs_tolerance=1e-9,
+			prefixes=("", "m", "\u00b5", "n"))
 		horiz_layout.addWidget(self.time_div, 0, 0)
 		horiz_layout.addWidget(self.time_offset, 1, 0)
 		horiz_layout.setColumnStretch(1, 1)
@@ -179,17 +182,16 @@ class OscilloscopeWidget(InstrumentWidget):
 			# get_args are the *getter's* arguments, which is what the PV button re-queries with -
 			# same channel number, but the getter takes it alone rather than alongside a value.
 			enable = ParameterToggle(
-				self.bridge, "Enable", get=(lambda s, ch=ch: s.channels[ch].chan_en),
-				set_method="set_chan_enable", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,),
-				on_text="Enabled", off_text="Disabled")
+				self.bridge, f"Channel {ch}", get=(lambda s, ch=ch: s.channels[ch].chan_en),
+				set_method="set_chan_enable", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,))
 			vdiv = ParameterBox(
 				self.bridge, "V/div", get=(lambda s, ch=ch: s.channels[ch].div_volt),
 				set_method="set_div_volt", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,),
-				validator=QDoubleValidator(), unit="V")
+				validator=QDoubleValidator(), unit="V", prefixes=("", "m"))
 			voff = ParameterBox(
 				self.bridge, "Offset", get=(lambda s, ch=ch: s.channels[ch].offset_volt),
 				set_method="set_offset_volt", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,),
-				validator=QDoubleValidator(), unit="V", abs_tolerance=0.01)
+				validator=QDoubleValidator(), unit="V", abs_tolerance=0.01, prefixes=("", "m"))
 			coupling = ParameterChoice(
 				self.bridge, "Coupling", get=(lambda s, ch=ch: s.channels[ch].coupling),
 				set_method="set_coupling", set_args=(lambda v, ch=ch: (ch, v)), get_args=(ch,),
