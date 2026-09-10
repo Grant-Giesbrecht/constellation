@@ -70,6 +70,11 @@ class InstrumentBridge(QObject):
 		self.poll_enabled = False
 		self.poll_interval_s = None
 
+	def settings_key(self):
+		''' A stable name for this instrument, under which its panel settings are saved, or None to
+		not save them. The same instrument at the same address gets its settings back next time. '''
+		return None
+
 	def set_polling(self, enabled:bool, interval_s:float=None):
 		''' Turns automatic state polling on or off, and optionally changes its period.
 
@@ -168,6 +173,9 @@ class OwningBridge(InstrumentBridge):
 
 	def request(self, method_name:str, *args, **kwargs):
 		self._queue.put((method_name, args, kwargs))
+
+	def settings_key(self):
+		return f"{type(self.driver).__name__}@{getattr(self.driver, 'address', '') or ''}"
 
 	def _run(self):
 
@@ -296,6 +304,9 @@ class ObserverBridge(InstrumentBridge):
 	def stop(self):
 		if self._loop is not None:
 			self._loop.call_soon_threadsafe(self._loop.stop)
+
+	def settings_key(self):
+		return f"observed@{self.relay_id}"
 
 	def describe(self) -> dict:
 
@@ -951,6 +962,38 @@ VALUE_TEXT = {
 	"query_error": "The value could not be read at all.",
 }
 
+# What each colour means, in a few words - the legend in the detail window. The *_TEXT tables above
+# are the full explanations, shown on hover.
+VERIFICATION_SHORT = {
+	"confirmed": "Watched working on hardware",
+	"roundtrip": "Read back on hardware",
+	"untested": "Never checked on hardware",
+	"broken": "Failed on hardware",
+	"unavailable": "Hardware can't do this",
+	"unknown": "No records to check",
+}
+
+SEND_SHORT = {
+	"sent": "Sent successfully",
+	"unsent": "Not sent yet",
+	"failed": "Send failed",
+}
+
+VALUE_SHORT = {
+	"match": "Matches setpoint",
+	"unqueried": "Not read back yet",
+	"mismatch": "Differs from setpoint",
+	"query_error": "Could not read",
+}
+
+# The three lamps, in the order they sit on a control, top to bottom: (key, name, colours, short
+# meanings, full explanations). One table, so the control and its detail window cannot disagree.
+LAMP_KINDS = (
+	("verification", "Verification", VERIFICATION_COLORS, VERIFICATION_SHORT, VERIFICATION_TEXT),
+	("send", "Setpoint", SEND_COLORS, SEND_SHORT, SEND_TEXT),
+	("value", "Measurement", VALUE_COLORS, VALUE_SHORT, VALUE_TEXT),
+)
+
 # SI prefixes offered by the unit selector, largest first. `µ` is spelled with the MICRO SIGN so it
 # renders on every platform without a font that has GREEK SMALL LETTER MU.
 #
@@ -1320,28 +1363,61 @@ class ParameterDetailDialog(QDialog):
 
 		layout.addWidget(self._separator())
 
-		# --- the three lamps, spelled out ---
-		self.lamp_rows = {}
-		grid = QGridLayout()
-		grid.setColumnStretch(2, 1)
+		# --- the lamps: which is which, what it says now, and what every colour means ---
+		# Rows are in the order the lamps sit on the control, top to bottom. Explanations are on
+		# hover; the window itself only answers "which lamp is this" and "what does this colour mean".
+		self.lamp_rows = {}        # key -> (lamp, current-state label)
+		self.name_labels = {}      # key -> lamp name label
+		self.legend_entries = {}   # key -> {state: (dot, meaning label)}
 
-		for row, (key, title) in enumerate((
-				("verification", "Verification"),
-				("send", "Setpoint sent"),
-				("value", "Measured value"))):
+		grid = QGridLayout()
+		grid.setHorizontalSpacing(10)
+		grid.setColumnStretch(4, 1)
+
+		for column, heading in ((1, "Lamp"), (2, "Now"), (3, "Colours")):
+			label = QLabel(heading)
+			label.setStyleSheet("QLabel { color: gray; }")
+			grid.addWidget(label, 0, column)
+
+		for row, (key, name, colors, short, _long) in enumerate(LAMP_KINDS, start=1):
 
 			lamp = StatusLamp(13)
 			lamp.setCursor(QtGui.QCursor(Qt.CursorShape.ArrowCursor))
-			name = QLabel(f"<b>{title}</b>")
-			name.setTextFormat(Qt.TextFormat.RichText)
-			text = QLabel()
-			text.setWordWrap(True)
 
-			grid.addWidget(lamp, row, 0)
-			grid.addWidget(name, row, 1)
-			grid.addWidget(text, row, 2)
+			name_label = QLabel()
+			name_label.setTextFormat(Qt.TextFormat.RichText)
 
-			self.lamp_rows[key] = (lamp, text)
+			now = QLabel()
+			now.setTextFormat(Qt.TextFormat.RichText)
+
+			legend = QFrame()
+			legend.setFrameShape(QFrame.Shape.StyledPanel)
+			legend_grid = QGridLayout()
+			legend_grid.setContentsMargins(6, 3, 6, 3)
+			legend_grid.setVerticalSpacing(1)
+
+			entries = {}
+			for i, (state, color) in enumerate(colors.items()):
+				dot = StatusLamp(9)
+				dot.setCursor(QtGui.QCursor(Qt.CursorShape.ArrowCursor))
+				dot.set(color, "")
+				meaning = QLabel(short.get(state, state))
+				meaning.setTextFormat(Qt.TextFormat.RichText)
+				meaning.setToolTip(f"{state}: {_long.get(state, '')}")
+				legend_grid.addWidget(dot, i, 0)
+				legend_grid.addWidget(meaning, i, 1)
+				entries[state] = (dot, meaning)
+
+			legend.setLayout(legend_grid)
+
+			grid.addWidget(lamp, row, 0, Qt.AlignmentFlag.AlignTop)
+			grid.addWidget(name_label, row, 1, Qt.AlignmentFlag.AlignTop)
+			grid.addWidget(now, row, 2, Qt.AlignmentFlag.AlignTop)
+			grid.addWidget(legend, row, 3)
+
+			self.lamp_rows[key] = (lamp, now)
+			self.name_labels[key] = name_label
+			self.legend_entries[key] = entries
 
 		layout.addLayout(grid)
 		layout.addWidget(self._separator())
@@ -1392,15 +1468,20 @@ class ParameterDetailDialog(QDialog):
 		send_key = control.send_status()
 		value_key = control.value_status()
 
-		self._set_row("verification", VERIFICATION_COLORS.get(verification_key, "#888888"),
-			f"<b>{verification_key}</b> - {VERIFICATION_TEXT.get(verification_key, '')}<br>"
-			+ "<br>".join(control.verification_lines))
+		current = {"verification": verification_key, "send": send_key, "value": value_key}
+		extra = {
+			"verification": "\n".join(control.verification_lines),
+			"send": control.send_error,
+			"value": control.query_error,
+		}
 
-		self._set_row("send", SEND_COLORS[send_key], f"<b>{send_key}</b> - {SEND_TEXT[send_key]}"
-			+ (f"<br><span style='color:#e74c3c'>{control.send_error}</span>" if control.send_error else ""))
+		shown = {id(lamp) for lamp in control.visible_lamps()}
+		lamp_of = {"verification": control.lamp_verification, "send": control.lamp_send,
+			"value": control.lamp_value}
 
-		self._set_row("value", VALUE_COLORS[value_key], f"<b>{value_key}</b> - {VALUE_TEXT[value_key]}"
-			+ (f"<br><span style='color:#e74c3c'>{control.query_error}</span>" if control.query_error else ""))
+		for key, name, colors, short, long_text in LAMP_KINDS:
+			self._set_row(key, name, current[key], colors, short, long_text, extra[key],
+				on_control=id(lamp_of[key]) in shown)
 
 		self.resend_button.setEnabled(control.setpoint is not None and verification_key != "unavailable")
 
@@ -1415,6 +1496,11 @@ class ParameterDetailDialog(QDialog):
 			f"<b>Driver call:</b> <code>{_html(control.call_signature())}</code>",
 		]
 
+		# Errors are data a user debugging needs to see without hovering over anything.
+		for label, error in (("Send error", control.send_error), ("Read error", control.query_error)):
+			if error:
+				rows.append(f"<b>{label}:</b> <span style='color:#e74c3c'>{_html(error)}</span>")
+
 		if command is not None:
 			rows.append(f"<b>SCPI sent:</b> <code>{_html(command)}</code>")
 			if response is not None:
@@ -1426,10 +1512,28 @@ class ParameterDetailDialog(QDialog):
 
 		self.traffic.setText("<br>".join(rows))
 
-	def _set_row(self, key:str, color:str, text:str):
-		lamp, label = self.lamp_rows[key]
-		lamp.set(color, "")
-		label.setText(text)
+	def _set_row(self, key:str, name:str, state:str, colors:dict, short:dict, long_text:dict,
+			extra:str, on_control:bool):
+		''' One lamp's row: its colour and state now, and which legend entry that is. '''
+
+		lamp, now = self.lamp_rows[key]
+
+		tooltip = f"{name}: {state}\n{long_text.get(state, '')}" + (f"\n\n{extra}" if extra else "")
+
+		lamp.set(colors.get(state, "#888888"), tooltip)
+		now.setText(f"<b>{_html(state)}</b>")
+		now.setToolTip(tooltip)
+
+		# Compact hides a lamp; say so, or a user counts two dots and three rows and cannot match
+		# them up.
+		label = self.name_labels[key]
+		label.setText(f"<b>{name}</b>" if on_control else
+			f"<b>{name}</b><br><span style='color:gray'>not shown in this view</span>")
+		label.setToolTip(tooltip)
+
+		for entry_state, (dot, meaning) in self.legend_entries[key].items():
+			text = _html(short.get(entry_state, entry_state))
+			meaning.setText(f"<b>{text}</b>" if entry_state == state else text)
 
 def _html(value) -> str:
 	''' Escapes a value for the rich-text labels above. An IDN or a SCPI string can legitimately
@@ -1998,7 +2102,7 @@ class _ParameterControlBase(_TrackedControlBase):
 			+ (f"\n{self.send_error}" if self.send_error else "") + hint)
 
 		self.lamp_value.set(VALUE_COLORS[value],
-			f"Measured: {value}\n{VALUE_TEXT[value]}\nmeasured = {self._confirmed}"
+			f"Measurement: {value}\n{VALUE_TEXT[value]}\nmeasured = {self._confirmed}"
 			+ (f"\n{self.query_error}" if self.query_error else "") + hint)
 
 	def _display(self, confirmed_value, setpoint_value, status):
@@ -2692,6 +2796,7 @@ class SyncConfigDialog(QDialog):
 
 		self.setWindowTitle("Instrument Sync")
 		self.rows = {}   # panel title -> dict of this instrument's widgets
+		self._main_window = window
 
 		layout = QVBoxLayout()
 
@@ -2744,12 +2849,16 @@ class SyncConfigDialog(QDialog):
 				bridge.set_polling(poll_check.isChecked(), float(poll_period.text()))
 			except (ValueError, NotImplementedError):
 				poll_period.setText(_format_period(bridge.poll_interval_s))
+				return
+			self._save(widget)
 
 		def apply_send(*_):
 			try:
 				widget.set_auto_send(send_check.isChecked(), float(send_period.text()))
 			except ValueError:
 				send_period.setText(_format_period(widget.auto_send_interval_s))
+				return
+			self._save(widget)
 
 		poll_check.toggled.connect(apply_poll)
 		poll_period.editingFinished.connect(apply_poll)
@@ -2770,6 +2879,11 @@ class SyncConfigDialog(QDialog):
 
 		return group
 
+	def _save(self, widget):
+		save = getattr(self._main_window, "save_sync_settings", None)
+		if save is not None:
+			save(widget)
+
 	@staticmethod
 	def _period_edit(value) -> QLineEdit:
 
@@ -2783,6 +2897,20 @@ class SyncConfigDialog(QDialog):
 
 def _format_period(value) -> str:
 	return "" if value is None else f"{float(value):g}"
+
+# Setting this environment variable to a file path makes Constellation keep its settings in that INI
+# file instead of the platform's usual place. The test suite uses it so a test run can never read or
+# overwrite a real user's settings.
+SETTINGS_FILE_ENV = "CONSTELLATION_SETTINGS_FILE"
+
+def default_settings():
+	''' The QSettings Constellation remembers things in. '''
+
+	path = os.environ.get(SETTINGS_FILE_ENV)
+	if path:
+		return QtCore.QSettings(path, QtCore.QSettings.Format.IniFormat)
+
+	return QtCore.QSettings("Constellation", "Constellation")
 
 _GUI_REGISTRY = {}
 
@@ -2807,9 +2935,12 @@ def _find_registered_category(driver_cls):
 
 class ConstellationWindow(QMainWindow):
 
-	def __init__(self, log:plf.LogPile, add_menu:bool=True):
+	def __init__(self, log:plf.LogPile, add_menu:bool=True, settings=None):
 		super().__init__()
 		self.log = log
+
+		# Where per-instrument settings (polling, auto-send) are remembered between runs.
+		self.settings = settings if settings is not None else default_settings()
 
 		self.instrument_widgets = []
 		self._bridges = []
@@ -2840,6 +2971,58 @@ class ConstellationWindow(QMainWindow):
 		self.config_button.clicked.connect(self.show_sync_config)
 
 		self.status_bar.addPermanentWidget(self.config_button)
+
+	def _sync_group(self, widget):
+
+		key = widget.bridge.settings_key()
+		if key is None:
+			return None
+
+		# "/" separates groups in QSettings, and a VISA resource or labmesh id may contain one.
+		return "sync/" + key.replace("/", "_").replace("\\", "_")
+
+	def restore_sync_settings(self, widget):
+		''' Applies an instrument's saved polling and auto-send settings to its panel, if any were
+		saved. A saved value that no longer makes sense is ignored rather than raised. '''
+
+		group = self._sync_group(widget)
+		if group is None:
+			return
+
+		s = self.settings
+		bridge = widget.bridge
+
+		if bridge.supports_polling and s.contains(f"{group}/poll_enabled"):
+			try:
+				bridge.set_polling(s.value(f"{group}/poll_enabled", type=bool),
+					s.value(f"{group}/poll_interval_s", bridge.poll_interval_s, type=float))
+			except (ValueError, TypeError):
+				pass
+
+		if s.contains(f"{group}/auto_send_enabled"):
+			try:
+				widget.set_auto_send(s.value(f"{group}/auto_send_enabled", type=bool),
+					s.value(f"{group}/auto_send_interval_s", widget.auto_send_interval_s, type=float))
+			except (ValueError, TypeError):
+				pass
+
+	def save_sync_settings(self, widget):
+		''' Remembers an instrument's current polling and auto-send settings. '''
+
+		group = self._sync_group(widget)
+		if group is None:
+			return
+
+		s = self.settings
+		bridge = widget.bridge
+
+		if bridge.supports_polling:
+			s.setValue(f"{group}/poll_enabled", bool(bridge.poll_enabled))
+			s.setValue(f"{group}/poll_interval_s", float(bridge.poll_interval_s))
+
+		s.setValue(f"{group}/auto_send_enabled", bool(widget.auto_send_enabled))
+		s.setValue(f"{group}/auto_send_interval_s", float(widget.auto_send_interval_s))
+		s.sync()
 
 	def show_sync_config(self):
 		''' Opens (or raises) the polling/auto-send settings window. Rebuilt each time it is opened,
@@ -2887,6 +3070,11 @@ class ConstellationWindow(QMainWindow):
 
 		widget = widget_cls(self, bridge, self.log)
 		widget.panel_title = panel_title
+
+		# Before the bridge starts, so a saved "don't poll" is honoured from the first moment
+		# rather than after one unwanted poll.
+		self.restore_sync_settings(widget)
+
 		bridge.start()
 		self._bridges.append(bridge)
 

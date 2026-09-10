@@ -573,6 +573,87 @@ def test_the_detail_window_will_not_resend_without_a_setpoint(qt_app):
 
 	assert not widget._dialog.resend_button.isEnabled()
 
+def _dialog(view=ParameterView.COMPACT):
+
+	widget = _box(FakeBridge(), view=view)
+	widget.show_details()
+
+	return widget, widget._dialog
+
+def test_the_detail_window_names_every_lamp_in_order(qt_app):
+	""" Top to bottom, as they sit on the control. """
+
+	_, dialog = _dialog(ParameterView.FULL)
+
+	names = [dialog.name_labels[k].text() for k in ("verification", "send", "value")]
+
+	assert ["Verification" in names[0], "Setpoint" in names[1], "Measurement" in names[2]] == [True] * 3
+
+def test_every_colour_of_every_lamp_has_a_short_meaning(qt_app):
+	""" The legend answers "what does this colour mean" - briefly. """
+
+	from constellation.ui import LAMP_KINDS
+
+	_, dialog = _dialog()
+
+	for key, _name, colors, short, _long in LAMP_KINDS:
+
+		assert set(short) == set(colors), key
+		assert all(len(text.split()) <= 5 for text in short.values()), short
+
+		entries = dialog.legend_entries[key]
+		assert set(entries) == set(colors)
+		for state, (dot, _meaning) in entries.items():
+			assert dot.color == colors[state]
+
+def test_the_current_state_is_shown_and_its_colour_emphasised(qt_app):
+
+	widget, dialog = _dialog()
+
+	lamp, now = dialog.lamp_rows["send"]
+	state = widget.send_status()
+
+	assert state in now.text()
+	assert lamp.color == SEND_COLORS[state]
+	assert "<b>" in dialog.legend_entries["send"][state][1].text()
+	assert all("<b>" not in meaning.text()
+		for other, (_dot, meaning) in dialog.legend_entries["send"].items() if other != state)
+
+def test_long_explanations_are_on_hover_not_on_the_window(qt_app):
+
+	from constellation.ui import SEND_TEXT
+
+	widget, dialog = _dialog()
+	_lamp, now = dialog.lamp_rows["send"]
+	long_text = SEND_TEXT[widget.send_status()]
+
+	assert long_text not in now.text()
+	assert long_text in now.toolTip()
+
+def test_compact_says_which_lamp_is_not_on_the_control(qt_app):
+	""" Compact shows two lamps and the table has three rows - say which row has no lamp. """
+
+	widget, dialog = _dialog(ParameterView.COMPACT)
+
+	assert "not shown" in dialog.name_labels["verification"].text()
+	assert "not shown" not in dialog.name_labels["send"].text()
+	assert "not shown" not in dialog.name_labels["value"].text()
+
+	widget.set_view(ParameterView.FULL)
+	dialog.refresh()
+
+	assert "not shown" not in dialog.name_labels["verification"].text()
+
+def test_an_error_is_visible_without_hovering(qt_app):
+
+	bridge = FakeBridge()
+	widget = _box(bridge)
+	widget.show_details()
+
+	bridge.command_result.emit("set_div_volt", (1, 2.0), False, RuntimeError("VI_ERROR_TMO"))
+
+	assert "VI_ERROR_TMO" in widget._dialog.traffic.text()
+
 # --- the toggle's indicator lamp -----------------------------------------------------------------
 
 def test_the_button_lamp_follows_the_button_immediately(qt_app):

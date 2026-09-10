@@ -298,3 +298,94 @@ def test_the_sync_window_says_when_there_is_nothing_to_configure(qt_app, log):
 	dialog = SyncConfigDialog(window)
 
 	assert any("No instruments" in label.text() for label in dialog.findChildren(QLabel))
+
+# --- persistence --------------------------------------------------------------------------------
+
+def _stop(window):
+
+	for widget in window.instrument_widgets:
+		widget.set_auto_send(False)
+	for bridge in window._bridges:
+		bridge.stop()
+
+def test_tests_never_touch_the_real_settings(qt_app):
+	""" The conftest points every test at a throwaway file. If this fails, the suite is reading and
+	writing the settings of whoever runs it. """
+
+	from constellation.ui import default_settings, SETTINGS_FILE_ENV
+
+	assert default_settings().fileName() == os.environ[SETTINGS_FILE_ENV]
+
+def test_sync_settings_survive_a_restart(qt_app, log):
+
+	first = ConstellationWindow(log, add_menu=False)
+	first.add_instrument(driver=_awg(log), title="AWG")
+
+	row = SyncConfigDialog(first).rows["AWG"]
+	row["poll_period"].setText("0.5")
+	row["poll_check"].setChecked(False)
+	row["send_period"].setText("3")
+	row["send_check"].setChecked(True)
+	_stop(first)
+
+	# A new window, a new driver object - the same instrument at the same address.
+	second = ConstellationWindow(log, add_menu=False)
+	widget = second.add_instrument(driver=_awg(log), title="AWG")
+
+	assert widget.bridge.poll_enabled is False
+	assert widget.bridge.poll_interval_s == 0.5
+	assert widget.auto_send_enabled is True
+	assert widget.auto_send_interval_s == 3.0
+
+	_stop(second)
+
+def test_settings_are_per_instrument(qt_app, log):
+	""" Keyed by driver and address, so turning polling off for one instrument leaves the others
+	alone. """
+
+	import constellation.instrument_control.all as everything
+
+	first = ConstellationWindow(log, add_menu=False)
+	first.add_instrument(driver=_awg(log), title="AWG")
+	row = SyncConfigDialog(first).rows["AWG"]
+	row["poll_check"].setChecked(False)
+	_stop(first)
+
+	second = ConstellationWindow(log, add_menu=False)
+	other = second.add_instrument(driver=everything.SiglentSDG2000X("DUMMY", log=log, dummy=True),
+		title="Other")
+
+	assert other.bridge.poll_enabled is True
+
+	_stop(second)
+
+def test_an_instrument_seen_for_the_first_time_gets_the_defaults(qt_app, log):
+
+	window = ConstellationWindow(log, add_menu=False)
+	widget = window.add_instrument(driver=_awg(log), title="AWG")
+
+	assert widget.bridge.poll_enabled is True
+	assert widget.bridge.poll_interval_s == 2.0
+	assert widget.auto_send_enabled is False
+
+	_stop(window)
+
+def test_a_nonsense_saved_value_is_ignored(qt_app, log):
+
+	window = ConstellationWindow(log, add_menu=False)
+	window.settings.setValue("sync/Keysight33500@DUMMY/poll_enabled", True)
+	window.settings.setValue("sync/Keysight33500@DUMMY/poll_interval_s", -4.0)
+
+	widget = window.add_instrument(driver=_awg(log), title="AWG")
+
+	assert widget.bridge.poll_interval_s == 2.0
+
+	_stop(window)
+
+def test_an_address_with_slashes_is_stored_as_one_key(qt_app, log):
+
+	window = ConstellationWindow(log, add_menu=False)
+	widget = InstrumentWidget(window, InstrumentBridge(), log)
+	widget.bridge.settings_key = lambda: "Driver@ASRL/dev/ttyUSB0::INSTR"
+
+	assert window._sync_group(widget) == "sync/Driver@ASRL_dev_ttyUSB0::INSTR"

@@ -287,9 +287,14 @@ to show for a coupling mode, and `supports_lcd` is False on the toggle and choic
 
 ### Clicking things
 
-- **Any lamp** opens that parameter's detail window: all three statuses spelled out for this
-  parameter, the density dropdown, the last value sent and received, the driver call, and the SCPI
-  behind it when there is any. It follows live, so it can be left open while the instrument is
+- **Any lamp** opens that parameter's detail window. Its lamp table answers the two questions a
+  user has about the dots: *which lamp is which* (rows top to bottom, in the order they sit on the
+  control; a lamp the current view hides is marked "not shown in this view") and *what each colour
+  means* (a legend of every colour with a meaning of five words or fewer, the current one in bold).
+  Full explanations are tooltips - the `*_TEXT` tables - and the short meanings are `*_SHORT`;
+  both hang off `LAMP_KINDS`, so the control and the window cannot drift apart. Below the table:
+  the density dropdown, the last value sent and received, any send/read error, the driver call,
+  and the SCPI behind it when there is any. It follows live, so it can be left open while the instrument is
   poked. There is no SCPI to show for a dummy driver (nothing touches a relay) or an
   `ObserverBridge` (the call happens in another process) — the window says so rather than showing a
   blank field.
@@ -429,6 +434,13 @@ button that opens the sync settings for each docked instrument, applied immediat
   default. Re-sends every value the *user* has set on the panel (`control.user_setpoint`), so the
   instrument is held at what the panel says; controls that have only mirrored the instrument are
   never sent.
+
+Settings persist between runs, via `QSettings`, keyed by driver class and address
+(`bridge.settings_key()`), so the same instrument at the same address gets them back and other
+instruments are unaffected. They are restored before the bridge starts, so a saved "don't poll" is
+honoured from the first moment. Setting `CONSTELLATION_SETTINGS_FILE` to a path keeps them in that
+INI file instead - the test suite does this for every test, so a test run never touches a real
+user's settings.
 
 Polling on, auto-send off is **monitoring**: the panel follows the instrument and writes to it only
 when the user changes something. Nothing in a category widget needs to do anything for this to

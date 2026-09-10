@@ -36,6 +36,13 @@ def pytest_addoption(parser):
 	group.addoption("--recheck", action="store_true", default=False,
 		help="In moderated mode, re-run methods that are already confirmed instead of skipping them.")
 
+@pytest.fixture(autouse=True)
+def _isolated_settings(tmp_path, monkeypatch):
+	''' Every test gets its own throwaway settings file, so the suite can never read or overwrite
+	the settings of whoever is running it (see constellation.ui.default_settings). '''
+
+	monkeypatch.setenv("CONSTELLATION_SETTINGS_FILE", str(tmp_path / "constellation-settings.ini"))
+
 def pytest_configure(config):
 
 	config.addinivalue_line("markers",
