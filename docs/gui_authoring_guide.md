@@ -4,11 +4,15 @@ This is the practical walkthrough. For the design rationale (why threads, why `Q
 setpoint-tracking lives in the GUI layer only), see `docs/gui_architecture_proposal.md`. This guide
 assumes that's already decided and just tells you what to type.
 
-Two finished examples to read alongside this guide, in order of complexity:
+Three finished examples to read alongside this guide, in order of complexity:
 - `src/constellation/instrument_control/power_supply/power_supply_gui.py` - the minimal case.
   Copy this one first.
 - `src/constellation/instrument_control/oscilloscope/oscilloscope_gui.py` - adds lazy per-channel
   construction and a manual (non-polled) data capture with a plot.
+- `src/constellation/instrument_control/arb_waveform_generator/arb_waveform_generator_gui.py` -
+  a plot *computed* from settings rather than captured (flagged by one subdued line, detail in its
+  tooltip), a channel layout chosen from the View menu, and a control greyed out while the current
+  waveform makes it meaningless.
 
 ## The five-minute mental model
 
@@ -116,6 +120,31 @@ def on_state_changed(self, state):
     if not self._channels_built:
         self._build_channels(state)   # first update only
 ```
+
+### Keep the panel about the controls
+
+The instrument's controls should be the most prominent thing on a panel. Warnings and caveats get
+one short line in a subdued style, with any detail in a tooltip - not a multi-line block in a
+coloured box. Display preferences go in the window's **View** menu, not on the panel: override
+`has_view_actions()` (return True) and `add_view_actions(menu)` on your widget, and
+`ConstellationWindow` builds the menu - flat for one instrument, a submenu per panel for several.
+The menu is rebuilt whenever an instrument is added, so create fresh actions on each call and tick
+them from current state.
+
+### Switching a layout: reparent, never rebuild
+
+If a panel offers more than one arrangement of the same controls (the AWG's side-by-side vs tabs
+choice), build the controls **once** and move them between containers. Rebuilding silently throws
+away each control's setpoint and any request still pending on it. `QSplitter.addWidget` and
+`QTabWidget.addTab` both reparent; empty a `QTabWidget` with `removeTab()` (which detaches without
+deleting) before moving its pages elsewhere, rather than relying on it noticing they left.
+
+### Greying out a control that doesn't currently apply
+
+`setEnabled(False)` on the whole control is safe to combine with the verification machinery, which
+disables a control's *inner* widgets for a method the hardware can't do. Record `isEnabled()` at
+build time and only ever narrow it (`setEnabled(built_enabled and applies)`), so a state update
+never re-enables a control for an unavailable feature.
 
 ### 6. Slow operations stay manual, never folded into polling
 
@@ -378,7 +407,7 @@ to fold something away, and a child dragged to zero width just looks broken.
 
 `oscilloscope_gui.py` is the worked example of all three.
 
-## The Instrument menu
+## The Instrument and View menus
 
 `ConstellationWindow` builds an **Instrument** menu from the panels docked into it: Refresh State,
 Apply State, Save State…, Load State…, and Get Connection Info…. With one instrument the actions sit

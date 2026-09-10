@@ -2730,6 +2730,13 @@ class ConstellationWindow(QMainWindow):
 		#----------------- Instrument Menu ----------------
 
 		self.instrument_menu = self.bar.addMenu("Instrument")
+
+		#----------------- View Menu ----------------
+
+		# Display preferences a panel offers (e.g. how it arranges its channels). Kept out of the
+		# panel itself so the controls stay the most prominent thing on it.
+		self.view_menu = self.bar.addMenu("View")
+
 		self._rebuild_instrument_menu()
 
 	def _rebuild_instrument_menu(self):
@@ -2749,6 +2756,10 @@ class ConstellationWindow(QMainWindow):
 		panels = [(getattr(w, "panel_title", None) or type(w).__name__, w)
 			for w in self.instrument_widgets]
 
+		# Before the early return below: the View menu needs its "nothing here" placeholder too,
+		# or with no instruments docked it is left as an empty menu that looks broken.
+		self._rebuild_view_menu(panels)
+
 		if not panels:
 			placeholder = menu.addAction("No instruments connected")
 			placeholder.setEnabled(False)
@@ -2757,6 +2768,30 @@ class ConstellationWindow(QMainWindow):
 		for title, widget in panels:
 			target = menu if len(panels) == 1 else menu.addMenu(title)
 			self._add_instrument_actions(target, widget, title)
+
+	def _rebuild_view_menu(self, panels:list):
+		''' Rebuilds the View menu from what each docked panel offers via add_view_actions().
+
+		Same shape as the Instrument menu: flat for one panel, a submenu per panel for several.
+		Panels offering nothing are left out, and an empty menu says so rather than looking broken.
+		'''
+
+		menu = getattr(self, "view_menu", None)
+		if menu is None:
+			return
+
+		menu.clear()
+
+		offering = [(title, widget) for title, widget in panels if widget.has_view_actions()]
+
+		if not offering:
+			placeholder = menu.addAction("No view options")
+			placeholder.setEnabled(False)
+			return
+
+		for title, widget in offering:
+			target = menu if len(offering) == 1 else menu.addMenu(title)
+			widget.add_view_actions(target)
 
 	def _add_instrument_actions(self, menu, widget, title:str):
 
@@ -2901,6 +2936,21 @@ class InstrumentWidget(QWidget):
 		''' Optional hook for anything a widget needs beyond what its Tracked* controls already
 		handle automatically (e.g. redrawing a waveform plot). Default no-op - most of a category
 		widget's per-field updating should come from Tracked* controls, not this. '''
+		pass
+
+	def has_view_actions(self) -> bool:
+		''' Whether this panel contributes anything to the window's View menu. Override together
+		with add_view_actions(). '''
+		return False
+
+	def add_view_actions(self, menu) -> None:
+		''' Adds this panel's display options to `menu` (the window's View menu, or this panel's
+		submenu of it when several instruments are docked).
+
+		Display preferences belong here rather than as controls on the panel, so the instrument's
+		own controls stay the most prominent thing on screen. Called again every time the menu is
+		rebuilt, so create fresh actions each call and reflect current state when doing so.
+		'''
 		pass
 
 	def on_connection_changed(self, online:bool):
