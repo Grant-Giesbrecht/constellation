@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (QMainWindow, QGridLayout, QHBoxLayout, QVBoxLayout,
 	QSlider, QGroupBox, QWidget, QTabWidget, QDockWidget, QLabel, QLineEdit, QComboBox, QDialog,
 	QDialogButtonBox, QSizePolicy, QFrame, QCheckBox, QLCDNumber, QApplication, QSplitter,
 	QToolButton, QRadioButton, QFileDialog, QMessageBox)
-from PyQt6.QtGui import QAction, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QDoubleValidator
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
@@ -60,8 +60,34 @@ class InstrumentBridge(QObject):
 	# Emitted when online/offline status changes.
 	connection_changed = pyqtSignal(bool)
 
+	# Whether this bridge reads the instrument on a schedule it controls. An ObserverBridge does not
+	# - its updates arrive whenever the owning process broadcasts - so it has nothing to configure.
+	supports_polling = False
+
 	def __init__(self):
 		super().__init__()
+
+		self.poll_enabled = False
+		self.poll_interval_s = None
+
+	def set_polling(self, enabled:bool, interval_s:float=None):
+		''' Turns automatic state polling on or off, and optionally changes its period.
+
+		Raises:
+			NotImplementedError: If this bridge does not poll (see supports_polling).
+			ValueError: If `interval_s` is not a positive number.
+		'''
+
+		if not self.supports_polling:
+			raise NotImplementedError(f"{type(self).__name__} does not poll its instrument.")
+
+		if interval_s is not None:
+			interval_s = float(interval_s)
+			if interval_s <= 0:
+				raise ValueError(f"Polling interval must be positive, got {interval_s}.")
+			self.poll_interval_s = interval_s
+
+		self.poll_enabled = bool(enabled)
 
 	def start(self):
 		''' Starts the bridge's background thread. Called exactly once, by
@@ -107,11 +133,17 @@ class OwningBridge(InstrumentBridge):
 	requested explicitly via request(), never folded into the automatic poll cycle).
 	'''
 
-	def __init__(self, driver:Driver, poll_interval_s:float=2.0):
+	supports_polling = True
+
+	def __init__(self, driver:Driver, poll_interval_s:float=2.0, poll_enabled:bool=True):
 		super().__init__()
 
 		self.driver = driver
 		self.poll_interval_s = poll_interval_s
+
+		# With polling off, the instrument is only touched by explicit requests - which, from a
+		# Parameter* control, means only when the user changes something. See set_polling().
+		self.poll_enabled = poll_enabled
 
 		self._queue = queue.Queue()
 		self._thread = None
@@ -152,7 +184,7 @@ class OwningBridge(InstrumentBridge):
 				self._execute(method_name, args, kwargs)
 				last_poll = time.time()
 
-			elif time.time() - last_poll >= self.poll_interval_s:
+			elif self.poll_enabled and time.time() - last_poll >= self.poll_interval_s:
 				self._poll_and_emit()
 				last_poll = time.time()
 
@@ -167,9 +199,11 @@ class OwningBridge(InstrumentBridge):
 			self._record_scpi(method_name)
 			self.command_result.emit(method_name, args, False, e)
 
-		# The command may have changed instrument state - refresh and push it right away rather
-		# than waiting for the next scheduled poll.
-		self._poll_and_emit()
+		# The command may have changed instrument state, so push it right away rather than waiting
+		# for the next scheduled poll. A full refresh reads EVERY parameter back, though, which is
+		# exactly the traffic a user turns polling off to avoid - so without polling, emit only what
+		# the driver already tracks. The command itself has already read back the one value it set.
+		self._poll_and_emit(refresh=self.poll_enabled)
 
 	def describe(self) -> dict:
 
@@ -215,10 +249,11 @@ class OwningBridge(InstrumentBridge):
 		if command is not None:
 			self.last_scpi[method_name] = (command, getattr(relay, "last_response", None))
 
-	def _poll_and_emit(self):
+	def _poll_and_emit(self, refresh:bool=True):
+		''' Emits the driver's state; with `refresh`, reads it from the instrument first. '''
 
 		try:
-			state_dict = self.driver.poll()
+			state_dict = self.driver.poll() if refresh else self.driver.state_to_dict()
 			self.connection_changed.emit(self.driver.online)
 			# Reconstruct a fresh, independent InstrumentState object rather than emitting
 			# self.driver.state directly - Qt signals pass Python object references across
@@ -1447,6 +1482,11 @@ class _ParameterControlBase(_TrackedControlBase):
 		self._awaiting_readback = False
 		self._online = True
 
+		# The last value the USER asked for, as distinct from _setpoint, which also mirrors the
+		# instrument until the user touches the control. Auto-send re-sends only these: pushing a
+		# mirrored value back would just echo the instrument to itself.
+		self._user_setpoint = None
+
 		# True while the user has typed something they haven't committed. See _display_setpoint:
 		# a background poll must never overwrite half-typed input.
 		self._dirty = False
@@ -1878,11 +1918,18 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		return abs(a_f - b_f) <= max(self.abs_tolerance, abs(b_f) * self.tolerance)
 
+	@property
+	def user_setpoint(self):
+		''' The last value set from this control, or None if it has only ever mirrored the
+		instrument. '''
+		return self._user_setpoint
+
 	def _user_changed(self, new_value):
 		self._send_state = "unsent"
 		self.send_error = ""
 		self._awaiting_readback = True
 		self._dirty = False
+		self._user_setpoint = new_value
 		super()._user_changed(new_value)
 
 	def _on_command_result(self, method_name, args, success, result):
@@ -1968,6 +2015,18 @@ class _ParameterControlBase(_TrackedControlBase):
 		raise NotImplementedError
 
 
+def _scpi_locale():
+	''' A locale that reads numbers the way Python does: "." decimal point, no group separators.
+
+	Numeric fields are displayed with str() and parsed with float(), which ignore the system
+	locale entirely, so their validators must too.
+	'''
+
+	locale = QtCore.QLocale.c()
+	locale.setNumberOptions(QtCore.QLocale.NumberOption.RejectGroupSeparator)
+
+	return locale
+
 def _drain_layout(layout):
 	''' Removes every item from one layout without disturbing any widget's parent.
 
@@ -2006,6 +2065,12 @@ class ParameterBox(_ParameterControlBase):
 
 		self.edit = QLineEdit()
 		if validator is not None:
+			# The field is written with str(float) and read back with float(), both of which use
+			# "." whatever the system locale says. A validator left on the system locale disagrees
+			# wherever "." is the THOUSANDS separator (German, Dutch, ... regions): its fixup()
+			# strips the "." on every commit, so a field showing "2.0" commits as "20" - and then
+			# "200", "2000" on each subsequent commit.
+			validator.setLocale(_scpi_locale())
 			self.edit.setValidator(validator)
 		self.edit.setFixedWidth(edit_width)
 		self.edit.editingFinished.connect(self._on_edited)
@@ -2039,6 +2104,14 @@ class ParameterBox(_ParameterControlBase):
 		self._dirty = True
 
 	def _on_edited(self):
+
+		# editingFinished fires on Return and on focus-out whether or not anything was typed.
+		# Only a real edit may write to the instrument: clicking through a field must never send
+		# it a value, and when the GUI is only monitoring an instrument this is the guarantee that
+		# nothing is written unless the user changed something.
+		if not self._dirty:
+			self._refresh_display()   # also undoes anything the validator's fixup() did
+			return
 
 		try:
 			value = self._from_display(float(self.edit.text()))
@@ -2087,8 +2160,9 @@ class ParameterToggle(_ParameterControlBase):
 	which is exactly the information a user most needs from an output-enable control. Artwork is
 	`assets/indicator_{0,1}.png`, overridable per control via `on_pixmap=`/`off_pixmap=`.
 
-	Both lamps follow the *instrument*, not the button: they show what was last read back, so a
-	button that was clicked and did nothing is visible rather than inferred.
+	The lamp beside the button shows the BUTTON - it changes the instant the button is clicked, so
+	the two can never disagree. What the instrument reports is the PV row's lamp (full view) and the
+	value status lamp (both views); a click the instrument ignored shows up there as a mismatch.
 
 	The two views label things differently, because in each one the button is the only element
 	free to say something:
@@ -2148,6 +2222,7 @@ class ParameterToggle(_ParameterControlBase):
 
 	def _on_toggled(self, checked):
 		self.button.setText(self._button_text(checked))
+		self.indicator.set_state(checked)
 		if checked == self._setpoint:
 			return
 		self._user_changed(checked)
@@ -2164,11 +2239,10 @@ class ParameterToggle(_ParameterControlBase):
 			self.button.setChecked(checked)
 			self.button.blockSignals(False)
 		self.button.setText(self._button_text(checked))
+		self.indicator.set_state(self.button.isChecked())
 
 	def _display_measured(self, value):
-		state = None if value is None else bool(value)
-		self.indicator.set_state(state)
-		self.pv_indicator.set_state(state)
+		self.pv_indicator.set_state(None if value is None else bool(value))
 
 class ParameterChoice(_ParameterControlBase):
 	''' An enumerated parameter. Worth a PV row in the full view: an instrument that silently
@@ -2606,6 +2680,110 @@ class ConnectionInfoDialog(QDialog):
 # the caller needing to know which widget class handles that driver's category.
 # ============================================================================
 
+class SyncConfigDialog(QDialog):
+	''' Per instrument: whether its state is polled, and whether the panel's values are re-sent.
+
+	Polling on + auto-send off is monitoring: the panel follows the instrument and writes to it
+	only when the user changes something. Changes apply immediately.
+	'''
+
+	def __init__(self, window):
+		super().__init__(window)
+
+		self.setWindowTitle("Instrument Sync")
+		self.rows = {}   # panel title -> dict of this instrument's widgets
+
+		layout = QVBoxLayout()
+
+		if not window.instrument_widgets:
+			layout.addWidget(QLabel("No instruments connected."))
+
+		for widget in window.instrument_widgets:
+			title = getattr(widget, "panel_title", None) or type(widget).__name__
+			layout.addWidget(self._instrument_group(title, widget))
+
+		close = QPushButton("Close")
+		close.clicked.connect(self.accept)
+
+		buttons = QHBoxLayout()
+		buttons.addStretch(1)
+		buttons.addWidget(close)
+		layout.addLayout(buttons)
+
+		self.setLayout(layout)
+		install_window_shortcuts(self, on_close=self.reject)
+
+	def _instrument_group(self, title:str, widget) -> QGroupBox:
+
+		bridge = widget.bridge
+
+		group = QGroupBox(title)
+		grid = QGridLayout()
+
+		poll_check = QCheckBox("Poll instrument")
+		poll_check.setToolTip("Read the instrument's state periodically and update the panel.")
+		poll_period = self._period_edit(bridge.poll_interval_s)
+
+		send_check = QCheckBox("Auto-send panel values")
+		send_check.setToolTip("Periodically re-send the values you have set on the panel. "
+			"Off: the instrument is written only when you change something.")
+		send_period = self._period_edit(widget.auto_send_interval_s)
+
+		if bridge.supports_polling:
+			poll_check.setChecked(bool(bridge.poll_enabled))
+		else:
+			reason = "Updates arrive from the process that owns this instrument."
+			for w in (poll_check, poll_period):
+				w.setEnabled(False)
+				w.setToolTip(reason)
+
+		send_check.setChecked(widget.auto_send_enabled)
+
+		def apply_poll(*_):
+			try:
+				bridge.set_polling(poll_check.isChecked(), float(poll_period.text()))
+			except (ValueError, NotImplementedError):
+				poll_period.setText(_format_period(bridge.poll_interval_s))
+
+		def apply_send(*_):
+			try:
+				widget.set_auto_send(send_check.isChecked(), float(send_period.text()))
+			except ValueError:
+				send_period.setText(_format_period(widget.auto_send_interval_s))
+
+		poll_check.toggled.connect(apply_poll)
+		poll_period.editingFinished.connect(apply_poll)
+		send_check.toggled.connect(apply_send)
+		send_period.editingFinished.connect(apply_send)
+
+		for row, (check, period) in enumerate(((poll_check, poll_period), (send_check, send_period))):
+			grid.addWidget(check, row, 0)
+			grid.addWidget(QLabel("every"), row, 1)
+			grid.addWidget(period, row, 2)
+			grid.addWidget(QLabel("s"), row, 3)
+
+		grid.setColumnStretch(4, 1)
+		group.setLayout(grid)
+
+		self.rows[title] = {"poll_check": poll_check, "poll_period": poll_period,
+			"send_check": send_check, "send_period": send_period}
+
+		return group
+
+	@staticmethod
+	def _period_edit(value) -> QLineEdit:
+
+		edit = QLineEdit(_format_period(value))
+		validator = QDoubleValidator(0.05, 3600.0, 3)
+		validator.setLocale(_scpi_locale())
+		edit.setValidator(validator)
+		edit.setFixedWidth(60)
+
+		return edit
+
+def _format_period(value) -> str:
+	return "" if value is None else f"{float(value):g}"
+
 _GUI_REGISTRY = {}
 
 def register_gui(category_cls):
@@ -2645,6 +2823,35 @@ class ConstellationWindow(QMainWindow):
 
 		if add_menu:
 			self.add_basic_menu_bar()
+
+		self._sync_dialog = None
+		self._build_status_bar()
+
+	def _build_status_bar(self):
+		''' A status bar on every Constellation window, independent of the menu bar. For now it
+		holds the Config button; more status goes here later. '''
+
+		self.status_bar = self.statusBar()
+
+		self.config_button = QToolButton()
+		self.config_button.setText("Config")
+		self.config_button.setAutoRaise(True)
+		self.config_button.setToolTip("Polling and auto-send settings")
+		self.config_button.clicked.connect(self.show_sync_config)
+
+		self.status_bar.addPermanentWidget(self.config_button)
+
+	def show_sync_config(self):
+		''' Opens (or raises) the polling/auto-send settings window. Rebuilt each time it is opened,
+		so it always lists the instruments currently docked. '''
+
+		if self._sync_dialog is not None:
+			self._sync_dialog.close()
+
+		self._sync_dialog = SyncConfigDialog(self)
+		self._sync_dialog.show()
+		self._sync_dialog.raise_()
+		self._sync_dialog.activateWindow()
 
 	def add_instrument(self, driver:Driver=None, *, relay_id:str=None, broker_address:str="127.0.0.1",
 			broker_rpc:str="tcp://BROKER:5750", broker_xpub:str="tcp://BROKER:5752",
@@ -2927,10 +3134,55 @@ class InstrumentWidget(QWidget):
 
 		self.main_layout = QGridLayout()
 
+		# Off by default: a panel writes to its instrument only when the user changes something,
+		# which is what makes a panel safe to open just to watch an instrument. See set_auto_send().
+		self.auto_send_enabled = False
+		self.auto_send_interval_s = 5.0
+		self._auto_send_timer = QTimer(self)
+		self._auto_send_timer.timeout.connect(self.push_setpoints)
+
 		bridge.state_changed.connect(self.on_state_changed)
 		bridge.connection_changed.connect(self.on_connection_changed)
 
 		self.main_window.instrument_widgets.append(self)
+
+	def parameter_controls(self) -> list:
+		''' Every Parameter* control on this panel, wherever it is nested. '''
+		return self.findChildren(_ParameterControlBase)
+
+	def push_setpoints(self) -> int:
+		''' Re-sends every value the user has set on this panel. Controls that have only ever
+		mirrored the instrument are left alone. Returns how many were sent. '''
+
+		sent = 0
+
+		for control in self.parameter_controls():
+			if control.user_setpoint is not None:
+				control.resend()
+				sent += 1
+
+		return sent
+
+	def set_auto_send(self, enabled:bool, interval_s:float=None):
+		''' Periodically re-sends this panel's user-set values to the instrument, so the instrument
+		is held at what the panel says even if something else changes it.
+
+		Raises:
+			ValueError: If `interval_s` is not a positive number.
+		'''
+
+		if interval_s is not None:
+			interval_s = float(interval_s)
+			if interval_s <= 0:
+				raise ValueError(f"Auto-send interval must be positive, got {interval_s}.")
+			self.auto_send_interval_s = interval_s
+
+		self.auto_send_enabled = bool(enabled)
+
+		if self.auto_send_enabled:
+			self._auto_send_timer.start(int(self.auto_send_interval_s * 1000))
+		else:
+			self._auto_send_timer.stop()
 
 	def on_state_changed(self, state):
 		''' Optional hook for anything a widget needs beyond what its Tracked* controls already

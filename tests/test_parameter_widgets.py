@@ -57,6 +57,13 @@ class FakeBridge(QObject):
 	def request(self, method_name, *args, **kwargs):
 		self.requests.append((method_name, args))
 
+def _type(widget, text):
+	""" Puts `text` in a numeric field as if the user typed it. setText() alone is not typing: Qt
+	emits textEdited only for user input, and only user input is allowed to reach the instrument. """
+
+	widget.edit.setText(text)
+	widget.edit.textEdited.emit(text)
+
 class FakeState:
 	''' Minimal stand-in for the InstrumentState a real bridge emits. '''
 
@@ -90,7 +97,7 @@ def test_a_successful_send_greens_only_the_send_lamp(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge)
 
-	widget.edit.setText("2.0")
+	_type(widget, "2.0")
 	widget.edit.editingFinished.emit()
 	bridge.command_result.emit("set_div_volt", (1, 2.0), True, None)
 
@@ -102,7 +109,7 @@ def test_a_failed_send_reds_the_send_lamp_and_says_why(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge)
 
-	widget.edit.setText("2.0")
+	_type(widget, "2.0")
 	widget.edit.editingFinished.emit()
 	bridge.command_result.emit("set_div_volt", (1, 2.0), False, RuntimeError("timeout"))
 
@@ -114,7 +121,7 @@ def test_a_matching_readback_greens_the_value_lamp(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge)
 
-	widget.edit.setText("2.0")
+	_type(widget, "2.0")
 	widget.edit.editingFinished.emit()
 	bridge.command_result.emit("set_div_volt", (1, 2.0), True, None)
 	bridge.state_changed.emit(FakeState(2.0))
@@ -145,7 +152,7 @@ def test_quantization_is_not_a_mismatch(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge)
 
-	widget.edit.setText("2.0")
+	_type(widget, "2.0")
 	widget.edit.editingFinished.emit()
 	bridge.state_changed.emit(FakeState(1.9999999))
 
@@ -159,7 +166,7 @@ def test_a_real_disagreement_is_grey_not_red(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge)
 
-	widget.edit.setText("0.55")
+	_type(widget, "0.55")
 	widget.edit.editingFinished.emit()
 	bridge.state_changed.emit(FakeState(0.5))
 
@@ -173,7 +180,7 @@ def test_tolerance_is_configurable(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge, tolerance=0.2)
 
-	widget.edit.setText("0.55")
+	_type(widget, "0.55")
 	widget.edit.editingFinished.emit()
 	bridge.state_changed.emit(FakeState(0.5))
 
@@ -210,7 +217,7 @@ def test_the_sp_button_re_sends_the_setpoint(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge)
 
-	widget.edit.setText("2.0")
+	_type(widget, "2.0")
 	widget.edit.editingFinished.emit()
 	bridge.requests.clear()
 
@@ -443,7 +450,7 @@ def test_the_view_can_be_switched_live_without_losing_state(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge, view=ParameterView.COMPACT)
 
-	widget.edit.setText("2.0")
+	_type(widget, "2.0")
 	widget.edit.editingFinished.emit()
 	bridge.state_changed.emit(FakeState(2.0))
 
@@ -473,7 +480,7 @@ def test_compact_still_reports_both_runtime_failures_separately(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge, view=ParameterView.COMPACT)
 
-	widget.edit.setText("0.55")
+	_type(widget, "0.55")
 	widget.edit.editingFinished.emit()
 	bridge.command_result.emit("set_div_volt", (1, 0.55), True, None)
 	bridge.state_changed.emit(FakeState(0.5))
@@ -541,7 +548,7 @@ def test_the_detail_window_shows_the_driver_call_and_the_scpi(qt_app):
 	bridge.last_scpi = {"set_div_volt": (":CHAN1:SCAL 2.0", None)}
 
 	widget = _box(bridge)
-	widget.edit.setText("2.0")
+	_type(widget, "2.0")
 	widget.edit.editingFinished.emit()
 	widget.show_details()
 
@@ -568,24 +575,38 @@ def test_the_detail_window_will_not_resend_without_a_setpoint(qt_app):
 
 # --- the toggle's indicator lamp -----------------------------------------------------------------
 
-def test_the_toggle_indicator_follows_the_instrument_not_the_button(qt_app):
-	""" A button that was clicked and did nothing must be visible as such. The lamp shows what was
-	read back, so it stays dark until the instrument agrees. """
+def test_the_button_lamp_follows_the_button_immediately(qt_app):
+	""" The lamp beside the button must never disagree with the button - it changes on the click,
+	not on the next poll. """
 
 	bridge = FakeBridge()
 	widget = ParameterToggle(bridge, "Output", get=lambda s: s.value, set_method="set_output_enable",
 		set_args=lambda v: (1, v))
 
-	assert widget.indicator._state is None
+	widget.button.setChecked(True)
+	assert widget.indicator._state is True
+
+	widget.button.setChecked(False)
+	assert widget.indicator._state is False
+
+def test_the_pv_lamp_follows_the_instrument_not_the_button(qt_app):
+	""" A button that was clicked and did nothing must be visible as such - on the PV lamp, which
+	stays unknown until something is read back and then shows what the instrument said. """
+
+	bridge = FakeBridge()
+	widget = ParameterToggle(bridge, "Output", get=lambda s: s.value, set_method="set_output_enable",
+		set_args=lambda v: (1, v), view=ParameterView.FULL)
 
 	widget.button.setChecked(True)
-	assert widget.indicator._state is None      # asked, not yet confirmed
+	assert widget.indicator._state is True
+	assert widget.pv_indicator._state is None      # asked, not yet read back
 
 	bridge.state_changed.emit(FakeState(False))
-	assert widget.indicator._state is False     # the instrument said no
+	assert widget.pv_indicator._state is False     # the instrument said no
+	assert widget.indicator._state is True         # ...and the button still says what was asked
 
 	bridge.state_changed.emit(FakeState(True))
-	assert widget.indicator._state is True
+	assert widget.pv_indicator._state is True
 
 def test_the_toggle_indicator_uses_the_packaged_artwork(qt_app):
 	""" If this fails with both pixmaps None, `assets/` did not ship - which is a live packaging
@@ -713,7 +734,7 @@ def test_a_poll_does_not_clobber_uncommitted_typing(qt_app):
 	assert widget.edit.text() == "0.0"
 
 	# The user types, without committing. `textEdited` is what a real keystroke emits.
-	widget.edit.setText("0.002")
+	_type(widget, "0.002")
 	widget.edit.textEdited.emit("0.002")
 
 	# ...and a poll lands mid-typing.
@@ -728,7 +749,7 @@ def test_committing_clears_the_dirty_flag(qt_app):
 	bridge = FakeBridge()
 	widget = _box(bridge)
 
-	widget.edit.setText("0.002")
+	_type(widget, "0.002")
 	widget.edit.textEdited.emit("0.002")
 	widget.edit.editingFinished.emit()
 
@@ -744,7 +765,7 @@ def test_invalid_input_reverts_rather_than_sticking(qt_app):
 	widget = _box(bridge)
 
 	bridge.state_changed.emit(FakeState(2.0))
-	widget.edit.setText("banana")
+	_type(widget, "banana")
 	widget.edit.textEdited.emit("banana")
 	widget.edit.editingFinished.emit()
 
@@ -776,7 +797,7 @@ def test_the_typed_value_is_scaled_by_the_chosen_prefix(qt_app):
 	widget.prefix_combo.setCurrentIndex([s for s, _ in widget._prefixes].index("m"))
 	widget.prefix_combo.activated.emit(widget.prefix_combo.currentIndex())
 
-	widget.edit.setText("2")
+	_type(widget, "2")
 	widget.edit.editingFinished.emit()
 
 	assert bridge.requests == [("set_offset_time", (0.002,))]
@@ -802,7 +823,7 @@ def test_changing_the_prefix_sends_nothing(qt_app):
 	bridge = FakeBridge()
 	widget = _scaled(bridge)
 
-	widget.edit.setText("0.002")
+	_type(widget, "0.002")
 	widget.edit.editingFinished.emit()
 	bridge.requests.clear()
 
@@ -1066,3 +1087,55 @@ def test_switching_density_creates_no_new_layouts(qt_app):
 
 	assert all(a is b for a, b in zip(before, after))
 	assert widget.layout() is widget._root
+
+
+# --- committing a numeric field -----------------------------------------------------------------
+
+def _freq_box(bridge, **kwargs):
+
+	from PyQt6.QtGui import QDoubleValidator
+
+	return ParameterBox(bridge, "Frequency", get=lambda s: s.value, set_method="set_frequency",
+		set_args=lambda v: (1, v), validator=QDoubleValidator(), unit="Hz", **kwargs)
+
+def test_committing_without_typing_sends_nothing(qt_app):
+	""" Return and focus-out both fire editingFinished. Neither may write when nothing was typed -
+	clicking through a field must not send the instrument a value. """
+
+	bridge = FakeBridge()
+	widget = _freq_box(bridge)
+	bridge.state_changed.emit(FakeState(2000.0))
+
+	widget.edit.editingFinished.emit()
+
+	assert bridge.requests == []
+
+def test_a_comma_decimal_locale_does_not_grow_the_value(qt_app):
+	""" Where "." is the thousands separator, the validator's fixup() used to strip it on every
+	commit: "2.0" became "20", then "200". Reproduced with a German-region locale. """
+
+	from PyQt6.QtCore import QLocale
+	from PyQt6.QtTest import QTest
+	from PyQt6.QtCore import Qt
+
+	previous = QLocale()
+	QLocale.setDefault(QLocale(QLocale.Language.German, QLocale.Country.Germany))
+
+	try:
+		bridge = FakeBridge()
+		widget = _freq_box(bridge, prefixes=("k", ""))
+		bridge.state_changed.emit(FakeState(1000.0))
+
+		widget.edit.selectAll()
+		QTest.keyClicks(widget.edit, "2")
+		QTest.keyClick(widget.edit, Qt.Key.Key_Return)
+		bridge.state_changed.emit(FakeState(2000.0))
+
+		# Commit again, twice, with nothing typed - each of these used to multiply by ten.
+		QTest.keyClick(widget.edit, Qt.Key.Key_Return)
+		QTest.keyClick(widget.edit, Qt.Key.Key_Return)
+
+		assert bridge.requests == [("set_frequency", (1, 2000.0))]
+		assert widget.edit.text() == "2.0"
+	finally:
+		QLocale.setDefault(previous)

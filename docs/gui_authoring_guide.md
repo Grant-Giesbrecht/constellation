@@ -210,6 +210,13 @@ Same `bridge`/`get`/`set_method`/`set_args` interface as the older `Tracked*` co
 | `prefixes` / `auto_prefix` | unit-prefix selector — see below. |
 | `lcd` | show the measured value on a `QLCDNumber` (`ParameterBox` only). |
 
+A control never writes to the instrument unless the user actually typed in it: `editingFinished`
+fires on Return and on focus-out whether or not anything changed, so committing an untouched field
+sends nothing. Numeric fields also ignore the system locale — they are displayed with `str()` and
+parsed with `float()`, so the validator is pinned to `.` decimals. Left on a locale where `.` is
+the thousands separator (German, Dutch regions), the validator stripped it on every commit and
+`2.0` grew to `20`, `200`, ...
+
 A control never overwrites input the user has typed but not committed. (The guard for this used to
 be `hasFocus()`, which is False whenever the window is not the *active* window — so a background
 poll silently replaced half-typed text with the last known value, and a field sitting at `0` ate
@@ -302,8 +309,9 @@ ParameterToggle(bridge, "Channel 1", ..., on_text="LIVE", off_text="SAFE",
                 on_pixmap=my_pixmap, off_pixmap=my_other, indicator_size=28)
 ```
 
-Both lamps follow the **instrument**, not the button — they show what was last read back, so a
-button that was clicked and did nothing is visible rather than inferred. If the artwork can't be
+The lamp beside the button follows the **button**, instantly — the two can never disagree. What
+the instrument reports is the PV row's lamp (full view) and the value status lamp (both views), so
+a button that was clicked and did nothing still shows up, as a mismatch there. If the artwork can't be
 loaded it falls back to a painted circle rather than becoming an invisible control.
 
 The two views label things differently, because in each one the button is the only element free to
@@ -406,6 +414,25 @@ fixed even when they aren't) and turns off `childrenCollapsible`: the panel head
 to fold something away, and a child dragged to zero width just looks broken.
 
 `oscilloscope_gui.py` is the worked example of all three.
+
+## The status bar and sync settings
+
+Every `ConstellationWindow` has a status bar, with or without a menu bar. It holds a **Config**
+button that opens the sync settings for each docked instrument, applied immediately:
+
+- **Poll instrument, every N s** - `bridge.set_polling(enabled, interval_s)`. On by default (2 s).
+  With it off, the instrument is read only when a command runs, and a command no longer triggers a
+  full refresh of every parameter - only the value it set is read back. An `ObserverBridge` has
+  `supports_polling = False` (its updates arrive when the owning process broadcasts), and the
+  window greys the row out.
+- **Auto-send panel values, every N s** - `widget.set_auto_send(enabled, interval_s)`. Off by
+  default. Re-sends every value the *user* has set on the panel (`control.user_setpoint`), so the
+  instrument is held at what the panel says; controls that have only mirrored the instrument are
+  never sent.
+
+Polling on, auto-send off is **monitoring**: the panel follows the instrument and writes to it only
+when the user changes something. Nothing in a category widget needs to do anything for this to
+work - `push_setpoints()` finds every `Parameter*` control on the panel itself.
 
 ## The Instrument and View menus
 
