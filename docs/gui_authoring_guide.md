@@ -378,6 +378,60 @@ to fold something away, and a child dragged to zero width just looks broken.
 
 `oscilloscope_gui.py` is the worked example of all three.
 
+## The Instrument menu
+
+`ConstellationWindow` builds an **Instrument** menu from the panels docked into it: Refresh State,
+Apply State, Save State…, Load State…, and Get Connection Info…. With one instrument the actions sit
+directly in the menu; with several, each gets a submenu named after its panel — "Refresh state" is
+ambiguous the moment a second instrument is on screen.
+
+Everything goes through `bridge.request()`, never a Driver call from the GUI thread: a state refresh
+takes seconds on real hardware and would freeze every other panel in the window.
+
+Note that **Load State does not touch the instrument** — `Driver.restore_state()` only refills the
+driver's own state object. The menu says so in a dialog after loading, because otherwise a user
+watches the hardware not move and concludes the feature is broken. Apply State is the second half.
+
+`ConnectionInfoDialog` shows where an instrument is and whether it can currently be reached. Static
+addressing comes from `bridge.describe()` — implemented on the bridge because an `ObserverBridge`
+has no Driver at all, and reading one from the GUI thread races the worker. Live status comes from a
+`connection_summary` request. Only a networked relay is labelled with broker/labmesh fields; a local
+`DirectSCPIRelay` also carries an `address`, and calling that a "labmesh relay id" would be a
+confident lie about a USB cable.
+
+## Saving traces
+
+`SaveTraceDialog` writes whatever is on a plot in one of five formats. A category widget converts
+what it holds into generic `Trace` records — a labelled pair of x/y arrays, which is as true of a
+VNA sweep as a scope capture — and hands them over:
+
+```python
+SaveTraceDialog(self._traces(), figure=self.plot_widget.fig1,
+                metadata={"instrument": self.panel_title}, parent=self, log=self.log).exec()
+```
+
+| format | what it is for |
+| --- | --- |
+| TOME | archive container, for putting a capture into a nebula session with its metadata |
+| GrAF | the whole figure — data, axes, styling — reopenable and re-styleable |
+| JSON | self-describing text; easiest to read back from another language |
+| CSV | plain columns for a spreadsheet |
+| PNG | a picture of the plot; the numbers are not recoverable from it |
+
+Two things worth knowing:
+
+- **CSV goes wide only when the traces share an x axis** (a scope's channels share a timebase, so
+  one x column and one column per channel is what a person expects). Mismatched x axes are written
+  long-form, because a wide table would silently imply a row-by-row correspondence that does not
+  exist.
+- **A format whose writer is missing is shown disabled with the reason, not hidden.** A silently
+  absent option looks like the feature does not exist. This is currently how TOME appears: no TOME
+  writer is published anywhere in the toolchain yet. `_tome_writer()` in `ui.py` is the single place
+  to wire one up — it probes a few plausible names and reports unavailable until one exists.
+
+Add a format by extending `TRACE_EXPORTERS` and `TRACE_EXPORT_NOTES`; the dialog builds itself from
+those, including the availability check and whether the format needs a figure.
+
 ## Testing your widget headlessly
 
 No display needed - Qt has an offscreen platform plugin, and a `dummy=True` driver gives you

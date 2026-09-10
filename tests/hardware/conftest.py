@@ -21,8 +21,9 @@ def driver_registry() -> dict:
 
 	from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000Z_dvr import RigolDS1000Z
 	from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000E_dvr import RigolDS1000E
+	from constellation.instrument_control.arb_waveform_generator.drivers.Siglent_SDG2000X_dvr import SiglentSDG2000X
 
-	return {cls.__name__: cls for cls in (RigolDS1000Z, RigolDS1000E)}
+	return {cls.__name__: cls for cls in (RigolDS1000Z, RigolDS1000E, SiglentSDG2000X)}
 
 @pytest.fixture(scope="session")
 def hw_log():

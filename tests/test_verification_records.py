@@ -19,11 +19,12 @@ from constellation.verification import (VerificationStatus, WRITABLE_STATUSES, D
 	record_staleness)
 from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000Z_dvr import RigolDS1000Z
 from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000E_dvr import RigolDS1000E
+from constellation.instrument_control.arb_waveform_generator.drivers.Siglent_SDG2000X_dvr import SiglentSDG2000X
 
 # Drivers whose records are cross-checked. Add a driver here once its verification.yaml exists;
 # until every driver is covered this is a deliberate opt-in list rather than a sweep of all
 # drivers, so the un-migrated ones don't fail the suite.
-TRACKED_DRIVERS = [RigolDS1000Z, RigolDS1000E]
+TRACKED_DRIVERS = [RigolDS1000Z, RigolDS1000E, SiglentSDG2000X]
 TRACKED_IDS = [cls.__name__ for cls in TRACKED_DRIVERS]
 
 @pytest.mark.parametrize("driver_cls", TRACKED_DRIVERS, ids=TRACKED_IDS)

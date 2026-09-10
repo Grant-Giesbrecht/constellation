@@ -16,7 +16,7 @@ from constellation.instrument_control.oscilloscope.oscilloscope_ctg import *
 from constellation.ui import *
 
 from PyQt6.QtWidgets import (QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-	QGroupBox, QSplitter)
+	QGroupBox, QSplitter, QMessageBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDoubleValidator
 from constellation.widgets import StatusPushButton
@@ -106,8 +106,10 @@ class OscilloscopeWidget(InstrumentWidget):
 		self.capture_button = QPushButton("Capture Waveforms")
 		self.capture_button.clicked.connect(self._capture_waveforms)
 
+		# Stacked, not in a row: this panel now lives in the narrow sidebar alongside Trigger and
+		# Horizontal, where four side-by-side buttons would each be too narrow to read.
 		self.acq_box = CollapsiblePanel("Acquisition")
-		acq_layout = QHBoxLayout()
+		acq_layout = QVBoxLayout()
 		acq_layout.setContentsMargins(0, 0, 0, 0)
 		for b in (self.run_button, self.stop_button, self.single_button, self.capture_button):
 			acq_layout.addWidget(b)
@@ -162,21 +164,38 @@ class OscilloscopeWidget(InstrumentWidget):
 		channels_layout.addWidget(self.channels_splitter)
 		self.channels_box.set_content_layout(channels_layout)
 
-		# --- Waveform plot ---
+		# --- Waveform plot, in its own foldable panel with its own actions ---
 		self.plot_widget = PlotWidget(main_window, log)
+
+		self.save_trace_button = QPushButton("Save Trace...")
+		self.save_trace_button.clicked.connect(self._save_trace)
+
+		wave_actions = QHBoxLayout()
+		wave_actions.setContentsMargins(0, 0, 0, 0)
+		wave_actions.addWidget(self.save_trace_button)
+		wave_actions.addStretch(1)
+
+		wave_layout = QVBoxLayout()
+		wave_layout.setContentsMargins(0, 0, 0, 0)
+		wave_layout.addLayout(wave_actions)
+		wave_layout.addWidget(self.plot_widget, 1)
+
+		self.waveform_box = CollapsiblePanel("Waveform")
+		self.waveform_box.set_content_layout(wave_layout)
 
 		# --- Assembly ---
 		# Nested splitters rather than a fixed grid, so a user can give the plot more room, shrink
-		# the channel strip, or fold a panel away entirely. Each section is a CollapsiblePanel, so
-		# the ones you are not using right now cost a header's worth of height.
-		self.side_splitter = make_splitter(Qt.Orientation.Vertical, self.trigger_box, self.horiz_box)
-		self.upper_splitter = make_splitter(Qt.Orientation.Horizontal, self.plot_widget,
+		# the channel strip, or fold a panel away entirely. Every section is a CollapsiblePanel,
+		# and they fold INDEPENDENTLY: folding all three side panels leaves the waveform showing
+		# and hands it the space, and folding the waveform leaves the side panels alone.
+		self.side_splitter = make_splitter(Qt.Orientation.Vertical, self.acq_box,
+			self.trigger_box, self.horiz_box)
+		self.upper_splitter = make_splitter(Qt.Orientation.Horizontal, self.waveform_box,
 			self.side_splitter, stretch=[3, 1])
 		self.body_splitter = make_splitter(Qt.Orientation.Vertical, self.upper_splitter,
 			self.channels_box, stretch=[4, 1])
 
 		self.main_layout = QVBoxLayout()
-		self.main_layout.addWidget(self.acq_box)
 		self.main_layout.addWidget(self.body_splitter, 1)
 		self.setLayout(self.main_layout)
 
@@ -228,6 +247,48 @@ class OscilloscopeWidget(InstrumentWidget):
 			self.channel_controls[ch] = {"enable": enable, "vdiv": vdiv, "voff": voff, "coupling": coupling}
 
 		self._channels_built = True
+
+	def _traces(self) -> list:
+		''' The captured waveforms as generic Trace records, for the export dialog.
+
+		Tolerates both spellings of the time key: the category seeds `waveform` as
+		{"time_S", "volt_V"} while RigolDS1000Z returns {"time_s", ...}. The data-shape contract
+		is a known open item (P11) - until it is settled, exporting should not fail over a capital
+		letter.
+		'''
+
+		traces = []
+
+		for channel in sorted(self._waveform_cache):
+
+			wave = self._waveform_cache[channel] or {}
+
+			x = next((wave[k] for k in ("time_s", "time_S", "x") if wave.get(k) is not None), None)
+			y = next((wave[k] for k in ("volt_V", "y") if wave.get(k) is not None), None)
+
+			if y is None or not len(y):
+				continue
+
+			traces.append(Trace(f"Channel {channel}", x if x is not None else range(len(y)), y,
+				x_unit="s", y_unit="V", metadata={"channel": channel}))
+
+		return traces
+
+	def _save_trace(self):
+
+		traces = self._traces()
+
+		if not traces:
+			QMessageBox.information(self, "Nothing to save",
+				"No waveforms have been captured yet - use \"Capture Waveforms\" first.")
+			return
+
+		dialog = SaveTraceDialog(traces, figure=self.plot_widget.fig1,
+			metadata={"instrument": getattr(self, "panel_title", "oscilloscope"),
+				"description": "Captured with Constellation"},
+			parent=self, log=self.log)
+
+		dialog.exec()
 
 	def _capture_waveforms(self):
 		''' Fires one get_waveform request per channel - deliberately manual, see the class

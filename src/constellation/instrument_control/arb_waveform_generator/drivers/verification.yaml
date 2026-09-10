@@ -1,0 +1,59 @@
+# Hardware-verification records for the arbitrary-waveform-generator drivers in this directory.
+#
+# WHAT THIS FILE IS: a record of which driver methods have actually been exercised against a
+# physical instrument, on which model, and how thoroughly. It is written by the hardware test
+# suite (`pytest -m hardware ...`), not maintained by hand - see docs/hardware_verification.md.
+#
+# WHAT IT IS NOT: a record of what the hardware can do. That lives in the driver source, as
+# @feature_unavailable / @feature_unimplemented decorators, and is never restated here. A test
+# fails if it is.
+#
+# STATUS VALUES
+#   unverified  implemented, never checked against hardware.
+#   roundtrip   set/read-back agreed on real hardware. Proves the set/get pair is
+#               SELF-CONSISTENT - not that it controls the parameter it claims to. A driver whose
+#               setter and getter both address the timebase will round-trip volts/div perfectly.
+#   confirmed   a person watched the instrument and confirmed the physical effect. The only
+#               status available to action commands (run/stop, single trigger), which have no
+#               read-back at all.
+#   failed      checked and did not work. Kept deliberately: "we tried and it broke" is far more
+#               useful than "nothing is known", and it is not outranked by weaker records.
+#
+# Records are a LIST per method, keyed by model, because one driver covers a series: an SDG2042X
+# and an SDG2122X share SiglentSDG2000X, and a command can work on one and not the other.
+#
+# EXPIRY. A record is evidence about a moment, not a certificate. A `roundtrip`/`confirmed` record
+# must therefore carry enough to be invalidated later, and all of it is captured automatically by
+# the run:
+#   idn         the instrument's full *IDN? string. Compared against the connected instrument, so
+#               a firmware update shows up as stale-firmware.
+#   code_hash   hash of the driver method's own implementation, normalized so comments and
+#               formatting don't invalidate it but a changed SCPI string does -> stale-code.
+#   epoch       VERIFICATION_EPOCH at the time of the run. Bumped when the shared instrument-I/O
+#               path changes enough to invalidate evidence -> stale-framework.
+# Any stale record is reported to a user as NOT verified. The record is kept, because "this worked
+# at hash X on date Y" distinguishes 'used to work' from 'never tried'.
+#
+# Do not write `unavailable`, `unimplemented`, or any `stale-*` status here - all are derived.
+
+SiglentSDG2000X:
+  set_waveform:
+  - status: unverified
+  get_waveform:
+  - status: unverified
+  set_frequency:
+  - status: unverified
+  get_frequency:
+  - status: unverified
+  set_amplitude:
+  - status: unverified
+  get_amplitude:
+  - status: unverified
+  set_offset:
+  - status: unverified
+  get_offset:
+  - status: unverified
+  set_output_enable:
+  - status: unverified
+  get_output_enable:
+  - status: unverified

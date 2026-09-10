@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QMainWindow, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton,
 	QSlider, QGroupBox, QWidget, QTabWidget, QDockWidget, QLabel, QLineEdit, QComboBox, QDialog,
 	QDialogButtonBox, QSizePolicy, QFrame, QCheckBox, QLCDNumber, QApplication, QSplitter,
-	QToolButton)
+	QToolButton, QRadioButton, QFileDialog, QMessageBox)
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 
 import matplotlib.pyplot as plt
@@ -71,6 +71,20 @@ class InstrumentBridge(QObject):
 	def stop(self):
 		''' Stops the bridge's background thread. Called by ConstellationWindow on shutdown. '''
 		raise NotImplementedError
+
+	def describe(self) -> dict:
+		''' Where this bridge's instrument is, as static addressing information.
+
+		Lives on the bridge rather than being read off a Driver by the caller, for the usual
+		reason: an ObserverBridge has no Driver at all, and reading one from the GUI thread races
+		the worker thread. Everything returned here is fixed at construction, so it is safe to
+		read at any time.
+
+		Returns:
+			dict: Human-readable label -> value, for display.
+		'''
+
+		return {}
 
 	def request(self, method_name:str, *args, **kwargs):
 		''' Asks the bridge to call `method_name` on the instrument (e.g.
@@ -157,6 +171,39 @@ class OwningBridge(InstrumentBridge):
 		# than waiting for the next scheduled poll.
 		self._poll_and_emit()
 
+	def describe(self) -> dict:
+
+		driver = self.driver
+		relay = getattr(driver, "relay", None)
+
+		info = {
+			"Connection": "owned by this process",
+			"Driver": type(driver).__name__,
+			"Address": getattr(driver, "address", "") or "(none)",
+			"Relay": type(relay).__name__ if relay is not None else "(none)",
+			"Instrument ID": (getattr(getattr(driver, "id", None), "idn_model", "") or "(not read)"),
+		}
+
+		if getattr(driver, "dummy", False):
+			info["Connection"] = "dummy - no instrument attached"
+
+		# A networked driver's `address` is a labmesh relay id rather than a VISA resource string,
+		# and the broker it resolves through is the other half of the answer to "where is this".
+		# Keyed off the broker attributes, which only a RemoteTextCommandRelayClient has - a local
+		# relay also carries an `address`, and labelling that one "labmesh relay id" would be a
+		# confident lie about a USB cable.
+		if hasattr(relay, "broker_address"):
+
+			info["Address"] = f"{info['Address']}  (labmesh relay id)"
+
+			for label, attribute in (("Broker", "broker_address"), ("Broker RPC", "broker_rpc"),
+					("Broker XPUB", "broker_xpub")):
+				value = getattr(relay, attribute, None)
+				if value:
+					info[label] = value
+
+		return info
+
 	def _record_scpi(self, method_name:str):
 		''' Notes the SCPI the driver just sent, attributed to the method that sent it. '''
 
@@ -214,6 +261,16 @@ class ObserverBridge(InstrumentBridge):
 	def stop(self):
 		if self._loop is not None:
 			self._loop.call_soon_threadsafe(self._loop.stop)
+
+	def describe(self) -> dict:
+
+		return {
+			"Connection": "observing - another process owns this instrument",
+			"labmesh relay id": self.relay_id,
+			"Broker": self.broker_address,
+			"Broker RPC": self.broker_rpc,
+			"Broker XPUB": self.broker_xpub,
+		}
 
 	def request(self, method_name:str, *args, **kwargs):
 
@@ -861,6 +918,10 @@ VALUE_TEXT = {
 
 # SI prefixes offered by the unit selector, largest first. `µ` is spelled with the MICRO SIGN so it
 # renders on every platform without a font that has GREEK SMALL LETTER MU.
+#
+# One of three copies of SI-prefix logic (the others are in Siglent_SDG2000X_dvr.py and
+# stardust.units). Consolidating them into a stardust unit registry is designed but deferred - see
+# stardust/docs/units_design.md and todo_list.md P11.
 UNIT_PREFIXES = (
 	("T", 1e12), ("G", 1e9), ("M", 1e6), ("k", 1e3), ("", 1.0),
 	("m", 1e-3), ("µ", 1e-6), ("n", 1e-9), ("p", 1e-12), ("f", 1e-15),
@@ -2162,6 +2223,385 @@ class ParameterChoice(_ParameterControlBase):
 		self.pv_display.setText(self._format(value))
 
 # ============================================================================
+# Trace export - "save what is on the plot", in whichever format the next tool wants.
+#
+# Deliberately generic rather than oscilloscope-shaped: a trace is a labelled pair of x/y arrays,
+# which is equally true of a VNA sweep or a spectrum. A category widget converts whatever it holds
+# into `Trace` records and hands them here.
+# ============================================================================
+
+class Trace:
+	''' One labelled curve, in whatever units the instrument reported. '''
+
+	def __init__(self, label:str, x, y, x_unit:str="", y_unit:str="", metadata:dict=None):
+
+		self.label = label
+		self.x = list(x) if x is not None else []
+		self.y = list(y) if y is not None else []
+		self.x_unit = x_unit
+		self.y_unit = y_unit
+		self.metadata = metadata or {}
+
+	def __len__(self):
+		return len(self.y)
+
+def _sanitize(name:str) -> str:
+	return "".join(c if c.isalnum() or c in "-_." else "_" for c in str(name))
+
+def _shared_x(traces) -> bool:
+	''' Whether every trace sits on the same x axis, to within float noise.
+
+	A scope's channels share a timebase, so a wide table (one time column, one column per channel)
+	is what a person opening the CSV expects. Anything else has to be written long-form, because a
+	wide table would silently imply a correspondence between rows that does not exist.
+	'''
+
+	if len(traces) < 2:
+		return True
+
+	first = traces[0].x
+	for trace in traces[1:]:
+		if len(trace.x) != len(first):
+			return False
+		if any(abs(a - b) > 1e-12 * max(1.0, abs(a)) for a, b in zip(trace.x, first)):
+			return False
+
+	return True
+
+def export_csv(path:str, traces:list, figure=None, metadata:dict=None):
+	''' Plain text, wide when the traces share an x axis and long when they do not. '''
+
+	import csv
+
+	with open(path, "w", newline="", encoding="utf-8") as f:
+
+		writer = csv.writer(f)
+
+		if _shared_x(traces) and traces:
+			writer.writerow([f"x [{traces[0].x_unit}]"] + [f"{t.label} [{t.y_unit}]" for t in traces])
+			for row in range(len(traces[0].x)):
+				writer.writerow([traces[0].x[row]] + [t.y[row] if row < len(t.y) else "" for t in traces])
+		else:
+			writer.writerow(["trace", "x", "y"])
+			for trace in traces:
+				for x, y in zip(trace.x, trace.y):
+					writer.writerow([trace.label, x, y])
+
+def export_json(path:str, traces:list, figure=None, metadata:dict=None):
+	''' Self-describing, and the easiest thing to read back in another language. '''
+
+	import json
+
+	document = {
+		"format": "constellation-traces",
+		"version": 1,
+		"metadata": metadata or {},
+		"traces": [{"label": t.label, "x": t.x, "y": t.y, "x_unit": t.x_unit,
+			"y_unit": t.y_unit, "metadata": t.metadata} for t in traces],
+	}
+
+	with open(path, "w", encoding="utf-8") as f:
+		json.dump(document, f, indent=1)
+
+def export_png(path:str, traces:list, figure=None, metadata:dict=None):
+	''' A picture of the plot as it currently looks. Data is not recoverable from it - that is the
+	point of offering the other four alongside. '''
+
+	if figure is None:
+		raise ValueError("No figure to save - this panel has no plot.")
+
+	figure.savefig(path, dpi=200, bbox_inches="tight")
+
+def export_graf(path:str, traces:list, figure=None, metadata:dict=None):
+	''' GrAF keeps the *figure* - styling, axes and data together - so a saved plot can be reopened
+	and re-styled rather than just looked at. '''
+
+	if figure is None:
+		raise ValueError("No figure to save - this panel has no plot.")
+
+	import graf
+
+	graf.save_graf(figure, path, description=(metadata or {}).get("description", ""),
+		conditions=metadata or {}, source_app="Constellation")
+
+def export_tome(path:str, traces:list, figure=None, metadata:dict=None):
+	''' TOME container.
+
+	The writer is looked up at call time rather than imported at module scope, because no TOME
+	implementation is published yet - see `_tome_writer()`.
+	'''
+
+	writer = _tome_writer()
+	if writer is None:
+		raise RuntimeError("No TOME writer is available - see _tome_writer() in ui.py.")
+
+	document = {
+		"metadata": metadata or {},
+		"traces": {t.label: {"x": t.x, "y": t.y, "x_unit": t.x_unit, "y_unit": t.y_unit}
+			for t in traces},
+	}
+
+	writer(document, path)
+
+def _tome_writer():
+	''' Finds a `dict -> .tome` writer, or None.
+
+	**This is the one place to wire TOME up.** Nothing in the installed toolchain publishes a TOME
+	writer today - `stardust.io` has `dict_to_hdf` but no TOME equivalent, and the only reference
+	to `dict_to_tome` anywhere is an example in nebula's docstrings. Rather than guess at an API
+	and produce files that a future TOME reader would reject, the format is offered and reports
+	itself unavailable until one of these names exists.
+	'''
+
+	for module_name, attribute in (("tome", "dict_to_tome"), ("tome", "save_tome"),
+			("stardust.io", "dict_to_tome"), ("jarnsaxa", "dict_to_tome")):
+
+		try:
+			import importlib
+			module = importlib.import_module(module_name)
+		except ImportError:
+			continue
+
+		writer = getattr(module, attribute, None)
+		if writer is not None:
+			return writer
+
+	return None
+
+def _graf_available() -> tuple:
+
+	try:
+		import graf   # noqa: F401
+	except ImportError as e:
+		return False, f"the `graf` package is not installed ({e})"
+
+	return True, ""
+
+def _tome_available() -> tuple:
+
+	if _tome_writer() is None:
+		return False, "no TOME writer is published yet - see _tome_writer() in ui.py"
+
+	return True, ""
+
+def _always_available() -> tuple:
+	return True, ""
+
+# key -> (menu label, extension, file-dialog filter, availability check, writer, needs_figure)
+TRACE_EXPORTERS = {
+	"tome": ("TOME", ".tome", "TOME container (*.tome)", _tome_available, export_tome, False),
+	"graf": ("GrAF", ".graf", "GrAF figure (*.graf)", _graf_available, export_graf, True),
+	"json": ("JSON", ".json", "JSON (*.json)", _always_available, export_json, False),
+	"csv": ("CSV", ".csv", "Comma-separated values (*.csv)", _always_available, export_csv, False),
+	"png": ("PNG", ".png", "PNG image (*.png)", _always_available, export_png, True),
+}
+
+TRACE_EXPORT_NOTES = {
+	"tome": "Archive container, for putting the capture into a nebula session alongside its metadata.",
+	"graf": "Keeps the whole figure - data, axes and styling - so it can be reopened and re-styled.",
+	"json": "Self-describing text. The easiest format to read back from another language.",
+	"csv": "Plain columns for a spreadsheet. One x column and one column per trace when they share an x axis.",
+	"png": "A picture of the plot as it looks now. The numbers are not recoverable from it.",
+}
+
+class SaveTraceDialog(QDialog):
+	''' Asks which format to save the captured traces in, then writes them.
+
+	The formats are listed with what each one is *for* rather than just its extension, because the
+	choice between "I want this in a spreadsheet" and "I want this back in a figure later" is the
+	actual decision being made. A format whose writer is missing is shown disabled with the reason,
+	rather than hidden - a silently absent option looks like the feature does not exist.
+	'''
+
+	def __init__(self, traces:list, figure=None, metadata:dict=None, parent=None, log:plf.LogPile=None):
+		super().__init__(parent)
+
+		self.traces = traces
+		self.figure = figure
+		self.metadata = metadata or {}
+		self.log = log
+
+		self.setWindowTitle("Save trace")
+		self.setMinimumWidth(560)
+		install_window_shortcuts(self, on_close=self.reject)
+
+		layout = QVBoxLayout()
+
+		points = sum(len(t) for t in traces)
+		summary = QLabel(f"<b>{len(traces)} trace(s), {points} points</b><br>"
+			+ ", ".join(t.label for t in traces) if traces else "<b>Nothing captured yet</b>")
+		summary.setTextFormat(Qt.TextFormat.RichText)
+		summary.setWordWrap(True)
+		layout.addWidget(summary)
+
+		self.buttons = {}
+
+		# The radio carries the format name and the note lives in its own wrapping label beside
+		# it: QRadioButton does not wrap its text, so a one-line-per-format layout silently clips
+		# the explanation that is the whole reason the notes are there.
+		grid = QGridLayout()
+		grid.setColumnStretch(1, 1)
+
+		first_enabled = None
+
+		for row, (key, (label, _ext, _filter, available, _writer, needs_figure)) in enumerate(TRACE_EXPORTERS.items()):
+
+			ok, reason = available()
+			if ok and needs_figure and figure is None:
+				ok, reason = False, "this panel has no plot to save"
+
+			button = QRadioButton(label)
+			button.setEnabled(ok)
+
+			note = QLabel(TRACE_EXPORT_NOTES[key] if ok else f"Unavailable - {reason}")
+			note.setWordWrap(True)
+			note.setEnabled(ok)
+			if not ok:
+				button.setToolTip(f"Unavailable: {reason}")
+				note.setToolTip(f"Unavailable: {reason}")
+
+			grid.addWidget(button, row, 0, Qt.AlignmentFlag.AlignTop)
+			grid.addWidget(note, row, 1)
+
+			self.buttons[key] = button
+
+			if ok and first_enabled is None:
+				first_enabled = button
+
+		if first_enabled is not None:
+			first_enabled.setChecked(True)
+
+		layout.addLayout(grid)
+
+		box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+		box.accepted.connect(self.save)
+		box.rejected.connect(self.reject)
+		self.save_button = box.button(QDialogButtonBox.StandardButton.Save)
+		self.save_button.setEnabled(bool(traces) and first_enabled is not None)
+		layout.addWidget(box)
+
+		self.setLayout(layout)
+
+	def selected_format(self):
+
+		for key, button in self.buttons.items():
+			if button.isChecked():
+				return key
+
+		return None
+
+	def save(self):
+
+		key = self.selected_format()
+		if key is None:
+			return
+
+		label, extension, file_filter, _available, writer, _needs_figure = TRACE_EXPORTERS[key]
+
+		path, _ = QFileDialog.getSaveFileName(self, f"Save trace as {label}",
+			f"trace{extension}", file_filter)
+
+		if not path:
+			return
+
+		if not path.lower().endswith(extension):
+			path += extension
+
+		try:
+			writer(path, self.traces, figure=self.figure, metadata=self.metadata)
+		except Exception as e:
+			if self.log is not None:
+				self.log.error(f"Failed to save trace to >{path}<. ({e})")
+			QMessageBox.critical(self, "Save failed", f"Could not write {path}:\n\n{e}")
+			return
+
+		if self.log is not None:
+			self.log.info(f"Saved {len(self.traces)} trace(s) to >{path}<.")
+
+		self.accept()
+
+class ConnectionInfoDialog(QDialog):
+	''' Where this panel's instrument actually is, and whether we can currently reach it.
+
+	Static identity comes from the bridge (which knows its own addresses without touching a
+	Driver); live status is fetched through `bridge.request("connection_summary")`, so nothing
+	here reads driver state from the GUI thread while the worker thread is using it.
+	'''
+
+	def __init__(self, bridge, title:str="", parent=None):
+		super().__init__(parent)
+
+		self.bridge = bridge
+
+		self.setWindowTitle(f"Connection info{' - ' + title if title else ''}")
+		self.setMinimumWidth(480)
+		install_window_shortcuts(self, on_close=self.reject)
+
+		layout = QVBoxLayout()
+
+		self.identity = QLabel()
+		self.identity.setTextFormat(Qt.TextFormat.RichText)
+		self.identity.setWordWrap(True)
+		self.identity.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+		layout.addWidget(self.identity)
+
+		line = QFrame()
+		line.setFrameShape(QFrame.Shape.HLine)
+		layout.addWidget(line)
+
+		self.status = QLabel("Asking the instrument...")
+		self.status.setTextFormat(Qt.TextFormat.RichText)
+		self.status.setWordWrap(True)
+		self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+		layout.addWidget(self.status)
+
+		buttons = QHBoxLayout()
+		refresh = QPushButton("Refresh")
+		refresh.clicked.connect(self.refresh)
+		buttons.addWidget(refresh)
+		buttons.addStretch(1)
+
+		box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+		box.rejected.connect(self.reject)
+		buttons.addWidget(box)
+		layout.addLayout(buttons)
+
+		self.setLayout(layout)
+
+		bridge.command_result.connect(self._on_result)
+		bridge.connection_changed.connect(lambda online: self.refresh())
+
+		self._render_identity()
+		self.refresh()
+
+	def _render_identity(self):
+
+		rows = []
+		for key, value in (self.bridge.describe() or {}).items():
+			rows.append(f"<b>{_html(key)}:</b> {_html(value)}")
+
+		self.identity.setText("<br>".join(rows) or "<i>This bridge reports no addressing information.</i>")
+
+	def refresh(self):
+		self.bridge.request("connection_summary")
+
+	def _on_result(self, method_name, args, success, result):
+
+		if method_name != "connection_summary":
+			return
+
+		if not success:
+			self.status.setText(f"<b>Status:</b> could not be read<br><span style='color:#e74c3c'>{_html(result)}</span>")
+			return
+
+		if not isinstance(result, dict):
+			self.status.setText(f"<b>Status:</b> {_html(result)}")
+			return
+
+		rows = [f"<b>{_html(key)}:</b> {_html(value)}" for key, value in result.items()]
+		self.status.setText("<br>".join(rows))
+
+# ============================================================================
 # Category -> widget registration, so ConstellationWindow.add_instrument(driver) works without
 # the caller needing to know which widget class handles that driver's category.
 # ============================================================================
@@ -2239,8 +2679,11 @@ class ConstellationWindow(QMainWindow):
 			raise LookupError(f"No GUI registered for category >{resolved_category}< - use @register_gui(...) on a widget class.")
 
 		widget = widget_cls(self, bridge, self.log)
+		widget.panel_title = panel_title
 		bridge.start()
 		self._bridges.append(bridge)
+
+		self._rebuild_instrument_menu()
 
 		dock = QDockWidget(panel_title, self)
 		dock.setWidget(widget)
@@ -2283,6 +2726,104 @@ class ConstellationWindow(QMainWindow):
 		self.quit_act.setMenuRole(QAction.MenuRole.QuitRole)
 		self.quit_act.triggered.connect(QApplication.quit)
 		self.file_menu.addAction(self.quit_act)
+
+		#----------------- Instrument Menu ----------------
+
+		self.instrument_menu = self.bar.addMenu("Instrument")
+		self._rebuild_instrument_menu()
+
+	def _rebuild_instrument_menu(self):
+		''' Rebuilds the Instrument menu from the panels currently docked.
+
+		With one instrument the actions sit directly in the menu; with several, each gets its own
+		submenu. Naming them is the point - "Refresh state" is ambiguous the moment a second
+		instrument is on screen.
+		'''
+
+		menu = getattr(self, "instrument_menu", None)
+		if menu is None:
+			return
+
+		menu.clear()
+
+		panels = [(getattr(w, "panel_title", None) or type(w).__name__, w)
+			for w in self.instrument_widgets]
+
+		if not panels:
+			placeholder = menu.addAction("No instruments connected")
+			placeholder.setEnabled(False)
+			return
+
+		for title, widget in panels:
+			target = menu if len(panels) == 1 else menu.addMenu(title)
+			self._add_instrument_actions(target, widget, title)
+
+	def _add_instrument_actions(self, menu, widget, title:str):
+
+		bridge = widget.bridge
+
+		def add(text, slot, shortcut=None):
+			action = QAction(text, self)
+			if shortcut:
+				action.setShortcut(shortcut)
+			action.triggered.connect(slot)
+			menu.addAction(action)
+			return action
+
+		# Everything goes through bridge.request(), never a Driver call from the GUI thread - a
+		# state refresh can take seconds on a real instrument, and blocking here would freeze
+		# every other panel in the window.
+		add("Refresh State", lambda: bridge.request("refresh_state"))
+		add("Apply State", lambda: bridge.request("apply_state"))
+
+		menu.addSeparator()
+
+		add("Save State...", lambda: self._save_instrument_state(bridge, title))
+		add("Load State...", lambda: self._load_instrument_state(bridge, title))
+
+		menu.addSeparator()
+
+		add("Get Connection Info...", lambda: self._show_connection_info(bridge, title))
+
+	def _save_instrument_state(self, bridge, title:str):
+
+		path, _ = QFileDialog.getSaveFileName(self, f"Save state - {title}", "instrument.state.hdf",
+			"Instrument state (*.hdf *.state.hdf)")
+
+		if not path:
+			return
+
+		bridge.request("dump_state", path)
+		self.log.info(f"Saving instrument state to >{path}<.")
+
+	def _load_instrument_state(self, bridge, title:str):
+
+		path, _ = QFileDialog.getOpenFileName(self, f"Load state - {title}", "",
+			"Instrument state (*.hdf *.state.hdf)")
+
+		if not path:
+			return
+
+		bridge.request("restore_state", path)
+		self.log.info(f"Loading instrument state from >{path}<. Use Apply State to send it to the instrument.")
+
+		# restore_state() only refills the Driver's own state object - it deliberately does not
+		# touch the instrument. Saying so here beats a user wondering why the hardware did not
+		# move.
+		QMessageBox.information(self, "State loaded",
+			"The state was loaded into the driver.\n\nIt has NOT been sent to the instrument - "
+			"use Instrument > Apply State to do that.")
+
+	def _show_connection_info(self, bridge, title:str):
+
+		dialog = ConnectionInfoDialog(bridge, title=title, parent=self)
+		dialog.show()
+
+		# Held on the window so it is not garbage collected the moment this method returns.
+		if not hasattr(self, "_info_dialogs"):
+			self._info_dialogs = []
+		self._info_dialogs.append(dialog)
+		dialog.finished.connect(lambda _r, d=dialog: self._info_dialogs.remove(d))
 
 	def _basic_menu_close(self):
 		# Closes this window only. This used to call sys.exit(0) straight after close(), so

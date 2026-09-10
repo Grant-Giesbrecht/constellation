@@ -28,23 +28,16 @@ import pytest
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import Oscilloscope, MeasurementsMixin
 from constellation.verification import VerificationStatus
 
-from hardware_support import already_confirmed, skip_if_unavailable
+from hardware_support import Check, already_confirmed, close_enough, requires_category, run_check, skip_if_unavailable
 
 pytestmark = pytest.mark.hardware
 
-def _close(expected, actual, rel:float=0.02, abs_tol:float=0.0) -> bool:
-	''' Numeric comparison with room for the instrument's own quantization.
+@pytest.fixture(autouse=True)
+def _category(instrument):
+	''' A run has one instrument on the bench but collects every category module, so a module that
+	is not about that instrument steps aside rather than failing. '''
 
-	A scope does not store what you send it: volts/div and time/div snap to a 1-2-5 sequence, and
-	offsets quantize to a fraction of a division. The values below are chosen to sit on that grid
-	so the tolerance stays tight - a loose tolerance here would pass a driver that is off by a
-	factor of two.
-	'''
-
-	if expected is None or actual is None:
-		return False
-
-	return abs(float(actual) - float(expected)) <= max(abs_tol, abs(float(expected)) * rel)
+	requires_category(instrument, Oscilloscope)
 
 def _axis(wave, names):
 	''' Pulls one axis out of a waveform dict, tolerating the key names in use.
@@ -76,27 +69,6 @@ def _if_available(instrument, name, *args):
 
 	return True
 
-class Check:
-	''' One set/get pair, the values to drive it with, and what a human should see.
-
-	`methods` lists both halves because neither can be verified without the other: the getter is
-	the only thing reading the setter back, and the setter is the only thing giving the getter
-	something to read. A result therefore applies to both.
-	'''
-
-	def __init__(self, methods, values, apply, read, prompt, matches=None):
-
-		self.methods = tuple(methods)
-		self.values = tuple(values)
-		self.apply = apply
-		self.read = read
-		self.prompt = prompt
-		self.matches = matches or (lambda expected, actual: _close(expected, actual))
-
-	@property
-	def id(self) -> str:
-		return self.methods[0]
-
 # Every set/get pair the Oscilloscope category declares. Values are deliberately on the
 # instrument's own quantization grid (1-2-5 for scales, whole divisions for offsets) so the
 # round-trip tolerance can stay tight.
@@ -119,7 +91,7 @@ CHECKS = [
 		values=(0.0, 2e-3),
 		apply=lambda osc, ch, value: osc.set_offset_time(value),
 		read=lambda osc, ch: osc.get_offset_time(),
-		matches=lambda expected, actual: _close(expected, actual, abs_tol=1e-5),
+		matches=lambda expected, actual: close_enough(expected, actual, abs_tol=1e-5),
 		prompt=lambda osc, ch, value: (
 			f"The horizontal POSITION (delay) should be {value*1e3:g} ms - the trigger marker at the "
 			f"top of the screen has moved left of centre, while the timebase per division is "
@@ -143,7 +115,7 @@ CHECKS = [
 		values=(0.0, 1.0),
 		apply=lambda osc, ch, value: osc.set_offset_volt(ch, value),
 		read=lambda osc, ch: osc.get_offset_volt(ch),
-		matches=lambda expected, actual: _close(expected, actual, abs_tol=0.05),
+		matches=lambda expected, actual: close_enough(expected, actual, abs_tol=0.05),
 		prompt=lambda osc, ch, value: (
 			f"Channel {ch}'s ground marker on the left edge should have moved to {value:g} V of "
 			f"offset, WITHOUT the volts/div changing. If the trace got taller or shorter instead, "
@@ -217,7 +189,7 @@ CHECKS = [
 		values=(0.0, 0.5),
 		apply=lambda osc, ch, value: osc.set_trigger_level(value),
 		read=lambda osc, ch: osc.get_trigger_level(),
-		matches=lambda expected, actual: _close(expected, actual, abs_tol=0.05),
+		matches=lambda expected, actual: close_enough(expected, actual, abs_tol=0.05),
 		prompt=lambda osc, ch, value: (
 			f"The trigger LEVEL marker on the right edge should sit at {value:g} V, and the level "
 			f"readout should agree. If the channel's offset marker moved instead, level and offset "
@@ -244,58 +216,16 @@ def _trigger_source_check(osc, ch):
 			f"cannot see - its getter parses back whatever its setter wrote."),
 	)
 
-def _run_check(check, osc, ch, recorder, confirm, moderated, recheck):
-	''' Drives one check and records the outcome for both halves of its set/get pair. '''
-
-	driver_cls = type(osc)
-
-	skip_if_unavailable(driver_cls, check.methods)
-
-	# Moderated runs are slow and human-attended. Re-confirming everything to reach the one method
-	# that changed is how a run gets abandoned halfway through, so already-confirmed methods are
-	# skipped by default. Staleness is honoured: a confirmed record whose code has since changed
-	# no longer counts as confirmed, so it gets asked about again.
-	if moderated and not recheck and already_confirmed(driver_cls, check.methods, model=recorder.model, idn=recorder.idn):
-		pytest.skip(f"already confirmed on {recorder.model or 'this model'} - pass --recheck to re-run")
-
-	last_value = None
-
-	for value in check.values:
-
-		try:
-			check.apply(osc, ch, value)
-			readback = check.read(osc, ch)
-		except Exception as e:
-			recorder.record(check.methods, VerificationStatus.FAILED, note=f"raised {type(e).__name__}: {e}")
-			raise
-
-		if not check.matches(value, readback):
-			recorder.record(check.methods, VerificationStatus.FAILED, note=f"set {value!r}, read back {readback!r}")
-			pytest.fail(f"{check.id}: set {value!r} but read back {readback!r}")
-
-		last_value = value
-
-	# The instrument is still sitting at the last value, which is what the operator is being asked
-	# to look at. Asking before restoring anything is the point.
-	answer = confirm(check.prompt(osc, ch, last_value))
-
-	if answer is False:
-		recorder.record(check.methods, VerificationStatus.FAILED, note="operator reported the instrument did not do this")
-		pytest.fail(f"{check.id}: operator reported the instrument did not do what was asked")
-
-	# `None` means unmoderated, or the operator skipped - never a silent upgrade to confirmed.
-	recorder.record(check.methods, VerificationStatus.CONFIRMED if answer else VerificationStatus.ROUNDTRIP)
-
 @pytest.mark.parametrize("check", CHECKS, ids=[c.id for c in CHECKS])
 def test_roundtrip(check, instrument, channel, recorder, confirm, moderated, request):
 	""" Set a parameter, read it back, and (in moderated mode) have a human confirm the instrument
 	physically did it. """
 
-	_run_check(check, instrument, channel, recorder, confirm, moderated, request.config.getoption("--recheck"))
+	run_check(check, instrument, channel, recorder, confirm, moderated, request.config.getoption("--recheck"))
 
 def test_trigger_source(instrument, channel, recorder, confirm, moderated, request):
 
-	_run_check(_trigger_source_check(instrument, channel), instrument, channel, recorder, confirm, moderated, request.config.getoption("--recheck"))
+	run_check(_trigger_source_check(instrument, channel), instrument, channel, recorder, confirm, moderated, request.config.getoption("--recheck"))
 
 # Action commands. There is nothing to read back, so these are unreachable in round-trip mode and
 # `confirmed` is the only status they can ever hold - the prompt is not a nicety here, it is the
@@ -374,7 +304,7 @@ def test_get_waveform(instrument, channel, recorder, confirm, moderated):
 	span = (max(times) - min(times)) if times is not None and len(times) > 1 else None
 	expected_span = instrument.state.ndiv_horiz * timebase if timebase else None
 
-	if span is not None and expected_span and not _close(expected_span, span, rel=0.25):
+	if span is not None and expected_span and not close_enough(expected_span, span, rel=0.25):
 		recorder.record("get_waveform", VerificationStatus.FAILED, note=f"x-axis spans {span:g} s, expected about {expected_span:g} s")
 		pytest.fail(f"get_waveform x-axis spans {span:g} s, expected about {expected_span:g} s - check the preamble parse")
 

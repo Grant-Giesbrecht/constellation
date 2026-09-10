@@ -36,8 +36,9 @@ after Parameter* display modes + detail window: 366 passed, 19 skipped, 3 xfaile
 after Parameter* v3 (units, LCD, toggle PV, input-eating fix): 386 passed, 19 skipped, 3 xfailed;
 after Parameter* v4 (vertical layout, widget-lifetime fixes): 391 passed, 19 skipped, 3 xfailed;
 after the persistent layout skeleton: 392 passed, 19 skipped, 3 xfailed;
-after window chrome (shortcuts, collapsible panels, splitters): **411 passed, 19 skipped, 3
-xfailed** - the 19 skips are the hardware tests, which need `--address`).
+after window chrome (shortcuts, collapsible panels, splitters): 411 passed, 19 skipped, 3 xfailed;
+after the Instrument menu and trace export: **435 passed, 19 skipped, 3 xfailed** - the 19 skips
+are the hardware tests, which need `--address`).
 
 ---
 
@@ -1026,6 +1027,40 @@ dummy examples still run clean.
       widgets (`ui.py`, `oscilloscope_gui.py`), and the networking examples all read
       `time_s`/`volt_V` today. Needs its own pass, not a fold-in.
 
+- [ ] **Unit handling belongs in `stardust.units`, not in Constellation — deferred.**
+      Full design discussion written up in **`stardust/docs/units_design.md`**; read that before
+      starting, it covers the proposed model, the open questions, and why `pint` was rejected.
+      Summary of the Constellation-side stake:
+
+      There are currently **three independent copies of SI-prefix logic** in this repo and its
+      dependency:
+      1. `Siglent_SDG2000X_dvr.py` — `_SI_PREFIXES` / `_BASE_UNITS`, for parsing `1.5MHZ` and
+         `50mV` out of `BSWV?` replies.
+      2. `ui.py:919` — `UNIT_PREFIXES`, driving the parameter widget's prefix selector and
+         `_maybe_autoscale()`.
+      3. `stardust.units.make_units()` — `mV`/`uV`/`km` enumerated as separate `UnitDefinition`s.
+
+      Consolidating them is most of the payoff. The four Constellation call sites a real
+      implementation would serve: driver reply parsing; `ui.py`'s prefix selector (delete
+      `UNIT_PREFIXES`, source it upstream); the `convert()` that the x/y-with-units contract above
+      needs; and unit validation at `add_param()` time.
+
+      Two Constellation-specific traps recorded there:
+      - **`add_param(unit=...)` sentinels.** 58 of 89 declarations use non-physical values
+        (`""`, `"1"`, `"bool"`, `"CONST"`), and `""` and `"1"` appear to mean the same thing. Any
+        validation must bless these, so this needs a sentinel-standardisation pass first — see
+        also P16.
+      - **`Vpp` is a measurement convention, not a unit.** `AWGChannelState.amplitude` is declared
+        `unit="Vpp"`, and the SDG reports `AMPVRMS` in the same reply. `stardust.units` currently
+        hard-codes `Vpp = Vrms·2√2`, which is the **sine-only** factor — and this category has
+        `waveform_type` sitting directly beside `amplitude`, with a hardware test that drives it
+        through NOISE and DC. Do not reuse that factor.
+
+      **Decision for now: deferred, keep the current local tables.** The AWG driver's table is
+      known to be a permissive cross product (`kS` and `M%` parse, which is wrong), but it
+      misparses nothing an instrument actually emits — no legitimate base unit starts with a
+      character that is also a prefix, so nothing is falsely split. Bigger fish first.
+
 ## Priority 12 — state persistence
 
 ### OPEN QUESTION — the "instrument data vs. instrument settings" split (needs a decision)
@@ -1586,6 +1621,27 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
         clamps it up to the children's minimums - which is exactly what squashed the plot on the
         first attempt.
       - `tests/test_gui_chrome.py`, 19 tests, headless.
+- [x] **Oscilloscope panel rearranged + Instrument menu + trace export** (2026-09-04).
+      - Acquisition moved into the sidebar with Trigger and Horizontal (buttons stacked, since
+        four side-by-side in a narrow column are unreadable). The waveform is now its own
+        `CollapsiblePanel` with a "Save Trace..." button, and folds **independently** of the
+        sidebar in both directions.
+      - **`SaveTraceDialog`** + a generic `Trace` record (label, x, y, units), so the machinery is
+        reusable by the VNA and spectrum-analyser panels rather than being scope-shaped. CSV goes
+        wide when traces share an x axis and long-form when they do not - a wide table for
+        mismatched axes silently implies a row correspondence that does not exist. Verified by
+        writing every available format from a real dummy capture.
+      - **Instrument menu**: Refresh/Apply State, Save/Load State..., Get Connection Info....
+        Actions go through `bridge.request()`, never a Driver call from the GUI thread. Load State
+        pops a dialog saying the state was NOT sent to the instrument (`restore_state()` only
+        refills the driver's own state object) - otherwise a user watches the hardware not move
+        and concludes it is broken. Several instruments get named submenus.
+      - **`ConnectionInfoDialog`** + `InstrumentBridge.describe()`. Static addressing lives on the
+        bridge because an `ObserverBridge` has no Driver; live status comes from a
+        `connection_summary` request. Broker/labmesh fields appear only for a networked relay - a
+        local `DirectSCPIRelay` also carries an `address`, and labelling that a labmesh relay id
+        would be a confident lie about a USB cable.
+      - `tests/test_gui_chrome.py` grew to 43 tests.
 
 ### Open
 
@@ -1607,6 +1663,12 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
       written as a script with the assertions replaced by eyeballing.
 - [ ] **Run it.** Nothing in the oscilloscope `verification.yaml` is anything but `unverified` —
       the machinery exists, no instrument has been in front of it yet.
+- [ ] **TOME export is offered but unavailable.** No TOME writer is published anywhere in the
+      toolchain - `stardust.io` has `dict_to_hdf` with no TOME equivalent, and the only reference
+      to `dict_to_tome` is an example inside nebula's docstrings. `_tome_writer()` in `ui.py`
+      probes a few plausible names and reports the format unavailable (shown greyed, with the
+      reason, rather than hidden) until one exists. Wire it up there; a test asserts it is still
+      missing, so it will fail loudly once TOME arrives.
 - [ ] **Roll `Parameter*` and `CollapsiblePanel` into `power_supply_gui.py`**, which still uses
       `Tracked*` and `QGroupBox`. Its measured
       voltage/current labels are a good test of whether a read-only variant is worth adding.

@@ -112,3 +112,106 @@ def _rank(status:VerificationStatus) -> int:
 
 	return {VerificationStatus.UNVERIFIED: 0, VerificationStatus.ROUNDTRIP: 1,
 		VerificationStatus.CONFIRMED: 2}.get(status, -1)
+
+# --- The check table's runner ------------------------------------------------------------------
+#
+# Category-agnostic, and here rather than in a test module because both category modules need it:
+# duplicating the runner per category is how two copies of "what counts as verified" drift apart,
+# and that logic is precisely what ends up written into verification.yaml and believed later.
+
+def close_enough(expected, actual, rel:float=0.02, abs_tol:float=0.0) -> bool:
+	''' Numeric comparison with room for the instrument's own quantization.
+
+	An instrument does not necessarily store what you send it: a scope's volts/div and time/div
+	snap to a 1-2-5 sequence, and offsets quantize to a fraction of a division. Values in a check
+	table should sit on that grid so the tolerance can stay tight - a loose tolerance here would
+	pass a driver that is off by a factor of two.
+	'''
+
+	if expected is None or actual is None:
+		return False
+
+	return abs(float(actual) - float(expected)) <= max(abs_tol, abs(float(expected)) * rel)
+
+class Check:
+	''' One set/get pair, the values to drive it with, and what a human should see.
+
+	`methods` lists both halves because neither can be verified without the other: the getter is
+	the only thing reading the setter back, and the setter is the only thing giving the getter
+	something to read. A result therefore applies to both.
+
+	`setup` optionally puts the instrument into a state where the parameter under test exists at
+	all - an AWG has no frequency to read while it is generating noise. It runs once, before the
+	values, and is skipped if the driver declares it can't do it.
+	'''
+
+	def __init__(self, methods, values, apply, read, prompt, matches=None, setup=None):
+
+		self.methods = tuple(methods)
+		self.values = tuple(values)
+		self.apply = apply
+		self.read = read
+		self.prompt = prompt
+		self.matches = matches or (lambda expected, actual: close_enough(expected, actual))
+		self.setup = setup
+
+	@property
+	def id(self) -> str:
+		return self.methods[0]
+
+def run_check(check, instrument, channel, recorder, confirm, moderated, recheck) -> None:
+	''' Drives one check and records the outcome for both halves of its set/get pair. '''
+
+	driver_cls = type(instrument)
+
+	skip_if_unavailable(driver_cls, check.methods)
+
+	# Moderated runs are slow and human-attended. Re-confirming everything to reach the one method
+	# that changed is how a run gets abandoned halfway through, so already-confirmed methods are
+	# skipped by default. Staleness is honoured: a confirmed record whose code has since changed
+	# no longer counts as confirmed, so it gets asked about again.
+	if moderated and not recheck and already_confirmed(driver_cls, check.methods, model=recorder.model, idn=recorder.idn):
+		pytest.skip(f"already confirmed on {recorder.model or 'this model'} - pass --recheck to re-run")
+
+	if check.setup is not None:
+		check.setup(instrument, channel)
+
+	last_value = None
+
+	for value in check.values:
+
+		try:
+			check.apply(instrument, channel, value)
+			readback = check.read(instrument, channel)
+		except Exception as e:
+			recorder.record(check.methods, VerificationStatus.FAILED, note=f"raised {type(e).__name__}: {e}")
+			raise
+
+		if not check.matches(value, readback):
+			recorder.record(check.methods, VerificationStatus.FAILED, note=f"set {value!r}, read back {readback!r}")
+			pytest.fail(f"{check.id}: set {value!r} but read back {readback!r}")
+
+		last_value = value
+
+	# The instrument is still sitting at the last value, which is what the operator is being asked
+	# to look at. Asking before restoring anything is the point.
+	answer = confirm(check.prompt(instrument, channel, last_value))
+
+	if answer is False:
+		recorder.record(check.methods, VerificationStatus.FAILED, note="operator reported the instrument did not do this")
+		pytest.fail(f"{check.id}: operator reported the instrument did not do what was asked")
+
+	# `None` means unmoderated, or the operator skipped - never a silent upgrade to confirmed.
+	recorder.record(check.methods, VerificationStatus.CONFIRMED if answer else VerificationStatus.ROUNDTRIP)
+
+def requires_category(instrument, category_cls) -> None:
+	''' Skips a check whose category the connected instrument does not belong to.
+
+	`pytest tests/hardware` collects every category module, but a run has exactly one instrument on
+	the bench. Without this, pointing the suite at a signal generator runs the oscilloscope module
+	against it and reports a dozen failures about an instrument that was never claimed to be a
+	scope. Each category module guards itself with an autouse fixture calling this.
+	'''
+
+	if not isinstance(instrument, category_cls):
+		pytest.skip(f"{type(instrument).__name__} is not a {category_cls.__name__} - this module verifies the {category_cls.__name__} category")

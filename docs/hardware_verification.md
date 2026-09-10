@@ -363,12 +363,23 @@ because the test computes it from the category and reports the difference.
 ## Adding a category to the hardware suite
 
 `tests/hardware/conftest.py` and `hardware_support.py` are category-agnostic - the instrument
-fixture, the confirmation prompt, the recorder and the skip rules know nothing about oscilloscopes.
-A new category needs one module, `tests/hardware/test_<category>_hw.py`, containing the checks
+fixture, the confirmation prompt, the recorder, the skip rules, and the `Check`/`run_check` pair
+that drives one set/get pair and records its outcome all know nothing about oscilloscopes. A new
+category needs one module, `tests/hardware/test_<category>_hw.py`, containing the checks
 themselves: which set/get pairs to drive, with what values, and **what a human should see on the
 front panel**. That last part is the only irreducible work, and it is the part worth the time -
 the rest is a table.
 
-`test_oscilloscope_hw.py` is the reference. Because drivers implement a category API, one module
-covers every driver in that category; per-driver differences are handled by the capability
-decorators, which the runner skips on automatically.
+`test_oscilloscope_hw.py` and `test_arb_waveform_generator_hw.py` are the references. Because
+drivers implement a category API, one module covers every driver in that category; per-driver
+differences are handled by the capability decorators, which the runner skips on automatically.
+
+Two things a new module owes the suite:
+
+- **A category guard.** A run collects every category module but has exactly one instrument on the
+  bench, so each module opens with an autouse fixture calling `requires_category(instrument, <Category>)`.
+  Without it, pointing the suite at a signal generator runs the oscilloscope module against it and
+  reports a screenful of failures about an instrument nobody claimed was a scope.
+- **A setup, where a parameter only exists in some states.** `Check(setup=...)` runs once before
+  the values. An AWG has no frequency or peak-to-peak amplitude to read back while it is generating
+  noise, so every AWG check that isn't about the waveform type starts from a known sine.

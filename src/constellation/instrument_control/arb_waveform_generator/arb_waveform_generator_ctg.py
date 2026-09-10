@@ -11,13 +11,13 @@ class AWGChannelState(InstrumentState):
 		self.add_param("frequency", unit="Hz")
 		self.add_param("amplitude", unit="Vpp")
 		self.add_param("offset", unit="V")
-		self.add_param("output_enable", unit="Hz")
+		self.add_param("output_enable", unit="bool")
 
 class ArbitraryWaveformGeneratorState(InstrumentState):
 	
 	__state_fields__ = ("first_channel", "num_channels", "channels")
 	
-	def __init__(self, log:plf.LogPile=None, first_channel:int=1, num_channels:int=2):
+	def __init__(self, first_channel:int, num_channels:int, log:plf.LogPile=None):
 		super().__init__(log=log)
 		
 		self.add_param("first_channel", unit="1", value=first_channel)
@@ -38,10 +38,10 @@ class ArbitraryWaveformGenerator(Driver):
 	WAVE_ARB = "wave-arb"
 	WAVE_DC = "wave-dc"
 	
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay, expected_idn:str="", dummy:bool=False, max_channels:int=2):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn:str="", first_channel:int=1, max_channels:int=2, dummy:bool=False, **kwargs):
 		
-		_state = ArbitraryWaveformGeneratorState(log, 1, max_channels)
-		super().__init__(address, log, relay, _state, expected_idn=expected_idn, dummy=dummy)
+		_state = ArbitraryWaveformGeneratorState(first_channel, max_channels, log=log)
+		super().__init__(address, log, relay, _state, expected_idn=expected_idn, dummy=dummy, first_channel_num=first_channel, **kwargs)
 		
 		self.max_channels = max_channels
 		
