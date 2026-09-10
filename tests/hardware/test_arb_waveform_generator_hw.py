@@ -3,7 +3,12 @@
 Run against an instrument on the bench:
 
 	pytest tests/hardware --driver=SiglentSDG2000X --address=TCPIP0::192.168.1.90::INSTR
-	pytest tests/hardware --driver=SiglentSDG2000X --address=... --confirm
+	pytest tests/hardware --driver=Keysight33500  --address=TCPIP0::192.168.1.91::INSTR --confirm
+
+One module covers every driver in the category, so the same checks run against a Siglent SDG and a
+Keysight Trueform. Where the two instruments genuinely differ - the Keysight keeps a separate duty
+cycle per waveform, the Siglent has one - that is the driver's problem to hide, and these checks
+are the thing that proves it did.
 
 The first form is round-trip mode: set a parameter, read it back, check they agree. Fast and
 unattended, and it earns a `roundtrip` record.
@@ -28,7 +33,8 @@ docs/hardware_verification.md.
 
 import pytest
 
-from constellation.instrument_control.arb_waveform_generator.arb_waveform_generator_ctg import ArbitraryWaveformGenerator
+from constellation.instrument_control.arb_waveform_generator.arb_waveform_generator_ctg import (
+	ArbitraryWaveformGenerator, AWGChannelState)
 
 from hardware_support import Check, close_enough, requires_category, run_check, skip_if_unavailable
 
@@ -68,10 +74,40 @@ def _baseline(awg, ch) -> None:
 		if awg.feature_is_available(name):
 			getattr(awg, name)(*args)
 
+def _baseline_square(awg, ch) -> None:
+	''' The baseline, but generating a square wave.
+
+	Duty cycle only exists on some waveforms, and the two instruments disagree about how: the
+	Siglent has one DUTY keyword regardless, while the Keysight keeps a separate duty cycle per
+	function and its driver picks the command from the tracked waveform. Both need a square in
+	force before the parameter means anything.
+	'''
+
+	_baseline(awg, ch)
+
+	if awg.feature_is_available("set_waveform"):
+		awg.set_waveform(ch, ArbitraryWaveformGenerator.WAVE_SQUARE)
+
 def _wave_name(wave:str) -> str:
 	''' The category constant as a word for a prompt ("wave-square" -> "SQUARE"). '''
 
 	return wave.replace("wave-", "").upper()
+
+def _load_matches(expected, actual) -> bool:
+	''' Output load is ohms OR the LOAD_HIGH_Z sentinel, so it needs both comparisons.
+
+	High impedance is a distinct mode rather than a large resistance, and the instruments do not
+	even agree on how they report it - the Siglent answers "HZ" and the Keysight answers 9.9E37.
+	Both drivers are supposed to normalize that to the sentinel, which is exactly what this is
+	checking.
+	'''
+
+	high_z = ArbitraryWaveformGenerator.LOAD_HIGH_Z
+
+	if expected == high_z or actual == high_z:
+		return expected == actual
+
+	return close_enough(expected, actual, rel=0.02)
 
 # Every set/get pair the ArbitraryWaveformGenerator category declares.
 CHECKS = [
@@ -147,6 +183,69 @@ CHECKS = [
 	),
 
 	Check(
+		methods=("set_phase", "get_phase"),
+		values=(0.0, 90.0),
+		apply=lambda awg, ch, value: awg.set_phase(ch, value),
+		read=lambda awg, ch: awg.get_phase(ch),
+		matches=lambda expected, actual: close_enough(expected, actual, rel=0.01, abs_tol=0.1),
+		setup=_baseline,
+		prompt=lambda awg, ch, value: (
+			f"Channel {ch}'s PHASE should read {value:g} degrees. Check the units as much as the "
+			f"number - phase can be set in degrees, radians or seconds, and a driver that leaves the "
+			f"instrument in the wrong angle unit reads its own value back correctly while meaning "
+			f"something completely different. On a two-channel instrument with both outputs on, the "
+			f"visible check is the shift between channels on a scope."),
+	),
+
+	Check(
+		methods=("set_duty_cycle", "get_duty_cycle"),
+		values=(50.0, 25.0),
+		apply=lambda awg, ch, value: awg.set_duty_cycle(ch, value),
+		read=lambda awg, ch: awg.get_duty_cycle(ch),
+		matches=lambda expected, actual: close_enough(expected, actual, rel=0.01, abs_tol=0.1),
+		# A square wave, not the usual sine: a sine has no duty cycle, and asking for one is an
+		# instrument error rather than a harmless no-op.
+		setup=_baseline_square,
+		prompt=lambda awg, ch, value: (
+			f"Channel {ch} should be generating a SQUARE wave with a {value:g}% duty cycle - on a "
+			f"scope, high for a quarter of each period. Check it is the duty cycle and not the pulse "
+			f"width that moved: they are different parameters that look identical on screen until "
+			f"you change the frequency, and only one of them tracks it."),
+	),
+
+	Check(
+		methods=("set_output_load", "get_output_load"),
+		# Starts at high impedance and ends at 50 ohm. The sentinel is first so a driver that
+		# quietly drops it fails here rather than at the end, where it would be mistaken for a
+		# numeric tolerance problem.
+		values=(ArbitraryWaveformGenerator.LOAD_HIGH_Z, 50.0),
+		apply=lambda awg, ch, value: awg.set_output_load(ch, value),
+		read=lambda awg, ch: awg.get_output_load(ch),
+		matches=_load_matches,
+		setup=_baseline,
+		prompt=lambda awg, ch, value: (
+			f"Channel {ch}'s output LOAD should read 50 ohm. This is not cosmetic: it is what the "
+			f"instrument assumes is connected downstream, so the displayed AMPLITUDE should have "
+			f"HALVED when the load changed from high-Z to 50 ohm, without anyone sending a new "
+			f"amplitude. If the amplitude did not move, the driver wrote something that is not the "
+			f"load."),
+	),
+
+	Check(
+		methods=("set_output_polarity", "get_output_polarity"),
+		values=(ArbitraryWaveformGenerator.POLARITY_INVERTED, ArbitraryWaveformGenerator.POLARITY_NORMAL),
+		apply=lambda awg, ch, value: awg.set_output_polarity(ch, value),
+		read=lambda awg, ch: awg.get_output_polarity(ch),
+		matches=lambda expected, actual: expected == actual,
+		setup=_baseline,
+		prompt=lambda awg, ch, value: (
+			f"Channel {ch}'s output POLARITY should read NORMAL, having just been inverted and put "
+			f"back. With a DC offset applied and a scope on the output, inverting flips the waveform "
+			f"about the offset, not about zero - if it flipped about zero, the driver is writing the "
+			f"offset's sign rather than the polarity."),
+	),
+
+	Check(
 		methods=("set_output_enable", "get_output_enable"),
 		# Ends on True so the operator is asked about the state that has a visible indicator. The
 		# baseline has already set a 1 Vpp sine, so what appears at the connector is benign and
@@ -190,22 +289,32 @@ def test_refresh_state_reads_every_parameter(instrument, channel, request):
 	if request.config.getoption("--dummy"):
 		pytest.skip("refresh_state re-reads the instrument; there is nothing to re-read in dummy mode")
 
-	_baseline(instrument, channel)
+	# A square wave, so that every tracked parameter has a value to come back with. On a sine
+	# there is no duty cycle to read, and the assertion below could not tell "refresh_state did
+	# not read it" apart from "there was nothing to read".
+	_baseline_square(instrument, channel)
 	instrument.set_frequency(channel, 2.5e3)
 	instrument.set_amplitude(channel, 1.5)
+	instrument.set_duty_cycle(channel, 25.0)
 
 	# Blank the tracked values so a stale reading cannot pass for a fresh one - without this the
 	# setters above have already put the right answers in state and refresh_state could do nothing
 	# at all and still look correct.
-	for name in ("waveform_type", "frequency", "amplitude", "offset"):
+	for name in AWGChannelState.__state_fields__:
 		instrument.state.set(["channels", name], None, indices=[channel])
 
 	instrument.refresh_state()
 
 	state = instrument.state.channels[channel]
 
-	assert state.waveform_type == BASELINE_WAVE, f"refresh_state left waveform_type as {state.waveform_type!r}"
+	assert state.waveform_type == ArbitraryWaveformGenerator.WAVE_SQUARE, f"refresh_state left waveform_type as {state.waveform_type!r}"
 	assert close_enough(2.5e3, state.frequency, rel=1e-4), f"refresh_state left frequency as {state.frequency!r}"
 	assert close_enough(1.5, state.amplitude, rel=0.02, abs_tol=0.01), f"refresh_state left amplitude as {state.amplitude!r}"
 	assert close_enough(BASELINE_OFFS, state.offset, abs_tol=0.01), f"refresh_state left offset as {state.offset!r}"
-	assert state.output_enable is not None, "refresh_state did not read output_enable"
+	assert close_enough(25.0, state.duty_cycle, rel=0.01, abs_tol=0.1), f"refresh_state left duty_cycle as {state.duty_cycle!r}"
+
+	# Phase, output enable, load and polarity are checked for presence rather than value: this
+	# test is about refresh_state reaching every field, and their values are what the roundtrip
+	# checks above already pin down.
+	for name in ("phase", "output_enable", "output_load", "output_polarity"):
+		assert getattr(state, name) is not None, f"refresh_state did not read {name}"

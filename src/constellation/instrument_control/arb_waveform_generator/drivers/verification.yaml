@@ -37,23 +37,77 @@
 # Do not write `unavailable`, `unimplemented`, or any `stale-*` status here - all are derived.
 
 SiglentSDG2000X:
-  set_waveform:
+  get_amplitude:
   - status: unverified
-  get_waveform:
-  - status: unverified
-  set_frequency:
+  get_duty_cycle:
   - status: unverified
   get_frequency:
   - status: unverified
+  get_offset:
+  - status: unverified
+  get_output_enable:
+  - status: unverified
+  get_output_load:
+  - status: unverified
+  get_output_polarity:
+  - status: unverified
+  get_phase:
+  - status: unverified
+  get_waveform:
+  - status: unverified
   set_amplitude:
   - status: unverified
-  get_amplitude:
+  set_duty_cycle:
+  - status: unverified
+  set_frequency:
   - status: unverified
   set_offset:
   - status: unverified
+  set_output_enable:
+  - status: unverified
+  set_output_load:
+  - status: unverified
+  set_output_polarity:
+  - status: unverified
+  set_phase:
+  - status: unverified
+  set_waveform:
+  - status: unverified
+
+Keysight33500:
+  get_amplitude:
+  - status: unverified
+  get_duty_cycle:
+  - status: unverified
+  get_frequency:
+  - status: unverified
   get_offset:
+  - status: unverified
+  get_output_enable:
+  - status: unverified
+  get_output_load:
+  - status: unverified
+  get_output_polarity:
+  - status: unverified
+  get_phase:
+  - status: unverified
+  get_waveform:
+  - status: unverified
+  set_amplitude:
+  - status: unverified
+  set_duty_cycle:
+  - status: unverified
+  set_frequency:
+  - status: unverified
+  set_offset:
   - status: unverified
   set_output_enable:
   - status: unverified
-  get_output_enable:
+  set_output_load:
+  - status: unverified
+  set_output_polarity:
+  - status: unverified
+  set_phase:
+  - status: unverified
+  set_waveform:
   - status: unverified

@@ -24,6 +24,16 @@ WAVE_CODES = {
 }
 WAVE_CODES_INV = {code: wave for wave, code in WAVE_CODES.items()}
 
+POLARITY_CODES = {
+	ArbitraryWaveformGenerator.POLARITY_NORMAL: "NOR",
+	ArbitraryWaveformGenerator.POLARITY_INVERTED: "INVT",
+}
+POLARITY_CODES_INV = {code: polarity for polarity, code in POLARITY_CODES.items()}
+
+# What this instrument calls high impedance, in both directions. It is a distinct mode rather than
+# a resistance, so it does not go through the numeric parser at all.
+LOAD_HIGH_Z_CODE = "HZ"
+
 # Unit suffixes the instrument appends to numeric values in a BSWV reply, and the SI prefixes that
 # may precede them. Case matters and is the whole reason the prefix is matched separately: "MHZ"
 # is mega and "mV" is milli, and stripping a fixed number of trailing characters (as this driver
@@ -109,6 +119,8 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 			"frequency": parse_scpi_number(fields.get("FRQ")),
 			"amplitude": parse_scpi_number(fields.get("AMP")),
 			"offset": parse_scpi_number(fields.get("OFST")),
+			"phase": parse_scpi_number(fields.get("PHSE")),
+			"duty_cycle": parse_scpi_number(fields.get("DUTY")),
 		}
 	
 	@staticmethod
@@ -162,36 +174,100 @@ class SiglentSDG2000X(ArbitraryWaveformGenerator):
 		return self._read_wave_parameters(channel)["offset"]
 	
 	@superreturn
+	def set_phase(self, channel:int, phase_deg:float):
+		self.write(f"C{channel}:BSWV PHSE,{phase_deg}")
+	
+	@superreturn
+	def get_phase(self, channel:int):
+		return self._read_wave_parameters(channel)["phase"]
+	
+	@superreturn
+	def set_duty_cycle(self, channel:int, duty_pct:float):
+		self.write(f"C{channel}:BSWV DUTY,{duty_pct}")
+	
+	@superreturn
+	def get_duty_cycle(self, channel:int):
+		return self._read_wave_parameters(channel)["duty_cycle"]
+	
+	def _read_output_parameters(self, channel:int) -> dict:
+		''' Queries a channel's output block and returns it as category-vocabulary values.
+		
+		The counterpart to _read_wave_parameters(): output enable, load and polarity all come back
+		from one `C<n>:OUTP?` and are all set through `C<n>:OUTP`, so they are read together for
+		the same reason the basic-wave parameters are.
+		'''
+		
+		response_str = self.query(f"C{channel}:OUTP?")
+		# Example output: 'C1:OUTP OFF,LOAD,HZ,PLRT,NOR\n'
+		
+		if not response_str:
+			return {"output_enable": None, "output_load": None, "output_polarity": None}
+		
+		# The enable state is the bare first value after the 'C1:OUTP ' header; everything after
+		# it is keyword,value pairs.
+		_, _, body = response_str.strip().partition(" ")
+		tokens = [tok.strip() for tok in body.split(",")]
+		
+		fields = {tokens[i].upper(): tokens[i + 1] for i in range(1, len(tokens) - 1, 2) if tokens[i]}
+		
+		load = fields.get("LOAD")
+		if load is not None and load.upper() == LOAD_HIGH_Z_CODE:
+			load = ArbitraryWaveformGenerator.LOAD_HIGH_Z
+		else:
+			load = parse_scpi_number(load)
+		
+		return {
+			"output_enable": str_to_bool(tokens[0]) if tokens[0] else None,
+			"output_load": load,
+			"output_polarity": POLARITY_CODES_INV.get((fields.get("PLRT") or "").upper()),
+		}
+	
+	@superreturn
 	def set_output_enable(self, channel:int, enable:bool):
 		self.write(f"C{channel}:OUTP {bool_to_ONOFF(enable)}")
 	
 	@superreturn
 	def get_output_enable(self, channel:int):
-		response_str = self.query(f"C{channel}:OUTP?")
-		# Example output: 'C1:OUTP OFF,LOAD,HZ,PLRT,NOR\n'
+		return self._read_output_parameters(channel)["output_enable"]
+	
+	@superreturn
+	def set_output_load(self, channel:int, load_ohm):
 		
-		if not response_str:
-			return None
+		code = LOAD_HIGH_Z_CODE if load_ohm == ArbitraryWaveformGenerator.LOAD_HIGH_Z else load_ohm
 		
-		# The state is the first value after the 'C1:OUTP ' header, before the LOAD/PLRT pairs.
-		_, _, body = response_str.strip().partition(" ")
+		self.write(f"C{channel}:OUTP LOAD,{code}")
+	
+	@superreturn
+	def get_output_load(self, channel:int):
+		return self._read_output_parameters(channel)["output_load"]
+	
+	@superreturn
+	def set_output_polarity(self, channel:int, polarity:str):
 		
-		return str_to_bool(body.split(",")[0].strip())
+		code = POLARITY_CODES.get(polarity)
+		if code is None:
+			self.error(f"Failed to recognize polarity >{polarity}<.")
+			return
+		
+		self.write(f"C{channel}:OUTP PLRT,{code}")
+	
+	@superreturn
+	def get_output_polarity(self, channel:int):
+		return self._read_output_parameters(channel)["output_polarity"]
 	
 	def refresh_state(self):
 		''' Overridden because one BSWV? query returns every basic-wave parameter at once - four
 		category getters would be four round trips to read what the instrument reports in one.
 		
 		The values still go through modify_state(), the same choke point the category getters use;
-		the only thing skipped is the redundant querying. Output enable is a separate command on
-		this instrument, so it goes through its own getter.
+		the only thing skipped is the redundant querying. Two queries are needed rather than one:
+		the basic-wave block and the output block are separate commands on this instrument.
 		'''
 		
 		for ch_no in self.state.channels.get_range():
 			
 			params = self._read_wave_parameters(ch_no)
+			params.update(self._read_output_parameters(ch_no))
 			
-			for name in ("waveform_type", "frequency", "amplitude", "offset"):
-				self.modify_state(None, ["channels", name], params[name], indices=[ch_no])
-			
-			self.get_output_enable(ch_no)
+			for name, value in params.items():
+				self.modify_state(None, ["channels", name], value, indices=[ch_no])
