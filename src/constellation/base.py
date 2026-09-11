@@ -2014,6 +2014,28 @@ class Driver(ABC):
 		# Apply to state
 		return self.load_state_dict(in_dict)
 	
+	def restore_and_apply_state(self, filename:str) -> bool:
+		''' Loads a state from file and sends it to the instrument, as one operation.
+		
+		One method rather than restore_state() followed by apply_state() on purpose: anything that
+		refreshes the state in between - a GUI bridge re-reads the instrument after every command -
+		replaces the loaded values with the instrument's current ones, and apply_state() then sends
+		the instrument its own settings back.
+		
+		Args:
+			filename (str): State file to read. Should be HDF format.
+		
+		Returns:
+			bool: True if the state was loaded and applied.
+		'''
+		
+		if not self.restore_state(filename):
+			return False
+		
+		self.apply_state()
+		
+		return True
+	
 	@abstractmethod
 	def refresh_state(self):
 		"""

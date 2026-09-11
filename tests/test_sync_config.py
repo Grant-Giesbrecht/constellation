@@ -205,7 +205,14 @@ def test_auto_send_pushes_on_its_timer(qt_app, log):
 	_drain(bridge)
 
 	widget.set_auto_send(True, 0.05)
-	QTest.qWait(200)
+	# Wait for the sends rather than a fixed time. A fixed qWait() ends early if anything queued by
+	# an earlier test raises during it - a matplotlib redraw aimed at a canvas Qt has since deleted,
+	# in practice - and then the timer has fired once instead of the several times expected. A
+	# loop of processEvents() carries on past such an interruption. (PyQt6's QTest has no qWaitFor.)
+	deadline = time.time() + 2.0
+	while bridge._queue.qsize() < 2 and time.time() < deadline:
+		QApplication.processEvents()
+		time.sleep(0.01)
 	widget.set_auto_send(False)
 
 	sent = _drain(bridge)

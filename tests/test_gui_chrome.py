@@ -589,7 +589,7 @@ def test_the_instrument_menu_populates_when_an_instrument_is_added(qt_app, log):
 	names = [a.text() for a in window.instrument_menu.actions() if a.text()]
 
 	assert names == ["Refresh State", "Apply State", "Save State...", "Load State...",
-		"Get Connection Info..."]
+		"Load State to GUI Only...", "Get Connection Info..."]
 
 def test_several_instruments_get_named_submenus(qt_app, log):
 	""" "Refresh state" is ambiguous the moment a second instrument is on screen. """

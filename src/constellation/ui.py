@@ -60,6 +60,11 @@ class InstrumentBridge(QObject):
 	# Emitted when online/offline status changes.
 	connection_changed = pyqtSignal(bool)
 
+	# Emitted with a describe_connection()-shaped dict whenever the bridge learns something about
+	# how its instrument is reached - after every poll and command for an OwningBridge, on every
+	# broadcast for an ObserverBridge. Drives the status-bar ConnectionIndicator.
+	connection_state = pyqtSignal(object)
+
 	# Whether this bridge reads the instrument on a schedule it controls. An ObserverBridge does not
 	# - its updates arrive whenever the owning process broadcasts - so it has nothing to configure.
 	supports_polling = False
@@ -272,6 +277,13 @@ class OwningBridge(InstrumentBridge):
 		except Exception as e:
 			self.connection_changed.emit(False)
 
+		# Read here, on the worker thread, after the poll has updated the relay's flags - never
+		# from the GUI thread, which would race this one over the driver.
+		try:
+			self.connection_state.emit(describe_connection(self.driver))
+		except Exception:
+			pass
+
 class ObserverBridge(InstrumentBridge):
 	''' Owns no Driver at all - watches a DriverStateBroadcaster's labmesh feed for `relay_id`, so
 	a GUI can show an instrument that some other process (an automation script, or another GUI)
@@ -361,6 +373,7 @@ class ObserverBridge(InstrumentBridge):
 				return
 			self.connection_changed.emit(True)
 			self.state_changed.emit(from_serial_dict(state))
+			self.connection_state.emit(_observer_connection(True))
 
 		client.on_state(_on_state)
 
@@ -368,6 +381,7 @@ class ObserverBridge(InstrumentBridge):
 			self._relay_client = await client.get_relay_agent(self.relay_id)
 		except Exception:
 			self.connection_changed.emit(False)
+			self.connection_state.emit(_observer_connection(False))
 
 		while True:
 			await asyncio.sleep(1)
@@ -1728,6 +1742,10 @@ class _ParameterControlBase(_TrackedControlBase):
 		# set_frequency, and channel 2's answer must not release channel 1.
 		self._in_flight = []
 
+		# True while the setpoint holds a value loaded into the GUI but not sent (Load State to GUI
+		# Only). Held against following the instrument, or the next poll would erase it.
+		self._staged = False
+
 		# True while the user has typed something they haven't committed. See _display_setpoint:
 		# a background poll must never overwrite half-typed input.
 		self._dirty = False
@@ -2124,6 +2142,7 @@ class _ParameterControlBase(_TrackedControlBase):
 		self._send_state = "unsent"
 		self.send_error = ""
 		self._awaiting_readback = True
+		self._staged = False
 		self._in_flight.append(tuple(self.set_args(self._setpoint)))
 		self._refresh_display()
 		self.bridge.request(self.set_method, *self.set_args(self._setpoint))
@@ -2217,14 +2236,46 @@ class _ParameterControlBase(_TrackedControlBase):
 		'''
 
 		return (self.follow_instrument and not self._dirty and not self._in_flight
-			and value is not None and self._setpoint is not None
+			and not self._staged and value is not None and self._setpoint is not None
 			and not self._matches(value, self._setpoint))
+
+	@property
+	def staged(self) -> bool:
+		''' Whether the setpoint is a loaded value that has not been sent yet. '''
+		return self._staged
+
+	def stage_from_state(self, state) -> bool:
+		''' Puts this control's value from `state` into the setpoint WITHOUT sending it.
+
+		The value shows in the SP field with the Setpoint lamp at "not sent yet", and stays there -
+		polling and following the instrument leave it alone - until it is sent (SP button, an
+		edit, auto-send) or replaced. Returns False if `state` has no value for this control.
+		'''
+
+		try:
+			value = self.get(state)
+		except Exception:
+			return False
+
+		if value is None:
+			return False
+
+		self._dirty = False
+		self._setpoint = value
+		self._user_setpoint = value
+		self._staged = True
+		self._send_state = "unsent"
+		self.send_error = ""
+		self._refresh_display()
+
+		return True
 
 	def _user_changed(self, new_value):
 		self._send_state = "unsent"
 		self.send_error = ""
 		self._awaiting_readback = True
 		self._dirty = False
+		self._staged = False
 		self._user_setpoint = new_value
 		self._in_flight.append(tuple(self.set_args(new_value)))
 		super()._user_changed(new_value)
@@ -2985,6 +3036,258 @@ class ConnectionInfoDialog(QDialog):
 # the caller needing to know which widget class handles that driver's category.
 # ============================================================================
 
+def describe_connection(driver) -> dict:
+	''' How `driver` reaches its instrument, as a snapshot for the status-bar indicator.
+
+	Plain attribute reads - no instrument I/O - so it is cheap enough to take after every poll.
+	Keys:
+	  topology           "local", "network" (a RemoteTextCommandRelayClient), or "dummy".
+	  interface          bus to the instrument ("gpib", "usb", "lan", "serial", "other"), or None.
+	  link_online        network only: can this process reach the relay process? None = unknown.
+	  instrument_online  is the instrument answering? For a local relay, the driver's own view.
+	  error_kind         the relay's last RelayErrorKind, as its string value.
+	  verified           whether *IDN? matched the expected instrument, or None if never checked.
+	  diagnosis          connection_summary()'s one-line explanation.
+	'''
+
+	relay = getattr(driver, "relay", None)
+
+	state = {"topology": "local", "interface": None, "link_online": None, "instrument_online": None,
+		"error_kind": None, "verified": getattr(driver, "verified_hardware", None), "diagnosis": ""}
+
+	if getattr(driver, "dummy", False):
+		state.update(topology="dummy", diagnosis="Simulated (dummy) - no instrument attached.")
+		return state
+
+	try:
+		state["diagnosis"] = driver.connection_summary().get("diagnosis", "")
+	except Exception:
+		pass
+
+	if relay is not None:
+		try:
+			state["interface"] = relay.interface()
+		except Exception:
+			pass
+		kind = getattr(relay, "last_error_kind", None)
+		state["error_kind"] = getattr(kind, "value", kind)
+
+	if relay is not None and hasattr(relay, "broker_address"):
+		state["topology"] = "network"
+		state["link_online"] = getattr(relay, "link_online", None)
+		state["instrument_online"] = getattr(relay, "instrument_online", None)
+	else:
+		state["instrument_online"] = bool(getattr(driver, "online", False))
+
+	return state
+
+def _observer_connection(receiving:bool) -> dict:
+	''' The same shape for an ObserverBridge, which has no Driver: all it knows is whether state
+	broadcasts are arriving. The bench side is not in the broadcast, so it stays unknown. '''
+
+	return {"topology": "observer", "interface": None, "link_online": bool(receiving),
+		"instrument_online": None, "error_kind": None, "verified": None,
+		"diagnosis": "Receiving state broadcasts from the process that owns this instrument."
+			if receiving else "Cannot reach the process that owns this instrument."}
+
+# Buses with their own link artwork; anything else is drawn with the "other" icons.
+_ICON_BUSES = ("lan", "usb", "gpib")
+
+_BUS_NAMES = {"lan": "LAN", "usb": "USB", "gpib": "GPIB", "serial": "Serial", "other": "other"}
+
+class ConnectionIndicator(QWidget):
+	''' One instrument's connection, drawn as a chain of icons in the status bar:
+
+		local:     client -- bus -- instrument
+		networked: client -- net -- relay -- bus -- instrument
+
+	Artwork is assets/{client,relay,instr}_{online,offline}.png for the nodes and
+	{net,lan,usb,gpib,other}_{link,break}.png for the connections. Every icon is scaled by ONE
+	factor (node height / NODE_ART_HEIGHT), so the set keeps the proportions it was drawn with - a
+	link is thinner than a node because the artwork says so.
+
+	There is no artwork for "unknown", so the last-known icon is drawn faded. That covers: nothing
+	heard yet, the bench side of a broken network link, a dummy instrument, and a state older than
+	the stale window. The stale case matters most - relay flags only change when a call runs, so with
+	polling off a green chain would otherwise mean "nothing has been tried lately".
+	'''
+
+	clicked = pyqtSignal()
+
+	NODE_ART_HEIGHT = 250     # px - height of the node artwork every icon is scaled against
+	FADED_OPACITY = 0.35
+
+	def __init__(self, bridge, title:str, height:int=24, stale_after_s:float=5.0, parent=None):
+		super().__init__(parent)
+
+		self.bridge = bridge
+		self.title = title
+		self.icon_height = height
+		self.stale_after_s = stale_after_s
+
+		self._state = None
+		self._received = 0.0
+		self._shown = None
+		self._pixmaps = {}
+
+		self._layout = QHBoxLayout()
+		self._layout.setContentsMargins(4, 0, 4, 0)
+		self._layout.setSpacing(1)
+		self.setLayout(self._layout)
+		self.setCursor(QtGui.QCursor(Qt.CursorShape.PointingHandCursor))
+
+		bridge.connection_state.connect(self.set_connection_state)
+
+		self._timer = QTimer(self)
+		self._timer.timeout.connect(self._refresh)
+		self._timer.start(1000)
+
+		self._refresh()
+
+	# --- state --------------------------------------------------------------------------------
+
+	def set_connection_state(self, state:dict):
+		self._state = dict(state) if state else None
+		self._received = time.time()
+		self._refresh()
+
+	def stale_window_s(self) -> float:
+		''' How long a report counts as current. With polling on, long enough to span a couple of
+		polls, so a slow poll interval does not fade the chain between polls. '''
+
+		interval = getattr(self.bridge, "poll_interval_s", None)
+		if getattr(self.bridge, "poll_enabled", False) and interval:
+			return max(self.stale_after_s, 2.5 * float(interval))
+
+		return self.stale_after_s
+
+	def is_stale(self) -> bool:
+		return self._state is None or (time.time() - self._received) > self.stale_window_s()
+
+	def icon_plan(self) -> list:
+		''' [(icon name, faded), ...] left to right - the whole decision, separate from drawing. '''
+
+		plan = [("client_online", False)]
+		s = self._state
+
+		if s is None or s.get("topology") == "dummy":
+			return plan + [("other_link", True), ("instr_online", True)]
+
+		stale = self.is_stale()
+		interface = s.get("interface")
+		bus = interface if interface in _ICON_BUSES else "other"
+
+		if s.get("topology") in ("network", "observer"):
+			link = s.get("link_online")
+			plan.append(("net_break" if link is False else "net_link", link is None or stale))
+			plan.append(("relay_offline" if link is False else "relay_online", link is None or stale))
+			# Past a broken link, the bench side cannot be seen from here at all.
+			instrument = s.get("instrument_online") if link else None
+		else:
+			instrument = s.get("instrument_online")
+
+		unknown = instrument is None or stale
+		plan.append((f"{bus}_break" if instrument is False else f"{bus}_link", unknown))
+		plan.append(("instr_offline" if instrument is False else "instr_online", unknown))
+
+		return plan
+
+	def tooltip_text(self) -> str:
+
+		s = self._state
+		lines = [self.title]
+
+		if s is None:
+			return "\n".join(lines + ["No connection information yet."])
+
+		topology = s.get("topology")
+		lines.append({"local": "Connected directly from this machine.",
+			"network": "Connected through a relay machine over the network.",
+			"observer": "Observing - another process owns this instrument.",
+			"dummy": "Simulated (dummy) - no instrument attached."}.get(topology, ""))
+
+		def word(value):
+			return "unknown" if value is None else ("online" if value else "offline")
+
+		if topology in ("network", "observer"):
+			lines.append(f"Link to relay: {word(s.get('link_online'))}")
+		if topology != "dummy":
+			lines.append(f"Instrument: {word(s.get('instrument_online'))}")
+			if s.get("interface"):
+				lines.append(f"Bus: {_BUS_NAMES.get(s['interface'], s['interface'])}")
+			if s.get("verified") is False:
+				lines.append("Warning: *IDN? did not match the expected instrument.")
+			if s.get("diagnosis"):
+				lines.append(s["diagnosis"])
+
+		if self.is_stale() and topology != "dummy":
+			lines.append(f"Not checked in the last {self.stale_window_s():g} s - shown faded.")
+
+		lines.append("Click for connection details.")
+
+		return "\n".join(line for line in lines if line)
+
+	# --- drawing ------------------------------------------------------------------------------
+
+	def _refresh(self):
+
+		plan = self.icon_plan()
+
+		if plan != self._shown:
+			while self._layout.count():
+				item = self._layout.takeAt(0)
+				if item.widget() is not None:
+					item.widget().deleteLater()
+			for name, faded in plan:
+				label = QLabel()
+				label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+				pixmap = self._pixmap(name, faded)
+				if pixmap is None:
+					label.setText("?")   # artwork missing - visibly, not an invisible gap
+				else:
+					label.setPixmap(pixmap)
+				self._layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
+			self._shown = plan
+
+		self.setToolTip(self.tooltip_text())
+
+	def _pixmap(self, name:str, faded:bool):
+
+		key = (name, faded)
+		if key in self._pixmaps:
+			return self._pixmaps[key]
+
+		source = QtGui.QPixmap(os.path.join(ASSETS_DIR, f"{name}.png"))
+		if source.isNull():
+			self._pixmaps[key] = None
+			return None
+
+		# One scale factor for every icon, rendered at device resolution so it stays crisp on HiDPI.
+		scale = self.icon_height / self.NODE_ART_HEIGHT
+		dpr = self.devicePixelRatioF() or 1.0
+		w = max(1, round(source.width() * scale * dpr))
+		h = max(1, round(source.height() * scale * dpr))
+		pixmap = source.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+		if faded:
+			faint = QtGui.QPixmap(pixmap.size())
+			faint.fill(Qt.GlobalColor.transparent)
+			painter = QtGui.QPainter(faint)
+			painter.setOpacity(self.FADED_OPACITY)
+			painter.drawPixmap(0, 0, pixmap)
+			painter.end()
+			pixmap = faint
+
+		pixmap.setDevicePixelRatio(dpr)
+		self._pixmaps[key] = pixmap
+
+		return pixmap
+
+	def mousePressEvent(self, event):
+		if event.button() == Qt.MouseButton.LeftButton:
+			self.clicked.emit()
+		super().mousePressEvent(event)
+
 class SyncConfigDialog(QDialog):
 	''' Per instrument: whether its state is polled, and whether the panel's values are re-sent.
 
@@ -3180,6 +3483,7 @@ class ConstellationWindow(QMainWindow):
 			self.add_basic_menu_bar()
 
 		self._sync_dialog = None
+		self.connection_indicators = []
 		self._build_status_bar()
 
 	def _build_status_bar(self):
@@ -3260,6 +3564,19 @@ class ConstellationWindow(QMainWindow):
 		s.setValue(f"{group}/auto_send_interval_s", float(widget.auto_send_interval_s))
 		s.sync()
 
+	def _add_connection_indicator(self, widget, bridge, title:str):
+		''' One connection chain per instrument, left to right in the status bar in the order the
+		instruments were added. Clicking one opens that instrument's connection details. '''
+
+		indicator = ConnectionIndicator(bridge, title)
+		indicator.clicked.connect(lambda: self._show_connection_info(bridge, title))
+
+		self.status_bar.addWidget(indicator)
+		self.connection_indicators.append(indicator)
+		widget.connection_indicator = indicator
+
+		return indicator
+
 	def show_sync_config(self):
 		''' Opens (or raises) the polling/auto-send settings window. Rebuilt each time it is opened,
 		so it always lists the instruments currently docked. '''
@@ -3310,6 +3627,9 @@ class ConstellationWindow(QMainWindow):
 		# Before the bridge starts, so a saved "don't poll" is honoured from the first moment
 		# rather than after one unwanted poll.
 		self.restore_sync_settings(widget)
+
+		# Also before the bridge starts, so the indicator hears the very first report.
+		self._add_connection_indicator(widget, bridge, panel_title)
 
 		bridge.start()
 		self._bridges.append(bridge)
@@ -3464,6 +3784,7 @@ class ConstellationWindow(QMainWindow):
 
 		add("Save State...", lambda: self._save_instrument_state(bridge, title))
 		add("Load State...", lambda: self._load_instrument_state(bridge, title))
+		add("Load State to GUI Only...", lambda: self._load_state_to_gui(widget, title))
 
 		menu.addSeparator()
 
@@ -3488,15 +3809,30 @@ class ConstellationWindow(QMainWindow):
 		if not path:
 			return
 
-		bridge.request("restore_state", path)
-		self.log.info(f"Loading instrument state from >{path}<. Use Apply State to send it to the instrument.")
+		# One request, not restore_state then apply_state: the bridge re-reads the instrument after
+		# every command, which would replace the loaded values before they were applied.
+		bridge.request("restore_and_apply_state", path)
+		self.log.info(f"Loading instrument state from >{path}< and sending it to the instrument.")
 
-		# restore_state() only refills the Driver's own state object - it deliberately does not
-		# touch the instrument. Saying so here beats a user wondering why the hardware did not
-		# move.
-		QMessageBox.information(self, "State loaded",
-			"The state was loaded into the driver.\n\nIt has NOT been sent to the instrument - "
-			"use Instrument > Apply State to do that.")
+	def _load_state_to_gui(self, widget, title:str):
+		''' Loads a state file into the panel's setpoints without sending anything to the
+		instrument. The file is read here rather than through the bridge: reading a file is not
+		instrument I/O, and nothing on the bridge's side changes. '''
+
+		path, _ = QFileDialog.getOpenFileName(self, f"Load state to GUI only - {title}", "",
+			"Instrument state (*.hdf *.state.hdf)")
+
+		if not path:
+			return
+
+		try:
+			state = from_serial_dict(hdf_to_dict(path))
+		except Exception as e:
+			QMessageBox.warning(self, "Could not load state", f"{path}\n\n{e}")
+			return
+
+		loaded = widget.stage_setpoints(state)
+		self.log.info(f"Loaded {loaded} setpoint(s) from >{path}< into the GUI. Nothing was sent to the instrument.")
 
 	def _show_connection_info(self, bridge, title:str):
 
@@ -3627,6 +3963,12 @@ class InstrumentWidget(QWidget):
 	def parameter_controls(self) -> list:
 		''' Every Parameter* control on this panel, wherever it is nested. '''
 		return self.findChildren(_ParameterControlBase)
+
+	def stage_setpoints(self, state) -> int:
+		''' Loads every control's value from `state` into its setpoint without sending anything.
+		Controls `state` has no value for are left alone. Returns how many were loaded. '''
+
+		return sum(1 for control in self.parameter_controls() if control.stage_from_state(state))
 
 	def push_setpoints(self) -> int:
 		''' Re-sends every value the user has set on this panel. Controls that have only ever

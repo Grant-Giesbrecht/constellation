@@ -91,6 +91,35 @@ def classify_relay_exception(e:Exception) -> RelayErrorKind:
 
 	return RelayErrorKind.UNKNOWN
 
+# VISA resource prefixes, by the physical bus they name. Order matters only in that no prefix here
+# is a prefix of another.
+_INTERFACE_PREFIXES = (
+	("GPIB", "gpib"),
+	("USB", "usb"),
+	("TCPIP", "lan"),
+	("VICP", "lan"),
+	("ASRL", "serial"),
+)
+
+def interface_from_resource(address) -> str:
+	''' The physical bus a VISA resource string names: "gpib", "usb", "lan", "serial", or "other".
+
+	Read from the resource's prefix ("GPIB0::5::INSTR", "USB0::...", "TCPIP0::192.168...", "ASRL3::"),
+	which is how VISA itself tells them apart. Anything unrecognised - including no address at all -
+	is "other" rather than a guess.
+	'''
+
+	if not address:
+		return "other"
+
+	head = str(address).strip().upper()
+
+	for prefix, interface in _INTERFACE_PREFIXES:
+		if head.startswith(prefix):
+			return interface
+
+	return "other"
+
 class CommandRelay:
 	''' Class used to relay commands from a "driver" (which defines the content of the
 	instructions in commands) to the physical instrument. Using a CommandRelay object
@@ -122,6 +151,12 @@ class CommandRelay:
 		# RemoteTextCommandRelayClient fills both in.
 		self.link_online = True
 		self.instrument_online = None
+
+	def interface(self):
+		''' The physical bus between the relay and the instrument ("gpib", "usb", "lan", "serial",
+		"other"), or None if this relay cannot know. Derived from the VISA resource string. '''
+
+		return interface_from_resource(getattr(self, "address", None))
 		
 		# The most recent command sent and the most recent reply received, kept purely so a GUI
 		# can show a user the actual SCPI behind a control (see ParameterDetailDialog in ui.py).
@@ -247,6 +282,11 @@ class VICPDirectSCPIRelay(CommandRelay):
 		super().__init__()
 		
 		self.inst = None
+	
+	def interface(self):
+		# VICP runs over Ethernet, and its address is a bare host name or IP rather than a VISA
+		# resource string, so there is no prefix to read.
+		return "lan"
 	
 	def connect(self) -> bool:
 		
@@ -590,8 +630,32 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		self.director = None
 		self.relay_client = None
 
+		# The bus between the BENCH machine and the instrument, as the listener reports it. This
+		# relay's own `address` is a labmesh relay id, so it says nothing about the bus - only the
+		# far side knows. None until the listener has been asked (see _probe_status).
+		self.remote_interface = None
+
 		self._loop = None
 		self._loop_thread = None
+
+	def interface(self):
+		return self.remote_interface
+
+	def _probe_status(self):
+		''' Asks the listener, once, for its view of the bench side - the bus and whether the
+		instrument is reachable - so a client knows both before anything has failed. Best effort:
+		a failed probe does not fail the connection, and a listener too old to report the bus
+		simply leaves it unknown. '''
+
+		try:
+			ok, payload = self._run(self.relay_client.call("status", {}), timeout_s=self.timeout_s)
+		except Exception as e:
+			self.log.lowdebug(f"RemoteTextCommandRelayClient could not probe relay >{self.address}< after connecting. ({e})")
+			return
+
+		if ok and isinstance(payload, dict):
+			self.instrument_online = payload.get("instrument_online")
+			self.remote_interface = payload.get("interface", self.remote_interface)
 
 	def _ensure_loop(self):
 		''' Starts a background thread running a dedicated asyncio event loop the first time
@@ -655,6 +719,9 @@ class RemoteTextCommandRelayClient(CommandRelay):
 			self.note_failure(e)
 			self.log.error(f"RemoteTextCommandRelayClient failed to connect to relay_id >{self.address}<. ({e})")
 			return False
+
+		self.link_online = True
+		self._probe_status()
 
 		return True
 
@@ -734,6 +801,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 			return self.last_error_kind
 		
 		self.instrument_online = payload.get("instrument_online")
+		self.remote_interface = payload.get("interface", self.remote_interface)
 		
 		try:
 			self.last_error_kind = RelayErrorKind(payload.get("last_error_kind", RelayErrorKind.UNKNOWN.value))
@@ -996,13 +1064,18 @@ class RemoteTextCommandRelayListener:
 		bench-side; if this call also fails, the link is what's broken. That is the whole
 		mechanism, and it needs no change to any existing return format.
 
+		`interface` is the bus between this machine and the instrument ("gpib", "usb", "lan", ...),
+		which a client cannot work out for itself: its address is a labmesh relay id. An added key
+		rather than a changed format, so an older client simply ignores it.
+
 		Returns:
-			list: [True, {"instrument_online": bool|None, "last_error_kind": str}]
+			list: [True, {"instrument_online": bool|None, "last_error_kind": str, "interface": str}]
 		'''
 
 		return [True, {
 			"instrument_online": self.instrument_online,
 			"last_error_kind": self.local_relay.last_error_kind.value,
+			"interface": self.local_relay.interface(),
 		}]
 
 	def connect(self) -> bool:

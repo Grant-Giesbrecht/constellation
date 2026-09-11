@@ -479,19 +479,51 @@ Polling on, auto-send off is **monitoring**: the panel follows the instrument an
 when the user changes something. Nothing in a category widget needs to do anything for this to
 work - `push_setpoints()` finds every `Parameter*` control on the panel itself.
 
+## The connection indicator
+
+The status bar shows one chain of icons per instrument, left to right in the order they were
+added: `client -- bus -- instrument` for a local instrument, `client -- net -- relay -- bus --
+instrument` for one reached through a relay machine. Clicking a chain opens that instrument's
+Connection Info. Artwork lives in `assets/`: `{client,relay,instr}_{online,offline}.png` for the
+nodes and `{net,lan,usb,gpib,other}_{link,break}.png` for the connections. Every icon is scaled by
+**one** factor (node height ÷ `ConnectionIndicator.NODE_ART_HEIGHT`, 250 px), so the set keeps the
+proportions it was drawn with.
+
+What it draws comes from `bridge.connection_state`, a `describe_connection()` dict the bridge
+emits after every poll and command (an `ObserverBridge` emits on every broadcast):
+
+- **Bus** — read from the VISA resource prefix (`GPIB`, `USB`, `TCPIP`/`VICP` = LAN, `ASRL` =
+  serial) by `relay.interface()`. Buses without their own artwork use the `other` icons. For a
+  networked instrument the client's address is a labmesh relay id, so the bench-side listener
+  reports its bus in `status()`, and the client asks once on connecting.
+- **Each segment's state** — `relay.link_online` for client-to-relay, `relay.instrument_online`
+  (or `driver.online`, locally) for the instrument side.
+- **Faded = unknown.** There is no "unknown" artwork, so the last-known icon is drawn faded: nothing
+  heard yet, the bench side past a broken network link, a dummy, or a report older than the stale
+  window (5 s, or 2.5 poll intervals when polling). Relay flags only change when a call runs, so
+  without this a green chain on a panel with polling off would only mean nothing had been tried.
+
+`ConnectionIndicator.icon_plan()` returns the `(icon, faded)` list and is the whole decision; the
+tests check it per state, and that every file any state can name exists.
+
 ## The Instrument and View menus
 
 `ConstellationWindow` builds an **Instrument** menu from the panels docked into it: Refresh State,
-Apply State, Save State…, Load State…, and Get Connection Info…. With one instrument the actions sit
+Apply State, Save State…, Load State…, Load State to GUI Only…, and Get Connection Info…. With one instrument the actions sit
 directly in the menu; with several, each gets a submenu named after its panel — "Refresh state" is
 ambiguous the moment a second instrument is on screen.
 
 Everything goes through `bridge.request()`, never a Driver call from the GUI thread: a state refresh
 takes seconds on real hardware and would freeze every other panel in the window.
 
-Note that **Load State does not touch the instrument** — `Driver.restore_state()` only refills the
-driver's own state object. The menu says so in a dialog after loading, because otherwise a user
-watches the hardware not move and concludes the feature is broken. Apply State is the second half.
+**Load State…** loads a state file, sends it to the instrument and updates the panel - through
+`Driver.restore_and_apply_state()`, one request rather than `restore_state` then `apply_state`,
+because the bridge re-reads the instrument after every command and would replace the loaded values
+before they were applied. **Load State to GUI Only…** puts the file's values into the panel's
+setpoint fields without sending anything: each shows with its Setpoint lamp at *not sent yet*, and
+stays there - polling and following the instrument leave a staged value alone - until it is sent
+(SP button, an edit, auto-send) or replaced. The file is read on the GUI thread for this one;
+reading a file is not instrument I/O.
 
 `ConnectionInfoDialog` shows where an instrument is and whether it can currently be reached. Static
 addressing comes from `bridge.describe()` — implemented on the bridge because an `ObserverBridge`
