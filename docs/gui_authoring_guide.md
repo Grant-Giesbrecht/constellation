@@ -217,6 +217,18 @@ parsed with `float()`, so the validator is pinned to `.` decimals. Left on a loc
 the thousands separator (German, Dutch regions), the validator stripped it on every commit and
 `2.0` grew to `20`, `200`, ...
 
+**The setpoint follows the instrument.** When a read-back differs from the setpoint (beyond the
+control's tolerance), the setpoint takes the instrument's value - so a change made on the front
+panel, or by another program, appears in the SP field and not only on the PV row. Two things hold it
+off: the user is part-way through typing, or one of the control's own set requests has not been
+answered yet. The second matters because the bridge may emit a state it read *before* the command
+ran; the bridge answers each command before the state read that follows it, so once every request
+is answered (matched on its arguments, so channel 2's answer does not release channel 1) the next
+value is fresh. A failed send also counts as answered, which lets the instrument's real value back
+in. The detail window's **Update GUI controls from instrument** checkbox turns this off per control
+(`control.set_follow_instrument(False)`). With it on, a value the instrument quantizes or refuses
+snaps the setpoint to what was accepted, so the grey *differs* lamp is mostly seen with it off.
+
 A control never overwrites input the user has typed but not committed. (The guard for this used to
 be `hasFocus()`, which is False whenever the window is not the *active* window — so a background
 poll silently replaced half-typed text with the last known value, and a field sitting at `0` ate
@@ -280,8 +292,8 @@ Reach for this on anything whose natural values are far from 1: timebases, curre
 
 ### LCD readout
 
-`ParameterBox(..., lcd=True)` shows the measured value on a `QLCDNumber` instead of a text field,
-in the full view. There is also a checkbox in the detail window, so it can be turned on for one
+`ParameterBox` shows the measured value on a `QLCDNumber` instead of a text field in the full view
+by default (`lcd=False` for a text field). There is also a checkbox in the detail window, so it can be turned on for one
 parameter while watching it. Only numeric parameters offer it — there is nothing for seven segments
 to show for a coupling mode, and `supports_lcd` is False on the toggle and choice controls.
 

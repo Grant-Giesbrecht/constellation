@@ -479,6 +479,7 @@ def test_compact_still_reports_both_runtime_failures_separately(qt_app):
 
 	bridge = FakeBridge()
 	widget = _box(bridge, view=ParameterView.COMPACT)
+	widget.set_follow_instrument(False)   # following would adopt the 0.5 and end the mismatch
 
 	_type(widget, "0.55")
 	widget.edit.editingFinished.emit()
@@ -962,17 +963,17 @@ def test_autoscale_ignores_zero(qt_app):
 
 # --- LCD readout ------------------------------------------------------------------------------------
 
-def test_the_lcd_is_off_by_default_and_switchable(qt_app):
+def test_the_lcd_is_on_by_default_and_switchable(qt_app):
 
 	bridge = FakeBridge()
 	widget = _box(bridge)
 
-	assert widget.supports_lcd and not widget.lcd
-	assert widget._pv_row_widget() is widget.pv_display
-
-	widget.set_lcd(True)
-
+	assert widget.supports_lcd and widget.lcd
 	assert widget._pv_row_widget() is widget.pv_lcd
+
+	widget.set_lcd(False)
+
+	assert widget._pv_row_widget() is widget.pv_display
 
 def test_the_lcd_shows_the_measured_value(qt_app):
 
@@ -1074,8 +1075,10 @@ def test_the_lamps_centre_on_the_field_rows_not_the_title(qt_app):
 	widget.show()
 	qt_app.processEvents()
 
+	# Whichever widget the PV row is actually showing - the LCD by default in the full view. A
+	# hidden widget's geometry is meaningless.
 	rows_top = widget.sp_editor.geometry().top()
-	rows_bottom = widget.pv_display.geometry().bottom()
+	rows_bottom = widget._pv_row_widget().geometry().bottom()
 	rows_middle = (rows_top + rows_bottom) / 2
 
 	lamps = [widget.lamp_verification, widget.lamp_send, widget.lamp_value]
@@ -1220,3 +1223,147 @@ def test_a_comma_decimal_locale_does_not_grow_the_value(qt_app):
 		assert widget.edit.text() == "2.0"
 	finally:
 		QLocale.setDefault(previous)
+
+# --- the setpoint follows the instrument -----------------------------------------------------------
+
+def _following(bridge=None, **kwargs):
+	''' A V/div box on channel 1 that has seen the instrument report 1.0. '''
+
+	bridge = bridge or FakeBridge()
+	widget = _box(bridge, **kwargs)
+	bridge.state_changed.emit(FakeState(1.0))
+
+	return bridge, widget
+
+def test_a_change_made_on_the_instrument_reaches_the_setpoint(qt_app):
+	""" Someone turns the knob on the front panel: the SP field should say so, not just the PV row. """
+
+	bridge, widget = _following()
+
+	bridge.state_changed.emit(FakeState(2.0))
+
+	assert widget.setpoint == 2.0
+	assert widget.edit.text() == "2.0"
+	assert _color(widget.lamp_value) == VALUE_COLORS["match"]
+
+def test_a_value_being_typed_is_never_overwritten(qt_app):
+
+	bridge, widget = _following()
+
+	_type(widget, "3")                        # typed, not committed
+	bridge.state_changed.emit(FakeState(2.0))
+
+	assert widget.edit.text() == "3"
+	assert widget.setpoint == 1.0
+
+def test_a_value_read_before_the_change_reached_the_instrument_is_not_adopted(qt_app):
+	""" The race the in-flight list exists for: a poll taken before the user's command ran reports
+	the OLD value, and must not undo the new setpoint. """
+
+	bridge, widget = _following()
+
+	_type(widget, "5.0")
+	widget.edit.editingFinished.emit()        # requested, not yet answered
+
+	bridge.state_changed.emit(FakeState(1.0))  # stale - read before the command ran
+
+	assert widget.setpoint == 5.0
+	assert widget.edit.text() == "5.0"
+
+def test_once_answered_the_next_read_is_trusted(qt_app):
+
+	bridge, widget = _following()
+
+	_type(widget, "0.55")
+	widget.edit.editingFinished.emit()
+	bridge.command_result.emit("set_div_volt", (1, 0.55), True, None)
+	bridge.state_changed.emit(FakeState(0.5))  # what the instrument actually took
+
+	assert widget.setpoint == 0.5
+
+def test_every_outstanding_request_must_be_answered(qt_app):
+	""" Two quick changes: the first answer alone does not make a read fresh for the second. """
+
+	bridge, widget = _following()
+
+	for text in ("2.0", "3.0"):
+		_type(widget, text)
+		widget.edit.editingFinished.emit()
+
+	bridge.command_result.emit("set_div_volt", (1, 2.0), True, None)
+	bridge.state_changed.emit(FakeState(2.0))
+
+	assert widget.setpoint == 3.0
+
+	bridge.command_result.emit("set_div_volt", (1, 3.0), True, None)
+	bridge.state_changed.emit(FakeState(3.0))
+
+	assert widget.setpoint == 3.0
+
+def test_another_channels_answer_does_not_release_this_one(qt_app):
+	""" Every channel's control calls the same method; answers are matched on their arguments. """
+
+	bridge, widget = _following()
+
+	_type(widget, "5.0")
+	widget.edit.editingFinished.emit()
+
+	bridge.command_result.emit("set_div_volt", (2, 5.0), True, None)   # channel 2's request
+	bridge.state_changed.emit(FakeState(1.0))
+
+	assert widget.setpoint == 5.0
+
+def test_a_failed_send_lets_the_instrument_value_back_in(qt_app):
+	""" The send failed, so the instrument is still where it was - the SP should say so. """
+
+	bridge, widget = _following()
+
+	_type(widget, "5.0")
+	widget.edit.editingFinished.emit()
+	bridge.command_result.emit("set_div_volt", (1, 5.0), False, RuntimeError("timeout"))
+	bridge.state_changed.emit(FakeState(1.0))
+
+	assert widget.setpoint == 1.0
+	assert _color(widget.lamp_send) == SEND_COLORS["failed"]
+
+def test_a_difference_within_tolerance_does_not_touch_the_setpoint(qt_app):
+
+	bridge, widget = _following()
+
+	bridge.state_changed.emit(FakeState(1.001))   # inside the 1% default tolerance
+
+	assert widget.setpoint == 1.0
+
+def test_following_can_be_turned_off(qt_app):
+
+	bridge, widget = _following()
+	widget.set_follow_instrument(False)
+
+	bridge.state_changed.emit(FakeState(2.0))
+
+	assert widget.setpoint == 1.0
+	assert widget.pv_display.text() == "2.0"
+	assert _color(widget.lamp_value) == VALUE_COLORS["mismatch"]
+
+def test_the_detail_window_has_the_follow_checkbox(qt_app):
+
+	bridge, widget = _following()
+	widget.show_details()
+	check = widget._dialog.follow_check
+
+	assert check.text() == "Update GUI controls from instrument"
+	assert check.isChecked()
+
+	check.setChecked(False)
+	assert widget.follow_instrument is False
+
+def test_choices_and_toggles_follow_too(qt_app):
+
+	bridge = FakeBridge()
+	toggle = ParameterToggle(bridge, "Output", get=lambda s: s.value, set_method="set_output_enable",
+		set_args=lambda v: (1, v))
+	bridge.state_changed.emit(FakeState(False))
+	bridge.state_changed.emit(FakeState(True))
+
+	assert toggle.button.isChecked()
+	assert toggle.indicator._state is True

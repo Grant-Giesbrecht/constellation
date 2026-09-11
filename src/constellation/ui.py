@@ -1361,6 +1361,14 @@ class ParameterDetailDialog(QDialog):
 		self.lcd_check.toggled.connect(control.set_lcd)
 		layout.addWidget(self.lcd_check)
 
+		self.follow_check = QCheckBox("Update GUI controls from instrument")
+		self.follow_check.setToolTip("When the instrument reports a different value, show it in the "
+			"setpoint field too. Never while you are typing, and never with a value read before your "
+			"last change reached the instrument.")
+		self.follow_check.setChecked(control.follow_instrument)
+		self.follow_check.toggled.connect(control.set_follow_instrument)
+		layout.addWidget(self.follow_check)
+
 		layout.addWidget(self._separator())
 
 		# --- the lamps: which is which, what it says now, and what every colour means ---
@@ -1590,6 +1598,19 @@ class _ParameterControlBase(_TrackedControlBase):
 		# instrument until the user touches the control. Auto-send re-sends only these: pushing a
 		# mirrored value back would just echo the instrument to itself.
 		self._user_setpoint = None
+
+		# When the instrument reports a value different from the setpoint, adopt it as the new
+		# setpoint - so a change made on the front panel (or by another program) shows up in the SP
+		# field, not only on the PV row. See _should_adopt() for when this is held off.
+		self.follow_instrument = True
+
+		# Argument tuples of this control's set requests the bridge has not answered yet. A state
+		# read taken before one of these ran would carry the OLD value, so nothing is adopted until
+		# the list is empty: the bridge runs commands in order and answers each one before the state
+		# read that follows it, so the first state after the last answer is guaranteed fresh.
+		# Matched on arguments, not just the method name - every channel's frequency control calls
+		# set_frequency, and channel 2's answer must not release channel 1.
+		self._in_flight = []
 
 		# True while the user has typed something they haven't committed. See _display_setpoint:
 		# a background poll must never overwrite half-typed input.
@@ -1987,6 +2008,7 @@ class _ParameterControlBase(_TrackedControlBase):
 		self._send_state = "unsent"
 		self.send_error = ""
 		self._awaiting_readback = True
+		self._in_flight.append(tuple(self.set_args(self._setpoint)))
 		self._refresh_display()
 		self.bridge.request(self.set_method, *self.set_args(self._setpoint))
 
@@ -2028,12 +2050,31 @@ class _ParameterControlBase(_TrackedControlBase):
 		instrument. '''
 		return self._user_setpoint
 
+	def set_follow_instrument(self, enabled:bool):
+		''' Whether the setpoint follows values read back from the instrument. '''
+		self.follow_instrument = bool(enabled)
+		self.changed.emit()
+
+	def _should_adopt(self, value) -> bool:
+		''' Whether a value just read from the instrument should replace the setpoint.
+
+		Only when it is genuinely different (beyond tolerance - a quantized read-back of the user's
+		own value is not a change of mind), the user is not part-way through typing a new value, and
+		every set request this control has made has been answered, so the value cannot predate the
+		user's latest change.
+		'''
+
+		return (self.follow_instrument and not self._dirty and not self._in_flight
+			and value is not None and self._setpoint is not None
+			and not self._matches(value, self._setpoint))
+
 	def _user_changed(self, new_value):
 		self._send_state = "unsent"
 		self.send_error = ""
 		self._awaiting_readback = True
 		self._dirty = False
 		self._user_setpoint = new_value
+		self._in_flight.append(tuple(self.set_args(new_value)))
 		super()._user_changed(new_value)
 
 	def _on_command_result(self, method_name, args, success, result):
@@ -2041,6 +2082,10 @@ class _ParameterControlBase(_TrackedControlBase):
 		if method_name == self.set_method:
 			self._send_state = "sent" if success else "failed"
 			self.send_error = "" if success else str(result)
+
+			# Answered - successfully or not, the next state read comes after this command.
+			if tuple(args) in self._in_flight:
+				self._in_flight.remove(tuple(args))
 
 		if method_name == self.get_method:
 			self.query_error = "" if success else str(result)
@@ -2058,6 +2103,10 @@ class _ParameterControlBase(_TrackedControlBase):
 		self._maybe_autoscale(value)
 		self._awaiting_readback = False
 		self.query_error = ""
+
+		if self._should_adopt(value):
+			self._setpoint = value
+
 		super()._on_state_changed(state)
 
 	def _on_connection_changed(self, online):
@@ -2159,7 +2208,7 @@ class ParameterBox(_ParameterControlBase):
 			set_args:callable=None, get_method:str=None, get_args:tuple=(), validator=None,
 			unit:str="", tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0,
 			view:str=ParameterView.COMPACT, edit_width:int=90, prefixes=None,
-			auto_prefix:bool=True, lcd:bool=False, lcd_digits:int=6):
+			auto_prefix:bool=True, lcd:bool=True, lcd_digits:int=6):
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args, unit,
 			tolerance, abs_tolerance, stale_after_s, view, edit_width, prefixes, auto_prefix)
