@@ -421,10 +421,13 @@ checkable group box *disables* its contents rather than hiding them, so it frees
 and its checkbox reads as "this feature is off", which is a completely different claim from "I have
 folded this away".
 
-`fold=` chooses which dimension collapsing gives back — `Qt.Orientation.Vertical` (the default)
-surrenders height, `Horizontal` surrenders width. Use `Horizontal` for panels sitting in a row of
-columns, like a per-channel strip: folding one should give its width to its neighbours rather than
-leaving an empty column.
+`fold=` chooses which dimension collapsing gives back, and by default (`fold=None`) it is chosen
+for you: the orientation of the `QSplitter` the panel sits in, decided when it folds and again if it
+is moved. Panels stacked in a vertical splitter give back **height** and shrink to their header;
+panels side by side in a horizontal splitter give back **width** and shrink to a narrow vertical
+strip with the title running down it — one line of text wide however long the title is. (Keeping
+the horizontal header there would leave a folded panel as wide as its title.) Pass
+`Qt.Orientation.Vertical` or `Horizontal` to override, e.g. for a panel not in a splitter.
 
 Collapsing clamps the widget's maximum size. Hiding the contents alone is not enough — a splitter
 keeps holding the old size, and the panel becomes a blank gap instead of releasing its room.

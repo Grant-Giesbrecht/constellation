@@ -230,6 +230,100 @@ def test_a_panel_can_start_collapsed(qt_app):
 	assert panel.collapsed
 	assert panel.header.arrowType() == Qt.ArrowType.RightArrow
 
+def test_a_sideways_fold_is_a_narrow_strip_whatever_the_title(qt_app):
+	""" Folded sideways, a panel keeping its horizontal header stays as wide as its title - the
+	whole complaint. The strip is one line of text wide regardless. """
+
+	short = CollapsiblePanel("A", fold=Qt.Orientation.Horizontal, collapsed=True)
+	long = CollapsiblePanel("A very long panel title indeed", fold=Qt.Orientation.Horizontal, collapsed=True)
+
+	assert short.maximumWidth() == long.maximumWidth()
+	assert long.maximumWidth() <= 40
+	assert long.maximumWidth() < long.header.sizeHint().width()
+
+def test_the_strip_replaces_the_header_only_when_folded_sideways(qt_app):
+
+	sideways = _panel(fold=Qt.Orientation.Horizontal)
+	stacked = _panel(fold=Qt.Orientation.Vertical)
+
+	for panel in (sideways, stacked):
+		assert panel.header.isVisibleTo(panel) and not panel.strip.isVisibleTo(panel)
+
+	sideways.set_collapsed(True)
+	stacked.set_collapsed(True)
+
+	assert sideways.strip.isVisibleTo(sideways) and not sideways.header.isVisibleTo(sideways)
+	assert stacked.header.isVisibleTo(stacked) and not stacked.strip.isVisibleTo(stacked)
+
+	sideways.set_collapsed(False)
+	assert sideways.header.isVisibleTo(sideways) and not sideways.strip.isVisibleTo(sideways)
+
+def test_clicking_the_strip_expands(qt_app):
+
+	panel = _panel(fold=Qt.Orientation.Horizontal, collapsed=True)
+	seen = []
+	panel.toggled.connect(seen.append)
+
+	panel.strip.clicked.emit()
+
+	assert not panel.collapsed
+	assert seen == [False]
+
+@pytest.mark.parametrize("orientation", [Qt.Orientation.Horizontal, Qt.Orientation.Vertical])
+def test_by_default_a_panel_folds_along_its_splitter(qt_app, orientation):
+	""" Side by side gives back width; stacked gives back height - without being told which. """
+
+	panel = CollapsiblePanel("Waveform")
+	splitter = make_splitter(orientation, panel, QLabel("neighbour"))
+
+	panel.set_collapsed(True)
+
+	assert panel.effective_fold() == orientation
+	if orientation == Qt.Orientation.Horizontal:
+		assert panel.maximumWidth() < _QT_MAX_SIZE and panel.maximumHeight() == _QT_MAX_SIZE
+	else:
+		assert panel.maximumHeight() < _QT_MAX_SIZE and panel.maximumWidth() == _QT_MAX_SIZE
+
+def test_a_panel_folded_before_it_is_placed_refolds_the_right_way(qt_app):
+
+	panel = CollapsiblePanel("Waveform", collapsed=True)    # no parent yet: folds vertically
+	assert panel.maximumHeight() < _QT_MAX_SIZE
+
+	splitter = make_splitter(Qt.Orientation.Horizontal, panel, QLabel("neighbour"))
+
+	assert panel.maximumWidth() < _QT_MAX_SIZE
+	assert panel.maximumHeight() == _QT_MAX_SIZE      # the stale height clamp is gone
+	assert panel.strip.isVisibleTo(panel)
+
+def test_an_explicit_fold_beats_the_splitter(qt_app):
+
+	panel = CollapsiblePanel("Waveform", fold=Qt.Orientation.Vertical)
+	splitter = make_splitter(Qt.Orientation.Horizontal, panel, QLabel("neighbour"))
+
+	panel.set_collapsed(True)
+
+	assert panel.maximumHeight() < _QT_MAX_SIZE
+	assert panel.maximumWidth() == _QT_MAX_SIZE
+
+def test_folding_the_awg_plot_gives_its_width_to_the_channels(qt_app, log):
+	""" The case in the bug report: Estimated Output sits beside Channels. """
+
+	from constellation.ui import OwningBridge
+	from constellation.instrument_control.arb_waveform_generator.arb_waveform_generator_gui import ArbitraryWaveformGeneratorWidget
+	import constellation.instrument_control.all as everything
+
+	window = ConstellationWindow(log, add_menu=False)
+	driver = everything.Keysight33500("DUMMY", log=log, dummy=True)
+	widget = ArbitraryWaveformGeneratorWidget(window, OwningBridge(driver), log)
+
+	widget.waveform_box.set_collapsed(True)
+
+	assert widget.waveform_box.maximumWidth() <= 40
+	assert widget.waveform_box.strip.isVisibleTo(widget.waveform_box)
+
+	import matplotlib.pyplot as plt
+	plt.close("all")
+
 # --- splitters -------------------------------------------------------------------------------------
 
 def test_the_splitter_handle_is_visible_enough_to_grab(qt_app):

@@ -727,6 +727,71 @@ def install_window_shortcuts(window, on_close=None, on_quit=None) -> list:
 
 _QT_MAX_SIZE = 16777215   # QWIDGETSIZE_MAX - "no maximum", as Qt spells it
 
+class _FoldStrip(QWidget):
+	''' The narrow vertical bar a sideways-folded CollapsiblePanel shrinks to: an arrow at the top
+	and the title running down it. Its width is one line of text however long the title is, which is
+	the point - a folded panel that keeps its horizontal header is still as wide as its title. '''
+
+	clicked = pyqtSignal()
+
+	_ARROW = 8     # px, the arrow triangle's size
+	_PAD = 4       # px, around the text
+
+	def __init__(self, title:str, parent=None):
+		super().__init__(parent)
+
+		self._title = title
+
+		self.setCursor(QtGui.QCursor(Qt.CursorShape.PointingHandCursor))
+		self.setToolTip(f"{title} - click to expand")
+		self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+
+	def strip_width(self) -> int:
+		return self.fontMetrics().height() + 2 * self._PAD
+
+	def sizeHint(self):
+		fm = self.fontMetrics()
+		return QtCore.QSize(self.strip_width(), fm.horizontalAdvance(self._title) + self._ARROW + 4 * self._PAD)
+
+	def minimumSizeHint(self):
+		return QtCore.QSize(self.strip_width(), self._ARROW + 2 * self._PAD)
+
+	def mousePressEvent(self, event):
+		if event.button() == Qt.MouseButton.LeftButton:
+			self.clicked.emit()
+		super().mousePressEvent(event)
+
+	def paintEvent(self, event):
+
+		painter = QtGui.QPainter(self)
+		painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+		color = self.palette().color(QtGui.QPalette.ColorRole.WindowText)
+		width = self.width()
+
+		# A right-pointing arrow at the top - the same "folded, click to open" cue as the header's.
+		top = self._PAD
+		left = (width - self._ARROW) // 2
+		painter.setPen(Qt.PenStyle.NoPen)
+		painter.setBrush(QtGui.QBrush(color))
+		painter.drawPolygon(QtGui.QPolygon([
+			QtCore.QPoint(left, top),
+			QtCore.QPoint(left + self._ARROW, top + self._ARROW // 2),
+			QtCore.QPoint(left, top + self._ARROW),
+		]))
+
+		# The title, rotated to read top to bottom, elided if the panel is shorter than it.
+		text_top = top + self._ARROW + 2 * self._PAD
+		available = max(0, self.height() - text_top - self._PAD)
+		text = self.fontMetrics().elidedText(self._title, Qt.TextElideMode.ElideRight, available)
+
+		painter.setPen(color)
+		painter.translate(width, 0)
+		painter.rotate(90)
+		painter.drawText(QtCore.QRect(text_top, 0, available, width),
+			Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+		painter.end()
+
 class CollapsiblePanel(QWidget):
 	''' A titled frame whose contents can be folded away, for use in place of a QGroupBox.
 
@@ -735,8 +800,17 @@ class CollapsiblePanel(QWidget):
 	reads as "this feature is off", which is a completely different claim from "I have folded this
 	away". A front panel with six sections is mostly sections you are not using right now.
 
-	Collapsing clamps the widget's maximum height to its header, so a QSplitter holding one gives
-	the space back to its neighbours instead of leaving a hole.
+	Collapsing clamps the widget's maximum size, so a QSplitter holding one gives the space back to
+	its neighbours instead of leaving a hole. Which dimension it gives back is the `fold`:
+
+	  - Vertical: surrenders HEIGHT, shrinking to its header. Right for panels stacked one above
+	    another.
+	  - Horizontal: surrenders WIDTH, shrinking to a narrow vertical strip with the title running
+	    down it. Right for panels sitting side by side. Keeping the horizontal header instead would
+	    leave the panel as wide as its title - "Estimated Output" held ~250px for nothing.
+	  - None (the default): whichever the enclosing QSplitter lays its children out along, decided
+	    when the panel is folded and again whenever it is moved - so a panel never has to be told
+	    which way its container runs. Outside a splitter, Vertical.
 
 	Put the contents in `panel.content` (a plain QWidget - set a layout on it), or hand a layout
 	straight to `set_content_layout()`.
@@ -744,13 +818,9 @@ class CollapsiblePanel(QWidget):
 
 	toggled = pyqtSignal(bool)
 
-	def __init__(self, title:str, parent=None, collapsed:bool=False,
-			fold=Qt.Orientation.Vertical):
+	def __init__(self, title:str, parent=None, collapsed:bool=False, fold=None):
 		super().__init__(parent)
 
-		# Which dimension folding gives back. A panel stacked vertically should surrender its
-		# HEIGHT; one sitting in a row of columns (a per-channel strip) should surrender its
-		# WIDTH, or collapsing it just leaves an empty column where it was.
 		self.fold = fold
 
 		self.header = QToolButton()
@@ -765,6 +835,9 @@ class CollapsiblePanel(QWidget):
 		self.header.setToolTip("Click to fold this panel away")
 		self.header.toggled.connect(self._on_toggled)
 
+		self.strip = _FoldStrip(title)
+		self.strip.clicked.connect(lambda: self.set_collapsed(False))
+
 		self.content = QWidget()
 
 		self.frame = QFrame()
@@ -774,6 +847,7 @@ class CollapsiblePanel(QWidget):
 		frame_layout.setContentsMargins(4, 2, 4, 4)
 		frame_layout.setSpacing(2)
 		frame_layout.addWidget(self.header)
+		frame_layout.addWidget(self.strip)
 		frame_layout.addWidget(self.content)
 		self.frame.setLayout(frame_layout)
 
@@ -793,12 +867,34 @@ class CollapsiblePanel(QWidget):
 	def collapsed(self) -> bool:
 		return not self.header.isChecked()
 
+	def effective_fold(self):
+		''' The dimension folding gives back right now: the explicit `fold`, else the enclosing
+		splitter's orientation, else Vertical. '''
+
+		if self.fold is not None:
+			return self.fold
+
+		parent = self.parentWidget()
+		if isinstance(parent, QSplitter):
+			return parent.orientation()
+
+		return Qt.Orientation.Vertical
+
 	def set_collapsed(self, collapsed:bool):
 
 		if bool(collapsed) == self.collapsed:
 			return
 
 		self.header.setChecked(not collapsed)
+
+	def event(self, event):
+
+		# Folded before being placed (or moved to another splitter): the fold direction may have
+		# changed with the parent, so re-fold the right way.
+		if event.type() == QtCore.QEvent.Type.ParentChange and self.collapsed:
+			self._apply_collapsed(True)
+
+		return super().event(event)
 
 	def _on_toggled(self, expanded:bool):
 
@@ -807,21 +903,26 @@ class CollapsiblePanel(QWidget):
 
 	def _apply_collapsed(self, collapsed:bool):
 
+		sideways = collapsed and self.effective_fold() == Qt.Orientation.Horizontal
+
 		self.content.setVisible(not collapsed)
+		self.header.setVisible(not sideways)
+		self.strip.setVisible(sideways)
 		self.header.setArrowType(Qt.ArrowType.RightArrow if collapsed else Qt.ArrowType.DownArrow)
 
 		# Clamping the maximum is what actually frees the space: hiding the content alone leaves a
 		# splitter holding the old size, so the panel collapses into a blank gap rather than
-		# giving its room to its neighbours.
+		# giving its room to its neighbours. Both limits are reset first, so re-folding the other
+		# way (after a move between splitters) never leaves a stale clamp behind.
 		margins = self.frame.layout().contentsMargins()
 
-		if not collapsed:
-			self.setMaximumHeight(_QT_MAX_SIZE)
-			self.setMaximumWidth(_QT_MAX_SIZE)
-		elif self.fold == Qt.Orientation.Vertical:
+		self.setMaximumHeight(_QT_MAX_SIZE)
+		self.setMaximumWidth(_QT_MAX_SIZE)
+
+		if sideways:
+			self.setMaximumWidth(margins.left() + margins.right() + self.strip.strip_width() + 4)
+		elif collapsed:
 			self.setMaximumHeight(margins.top() + margins.bottom() + self.header.sizeHint().height() + 4)
-		else:
-			self.setMaximumWidth(margins.left() + margins.right() + self.header.sizeHint().width() + 8)
 
 		self.updateGeometry()
 
