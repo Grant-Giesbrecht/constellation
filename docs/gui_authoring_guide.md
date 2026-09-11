@@ -267,6 +267,24 @@ layout.setColumnStretch(1, 1)     # slack goes into the empty column, not into t
 
 `control.set_view(ParameterView.FULL)` switches density in place, keeping setpoint and read-back.
 
+### Switching many controls at once
+
+- **`--full` / `--compact`** — `add_view_arguments(parser)` adds both (mutually exclusive) to an
+  `argparse` parser; pass `view_from_arguments(args)` as `ConstellationWindow(parameter_view=...)`.
+  Every GUI demo in `examples/` takes them.
+- **View menu** — *All Controls: Full / Compact* for the whole window (also the default for anything
+  added afterwards), and with several instruments docked, *Controls: Full / Compact* in each
+  panel's submenu. In code: `window.set_parameter_view(view)` / `widget.set_parameter_view(view)`.
+- **Apply to similar** — a button in the detail window. Copies the control's density, LCD and
+  follow-the-instrument options to every *similar* control: the same kind of control driving the
+  same method, on the same panel — i.e. the same parameter on every other channel. Other
+  instruments' panels are never touched.
+
+A default view reaches controls built lazily too: `InstrumentWidget` connects a slot to
+`state_changed` *after* `on_state_changed`, so it sees per-channel controls built from the first
+update. It applies once per control, so a control switched by hand is not switched back by the next
+poll. A category widget needs no code for any of this.
+
 ### Unit prefixes
 
 Pass `prefixes=True` for the full SI set, or a tuple of symbols to narrow it. The selector sits

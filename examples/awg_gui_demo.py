@@ -6,6 +6,7 @@ Run:
   python awg_gui_demo.py --dummy
   python awg_gui_demo.py --driver keysight --resource "TCPIP0::192.168.1.91::INSTR"
   python awg_gui_demo.py --driver siglent  --resource "TCPIP0::192.168.1.90::INSTR" --tabs
+  python awg_gui_demo.py --dummy --full      # every control in the full view (--compact for compact)
 """
 
 import argparse
@@ -20,6 +21,7 @@ parser.add_argument("--dummy", action="store_true", help="Run without hardware a
 parser.add_argument("--driver", choices=sorted(DRIVERS), default="keysight", help="Which AWG driver to use.")
 parser.add_argument("--resource", default="TCPIP0::192.168.1.91::INSTR", help="VISA resource string. Ignored with --dummy.")
 parser.add_argument("--tabs", action="store_true", help="Start with the channels in tabs rather than side by side.")
+add_view_arguments(parser)
 args = parser.parse_args()
 
 log = plf.LogPile()
@@ -34,7 +36,7 @@ if args.tabs:
 app = QtWidgets.QApplication(sys.argv)
 app.setStyle("Fusion")
 
-main_window = ConstellationWindow(log)
+main_window = ConstellationWindow(log, parameter_view=view_from_arguments(args))
 main_window.add_instrument(driver=awg, title="Waveform Generator" + (" (dummy)" if args.dummy else ""))
 main_window.setWindowTitle("Waveform Generator GUI Demo")
 main_window.resize(1200, 600)

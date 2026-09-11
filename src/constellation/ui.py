@@ -1369,6 +1369,21 @@ class ParameterDetailDialog(QDialog):
 		self.follow_check.toggled.connect(control.set_follow_instrument)
 		layout.addWidget(self.follow_check)
 
+		similar = len(control.similar_controls())
+		self.similar_button = QPushButton("Apply to similar")
+		# Not the control's label: on a per-channel control it names the channel ("Output 1"), so
+		# "the other 'Output 1' controls" would name exactly the ones it is NOT applied to.
+		self.similar_button.setToolTip(
+			f"Apply these options to {similar} similar control{'s' if similar != 1 else ''} on this panel."
+			if similar else "No similar controls on this panel.")
+		self.similar_button.setEnabled(similar > 0)
+		self.similar_button.clicked.connect(control.apply_options_to_similar)
+
+		similar_row = QHBoxLayout()
+		similar_row.addWidget(self.similar_button)
+		similar_row.addStretch(1)
+		layout.addLayout(similar_row)
+
 		layout.addWidget(self._separator())
 
 		# --- the lamps: which is which, what it says now, and what every colour means ---
@@ -2054,6 +2069,42 @@ class _ParameterControlBase(_TrackedControlBase):
 		''' Whether the setpoint follows values read back from the instrument. '''
 		self.follow_instrument = bool(enabled)
 		self.changed.emit()
+
+	def panel(self):
+		''' The InstrumentWidget this control sits on, or None if it is not on one. '''
+
+		widget = self.parentWidget()
+		while widget is not None and not isinstance(widget, InstrumentWidget):
+			widget = widget.parentWidget()
+
+		return widget
+
+	def similar_controls(self) -> list:
+		''' The other controls on this panel that are the same parameter - the same kind of control
+		driving the same method. On a multi-channel instrument that is this parameter on every other
+		channel: every channel's output toggle, every channel's frequency box. '''
+
+		panel = self.panel()
+		if panel is None:
+			return []
+
+		return [c for c in panel.parameter_controls()
+			if c is not self and type(c) is type(self) and c.set_method == self.set_method]
+
+	def apply_options_to_similar(self) -> int:
+		''' Copies this control's display options (density, LCD, following the instrument) to every
+		similar control. Returns how many were changed. '''
+
+		similar = self.similar_controls()
+
+		for other in similar:
+			other.set_view(self.view)
+			if self.supports_lcd and other.supports_lcd:
+				other.set_lcd(self.lcd)
+			other.set_follow_instrument(self.follow_instrument)
+			other._default_view_applied = True
+
+		return len(similar)
 
 	def _should_adopt(self, value) -> bool:
 		''' Whether a value just read from the instrument should replace the setpoint.
@@ -2947,6 +2998,22 @@ class SyncConfigDialog(QDialog):
 def _format_period(value) -> str:
 	return "" if value is None else f"{float(value):g}"
 
+def add_view_arguments(parser):
+	''' Adds --full / --compact to an argparse parser, for the density every control starts in.
+	Pass the result of view_from_arguments() as ConstellationWindow(parameter_view=...). '''
+
+	group = parser.add_mutually_exclusive_group()
+	group.add_argument("--full", dest="parameter_view", action="store_const", const=ParameterView.FULL,
+		help="Show every control in the full view (title, setpoint and measured rows, three lamps).")
+	group.add_argument("--compact", dest="parameter_view", action="store_const", const=ParameterView.COMPACT,
+		help="Show every control in the compact view (one row, two lamps).")
+
+	return parser
+
+def view_from_arguments(args):
+	''' The density chosen by add_view_arguments()'s flags, or None if neither was given. '''
+	return getattr(args, "parameter_view", None)
+
 # Setting this environment variable to a file path makes Constellation keep its settings in that INI
 # file instead of the platform's usual place. The test suite uses it so a test run can never read or
 # overwrite a real user's settings.
@@ -2984,9 +3051,16 @@ def _find_registered_category(driver_cls):
 
 class ConstellationWindow(QMainWindow):
 
-	def __init__(self, log:plf.LogPile, add_menu:bool=True, settings=None):
+	def __init__(self, log:plf.LogPile, add_menu:bool=True, settings=None, parameter_view:str=None):
 		super().__init__()
 		self.log = log
+
+		if parameter_view is not None and parameter_view not in ParameterView.ORDER:
+			raise ValueError(f"Unknown view >{parameter_view}<")
+
+		# Density every Parameter* control in this window starts in - e.g. from --full/--compact
+		# (see add_view_arguments). None leaves each control as its widget built it.
+		self.parameter_view = parameter_view
 
 		# Where per-instrument settings (polling, auto-send) are remembered between runs.
 		self.settings = settings if settings is not None else default_settings()
@@ -3020,6 +3094,18 @@ class ConstellationWindow(QMainWindow):
 		self.config_button.clicked.connect(self.show_sync_config)
 
 		self.status_bar.addPermanentWidget(self.config_button)
+
+	def set_parameter_view(self, view:str):
+		''' Switches every control on every panel to `view`, and makes it the default for controls
+		and panels added afterwards. '''
+
+		if view not in ParameterView.ORDER:
+			raise ValueError(f"Unknown view >{view}<")
+
+		self.parameter_view = view
+
+		for widget in self.instrument_widgets:
+			widget.set_parameter_view(view)
 
 	def _sync_group(self, widget):
 
@@ -3214,10 +3300,11 @@ class ConstellationWindow(QMainWindow):
 			self._add_instrument_actions(target, widget, title)
 
 	def _rebuild_view_menu(self, panels:list):
-		''' Rebuilds the View menu from what each docked panel offers via add_view_actions().
+		''' Rebuilds the View menu: control density for the whole window first, then what each
+		docked panel offers via add_view_actions().
 
-		Same shape as the Instrument menu: flat for one panel, a submenu per panel for several.
-		Panels offering nothing are left out, and an empty menu says so rather than looking broken.
+		Panel options follow the Instrument menu's shape: flat for one panel, a submenu per panel for
+		several - and with several, each submenu also offers density for just that panel.
 		'''
 
 		menu = getattr(self, "view_menu", None)
@@ -3226,16 +3313,33 @@ class ConstellationWindow(QMainWindow):
 
 		menu.clear()
 
-		offering = [(title, widget) for title, widget in panels if widget.has_view_actions()]
+		for view in (ParameterView.FULL, ParameterView.COMPACT):
+			action = QAction(f"All Controls: {ParameterView.LABELS[view]}", self)
+			action.triggered.connect(lambda checked=False, view=view: self.set_parameter_view(view))
+			menu.addAction(action)
 
-		if not offering:
-			placeholder = menu.addAction("No view options")
-			placeholder.setEnabled(False)
+		if len(panels) == 1:
+			title, widget = panels[0]
+			if widget.has_view_actions():
+				menu.addSeparator()
+				widget.add_view_actions(menu)
 			return
 
-		for title, widget in offering:
-			target = menu if len(offering) == 1 else menu.addMenu(title)
-			widget.add_view_actions(target)
+		if panels:
+			menu.addSeparator()
+
+		for title, widget in panels:
+
+			sub = menu.addMenu(title)
+
+			for view in (ParameterView.FULL, ParameterView.COMPACT):
+				action = QAction(f"Controls: {ParameterView.LABELS[view]}", self)
+				action.triggered.connect(lambda checked=False, widget=widget, view=view: widget.set_parameter_view(view))
+				sub.addAction(action)
+
+			if widget.has_view_actions():
+				sub.addSeparator()
+				widget.add_view_actions(sub)
 
 	def _add_instrument_actions(self, menu, widget, title:str):
 
@@ -3378,10 +3482,46 @@ class InstrumentWidget(QWidget):
 		self._auto_send_timer = QTimer(self)
 		self._auto_send_timer.timeout.connect(self.push_setpoints)
 
+		# Density every control on this panel should start in, if one was asked for (a window-wide
+		# --full/--compact, or a View-menu choice). None leaves each control as its widget built it.
+		self.parameter_view = None
+
 		bridge.state_changed.connect(self.on_state_changed)
+		# Connected AFTER on_state_changed on purpose: slots run in connection order, so this sees
+		# any controls a widget builds lazily from its first state update (per-channel controls).
+		bridge.state_changed.connect(self._apply_default_view)
 		bridge.connection_changed.connect(self.on_connection_changed)
 
 		self.main_window.instrument_widgets.append(self)
+
+	def default_parameter_view(self):
+		''' The density new controls on this panel should take: the panel's own, else the window's. '''
+		return self.parameter_view or getattr(self.main_window, "parameter_view", None)
+
+	def _apply_default_view(self, state=None):
+		''' Gives every control that has not yet had it the default density. Once per control, so a
+		control the user switched by hand is never switched back by the next poll. '''
+
+		view = self.default_parameter_view()
+		if view is None:
+			return
+
+		for control in self.parameter_controls():
+			if not getattr(control, "_default_view_applied", False):
+				control.set_view(view)
+				control._default_view_applied = True
+
+	def set_parameter_view(self, view:str):
+		''' Switches every control on this panel to `view`, including ones built later. '''
+
+		if view not in ParameterView.ORDER:
+			raise ValueError(f"Unknown view >{view}<")
+
+		self.parameter_view = view
+
+		for control in self.parameter_controls():
+			control.set_view(view)
+			control._default_view_applied = True
 
 	def parameter_controls(self) -> list:
 		''' Every Parameter* control on this panel, wherever it is nested. '''

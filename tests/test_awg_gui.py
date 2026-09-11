@@ -310,8 +310,10 @@ def _window_with_panel(log):
 	return window, widget
 
 def _view_actions(window):
+	''' The panel's own View-menu options - leaving out the window-wide "All Controls" pair. '''
 
-	return {a.text(): a for a in window.view_menu.actions() if not a.isSeparator()}
+	return {a.text(): a for a in window.view_menu.actions()
+		if not a.isSeparator() and not a.text().startswith("All Controls")}
 
 def test_the_view_menu_offers_both_layouts(qt_app, log):
 
@@ -351,11 +353,12 @@ def test_a_layout_change_from_code_moves_the_menu_tick(qt_app, log):
 	for bridge in window._bridges:
 		bridge.stop()
 
-def test_panels_without_view_options_leave_an_honest_empty_menu(qt_app, log):
+def test_with_no_panels_the_view_menu_still_offers_control_density(qt_app, log):
+	""" Never an empty menu: the window-wide density options are always there. """
 
 	from constellation.ui import ConstellationWindow
 
 	window = ConstellationWindow(log)
-	actions = window.view_menu.actions()
+	texts = [a.text() for a in window.view_menu.actions() if not a.isSeparator()]
 
-	assert len(actions) == 1 and not actions[0].isEnabled()
+	assert texts == ["All Controls: Full", "All Controls: Compact"]
