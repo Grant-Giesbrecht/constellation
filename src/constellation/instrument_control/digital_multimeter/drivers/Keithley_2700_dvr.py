@@ -133,7 +133,10 @@ class Keithley2700(DigitalMultimeter):
 	def get_value(self, check_measurement:bool=True) -> float:
 		''' Returns the last measured value. Will be in units self.check_units. Will return None on error '''
 		
-		str_val = self.query("READ?")
+		# A reading is as slow as the integration time the meter is set to - seconds, at a high
+		# NPLC - so it gets the long timeout rather than the short one ordinary commands use.
+		with self.long_operation():
+			str_val = self.query("READ?")
 		
 		# str_val will contain 3 values. Example: 
 		# '-4.87665862E-01VDC,+1318.539SECS,+12129RDNG#\n'

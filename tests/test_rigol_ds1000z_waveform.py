@@ -311,9 +311,17 @@ def test_direct_scpi_relay_sets_an_explicit_timeout(monkeypatch):
 			self.timeout = None
 
 	fake_inst = _FakeResource()
-	relay = DirectSCPIRelay(timeout_ms=4242)
-	monkeypatch.setattr(relay.rm, "open_resource", lambda addr: fake_inst)
+	relay = DirectSCPIRelay(timeout_ms=4242, text_timeout_ms=1234)
+	monkeypatch.setattr(relay.rm, "open_resource", lambda addr, **kwargs: fake_inst)
 	relay.configure("fake-addr", make_log())
 
 	assert relay.connect() is True
-	assert fake_inst.timeout == 4242
+
+	# Ordinary commands run on the short timeout - that is how quickly a lost instrument is
+	# noticed. The long one is for transfers that legitimately take tens of seconds.
+	assert fake_inst.timeout == 1234
+
+	with relay.long_operation():
+		assert fake_inst.timeout == 4242
+
+	assert fake_inst.timeout == 1234

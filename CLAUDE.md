@@ -145,7 +145,11 @@ never goes offline, and **reconnect-on-use** (default OFF) lets an offline drive
 `DEFAULT_RECONNECT_POLICY` — a copy, so tuning one instrument doesn't retune the rest. Note that
 with reconnect-on-use off, an offline driver has no automatic path back: `write`/`read`/`query`
 early-return on `not self.online`, and `check_online()` is only reachable from inside those
-methods' `except` blocks.
+methods' `except` blocks. In-call retry also skips an attempt
+that failed only after `slow_failure_s` (default 1 s): a failure that waited out a timeout is a
+lost instrument, not a blip, and retrying it only multiplies the wait. A GUI's `OwningBridge` adds
+its own recovery on top: a quick `Driver.ping()` before each scheduled poll, and a reconnect loop
+while offline (`auto_reconnect`, on by default in the GUI) - see `docs/gui_authoring_guide.md`.
 
 `src/constellation/networking/labmesh_net.py` covers the other half: `DriverStateBroadcaster` runs a
 `labmesh.RelayAgent` around an already-connected `Driver` in a background thread, so *other* (non-owning)

@@ -278,6 +278,9 @@ def test_every_icon_any_state_can_name_exists(qt_app):
 
 	assert missing == []
 
+	small = ConnectionIndicator(InstrumentBridge(), "AWG")
+	assert [n for n in sorted(names) if not os.path.exists(small._art_file(n))] == []
+
 def test_all_icons_share_one_scale(qt_app):
 	""" A link must keep the thickness it was drawn with relative to a node. """
 
@@ -287,8 +290,8 @@ def test_all_icons_share_one_scale(qt_app):
 	node = indicator._pixmap("instr_online", False)
 	link = indicator._pixmap("lan_link", False)
 
-	node_art = QPixmap(os.path.join(ASSETS_DIR, "instr_online.png"))
-	link_art = QPixmap(os.path.join(ASSETS_DIR, "lan_link.png"))
+	node_art = QPixmap(indicator._art_file("instr_online"))
+	link_art = QPixmap(indicator._art_file("lan_link"))
 
 	drawn = link.height() / node.height()
 	designed = link_art.height() / node_art.height()

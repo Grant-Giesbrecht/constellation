@@ -2088,10 +2088,13 @@ def test_a_successful_call_marks_both_levels_healthy():
 
 def test_listener_status_reports_bench_side_health():
 	listener, client = make_remote_pair(_DeadInstrumentRelay())
-	# `interface` is the bench-side bus, for the status-bar indicator. This fake relay has no VISA
-	# resource string, so it is "other".
-	assert listener.status() == [True, {"instrument_online": None, "last_error_kind": "none",
-		"interface": "other"}]
+	# `interface` and `address` describe the bench side for the connection indicator. This fake
+	# relay has no VISA resource string, so its interface is "other".
+	ok, payload = listener.status()
+	assert ok is True
+	assert {k: payload[k] for k in ("instrument_online", "last_error_kind", "interface")} == \
+		{"instrument_online": None, "last_error_kind": "none", "interface": "other"}
+	assert payload["address"] == listener.address
 
 	listener.query("*IDN?")
 

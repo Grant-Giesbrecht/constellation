@@ -1,3 +1,4 @@
+import contextlib
 import pylogfile.base as plf
 import base64
 import struct
@@ -120,6 +121,58 @@ def interface_from_resource(address) -> str:
 
 	return "other"
 
+def describe_resource(address) -> dict:
+	''' A VISA resource string broken into the parts a person looks for - GPIB board and primary
+	address, USB vendor/product/serial, LAN host, port and protocol, serial port - for display.
+	Anything unrecognised comes back whole, as {"Address": ...}, rather than guessed at.
+	'''
+
+	if not address:
+		return {}
+
+	text = str(address).strip()
+	parts = text.split("::")
+	head = parts[0].upper()
+
+	if head.startswith("GPIB"):
+		info = {"Board": head[4:] or "0"}
+		if len(parts) > 1:
+			info["Primary address"] = parts[1]
+		if len(parts) > 2 and parts[2].upper() != "INSTR":
+			info["Secondary address"] = parts[2]
+		return info
+
+	if head.startswith("USB"):
+		info = {}
+		for name, value in zip(("Vendor ID", "Product ID", "Serial number", "Interface"), parts[1:]):
+			if value.upper() in ("INSTR", "RAW"):
+				break
+			info[name] = value
+		return info
+
+	if head.startswith("TCPIP"):
+		info = {"Host": parts[1]} if len(parts) > 1 else {}
+		rest = [p.upper() for p in parts[2:]]
+		if "SOCKET" in rest:
+			info["Port"] = parts[2]
+			info["Protocol"] = "raw socket"
+		elif any(p.startswith("HISLIP") for p in rest):
+			info["Protocol"] = "HiSLIP"
+			info["Port"] = "4880"
+		else:
+			info["Protocol"] = "VXI-11"
+			if len(parts) > 2 and parts[2].upper() != "INSTR":
+				info["Device"] = parts[2]
+		return info
+
+	if head.startswith("ASRL"):
+		return {"Port": text[4:].split("::")[0]}
+
+	if head.startswith("VICP"):
+		return {"Host": parts[1] if len(parts) > 1 else "", "Protocol": "VICP", "Port": "1861"}
+
+	return {"Address": text}
+
 class CommandRelay:
 	''' Class used to relay commands from a "driver" (which defines the content of the
 	instructions in commands) to the physical instrument. Using a CommandRelay object
@@ -157,6 +210,19 @@ class CommandRelay:
 		"other"), or None if this relay cannot know. Derived from the VISA resource string. '''
 
 		return interface_from_resource(getattr(self, "address", None))
+
+	def probe(self, timeout_s:float=1.5):
+		''' A quick liveness check with a short timeout and no retries: True if the instrument
+		answered, False if not, None if this relay cannot probe. See Driver.ping(). '''
+
+		return None
+
+	def long_operation(self):
+		''' Context manager for a call that is legitimately slow - a full-memory waveform or trace
+		read. Relays with a timeout raise it for the duration, so the ordinary timeout can stay
+		short enough to notice a lost instrument quickly. Base: nothing to raise. '''
+
+		return contextlib.nullcontext()
 		
 		# The most recent command sent and the most recent reply received, kept purely so a GUI
 		# can show a user the actual SCPI behind a control (see ParameterDetailDialog in ui.py).
@@ -403,7 +469,7 @@ class DirectSCPIRelay(CommandRelay):
 	SCPI commands from a driver.
 	'''
 	
-	def __init__(self, timeout_ms:float=30000, read_termination:str='\n', write_termination:str='\n'):
+	def __init__(self, timeout_ms:float=30000, text_timeout_ms:float=3000, read_termination:str='\n', write_termination:str='\n'):
 		super().__init__()
 
 		# self.rm = pv.ResourceManager('@py')
@@ -413,7 +479,18 @@ class DirectSCPIRelay(CommandRelay):
 		# :WAV:DATA? chunk (RAW mode) can legitimately take 15-20+ seconds - a shorter timeout
 		# aborts mid-transfer, and the instrument keeps pushing the rest of that response into
 		# the buffer regardless, corrupting whatever command/reply comes next.
+		# The LONG timeout, used only inside long_operation(): confirmed against real Rigol DS1000Z
+		# hardware that a single max-size :WAV:DATA? chunk (RAW mode) can take 15-20+ seconds, and a
+		# shorter timeout aborts mid-transfer while the instrument keeps pushing the rest of that
+		# response into the buffer, corrupting whatever command comes next.
 		self.timeout_ms = timeout_ms
+		# What every ordinary command uses. Short on purpose: it is how long a lost instrument takes
+		# to notice, and no ordinary SCPI command needs seconds to answer.
+		self.text_timeout_ms = text_timeout_ms
+		# Bound on opening the resource. Without one, reconnecting to a host that has gone away can
+		# block for as long as the OS takes to give up on a TCP connect - tens of seconds, stalling
+		# a GUI bridge that retries every few seconds.
+		self.open_timeout_ms = 5000
 		# Explicit termination characters (standard SCPI convention). Confirmed against real
 		# hardware this is required for a raw TCPIP ...::SOCKET resource (PyVISA otherwise has no
 		# way to know a text reply is complete, and every query times out) - VXI-11 (...::INSTR)
@@ -424,13 +501,21 @@ class DirectSCPIRelay(CommandRelay):
 
 	def connect(self) -> bool:
 
+		# Reconnecting after an unplug: the old session is dead, so close it rather than leak it.
+		if self.inst is not None:
+			try:
+				self.inst.close()
+			except Exception:
+				pass
+			self.inst = None
+
 		try:
-			self.inst = self.rm.open_resource(self.address)
+			self.inst = self.rm.open_resource(self.address, open_timeout=self.open_timeout_ms)
 			# PyVISA resources have no timeout guarantee unless set explicitly - without this, a
 			# malformed/unexpected reply (e.g. a binary block query that doesn't get a real
 			# binary block back) can block forever waiting for bytes that never arrive, hanging
 			# the whole process instead of raising a catchable error.
-			self.inst.timeout = self.timeout_ms
+			self.inst.timeout = self.text_timeout_ms
 			self.inst.read_termination = self.read_termination
 			self.inst.write_termination = self.write_termination
 			self.online = True
@@ -523,6 +608,57 @@ class DirectSCPIRelay(CommandRelay):
 
 		return True, rv
 
+	@contextlib.contextmanager
+	def long_operation(self):
+		''' Raises the timeout to `timeout_ms` for the duration - for a transfer that legitimately
+		takes tens of seconds. Restores whatever was set before, so nesting is harmless. '''
+
+		# Anything without a settable timeout (a stand-in resource, a transport that has no such
+		# notion) simply runs the operation: a missing attribute must not fail the transfer.
+		previous = getattr(self.inst, "timeout", None) if self.inst is not None else None
+
+		if previous is None:
+			yield
+			return
+
+		try:
+			self.inst.timeout = self.timeout_ms
+			yield
+		finally:
+			try:
+				self.inst.timeout = previous
+			except Exception:
+				pass
+
+	def probe(self, timeout_s:float=1.5):
+		''' *IDN? with a short timeout. Every SCPI instrument answers it at once, so silence this
+		short means the instrument is gone rather than busy. The normal timeout is restored
+		afterwards: it has to stay long enough for real waveform and trace transfers. '''
+
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+
+		if self.inst is None:
+			self.last_error_kind = RelayErrorKind.TRANSPORT
+			return False
+
+		previous = getattr(self.inst, "timeout", None)
+
+		try:
+			if previous is not None:
+				self.inst.timeout = int(timeout_s * 1000)
+			self.inst.query("*IDN?")
+		except Exception as e:
+			self.note_failure(e)
+			return False
+		finally:
+			try:
+				if previous is not None:
+					self.inst.timeout = previous
+			except Exception:
+				pass
+
+		return True
+
 	def query_binary(self, cmd:str, datatype:str='B') -> tuple:
 		''' Queries a binary block (IEEE 488.2 #<n><count><bytes> format) from the instrument via
 		PyVISA's query_binary_values(), which parses the block header and terminator for us.
@@ -538,7 +674,8 @@ class DirectSCPIRelay(CommandRelay):
 		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
 
 		try:
-			rv = self.inst.query_binary_values(cmd, datatype=datatype, container=list)
+			with self.long_operation():
+				rv = self.inst.query_binary_values(cmd, datatype=datatype, container=list)
 			self.note_command(cmd, f"<{len(rv)} binary values>")
 			self.log.lowdebug(f"DirectSCPIRelay queried binary block from instrument: >:a{len(rv)} values<.")
 		except Exception as e:
@@ -566,7 +703,8 @@ class DirectSCPIRelay(CommandRelay):
 		try:
 			# is_big_endian=False matches the little-endian convention used across the network
 			# relay, so a block reads back identically whether it was sent locally or remotely.
-			self.inst.write_binary_values(cmd, values, datatype=datatype, is_big_endian=False)
+			with self.long_operation():
+				self.inst.write_binary_values(cmd, values, datatype=datatype, is_big_endian=False)
 			self.note_command(f"{cmd} <{len(values)} binary values>")
 			self.log.lowdebug(f"DirectSCPIRelay wrote binary block to instrument: >:a{len(values)} values<.")
 		except Exception as e:
@@ -635,6 +773,9 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		# far side knows. None until the listener has been asked (see _probe_status).
 		self.remote_interface = None
 
+		# The bench machine's own address for the instrument (its VISA resource string), for display.
+		self.remote_address = None
+
 		self._loop = None
 		self._loop_thread = None
 
@@ -656,6 +797,59 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		if ok and isinstance(payload, dict):
 			self.instrument_online = payload.get("instrument_online")
 			self.remote_interface = payload.get("interface", self.remote_interface)
+			self.remote_address = payload.get("address", self.remote_address)
+
+	@contextlib.contextmanager
+	def long_operation(self):
+		''' Uses the binary (long) RPC timeout for the duration - the mesh equivalent of raising a
+		VISA timeout for a slow transfer. '''
+
+		previous = self.timeout_s
+
+		try:
+			self.timeout_s = self.binary_timeout_s
+			yield
+		finally:
+			self.timeout_s = previous
+
+	def probe(self, timeout_s:float=1.5):
+		''' Asks the bench side to check its instrument quickly (the listener's probe RPC).
+
+		If that RPC fails, status() says whether the link or the listener is at fault: a listener
+		that answers status() but not probe() predates probe, so the answer is "unknown" (None),
+		not "offline". If status() fails too, the link is down.
+		'''
+
+		self.note_success()
+
+		try:
+			ok, payload = self._run(self.relay_client.call("probe", {"timeout_ms": timeout_s * 1000}),
+				timeout_s=self.timeout_s)
+		except Exception:
+			try:
+				self._run(self.relay_client.call("status", {}), timeout_s=self.timeout_s)
+			except Exception:
+				self.link_online = False
+				self.instrument_online = None
+				self.last_error_kind = RelayErrorKind.TRANSPORT
+				return False
+			self.link_online = True
+			return None
+
+		self.link_online = True
+
+		if not ok or not isinstance(payload, dict):
+			return None
+
+		alive = payload.get("alive")
+		self.instrument_online = payload.get("instrument_online", alive)
+		if alive is False:
+			try:
+				self.last_error_kind = RelayErrorKind(payload.get("last_error_kind", RelayErrorKind.TRANSPORT.value))
+			except ValueError:
+				self.last_error_kind = RelayErrorKind.TRANSPORT
+
+		return alive
 
 	def _ensure_loop(self):
 		''' Starts a background thread running a dedicated asyncio event loop the first time
@@ -802,6 +996,7 @@ class RemoteTextCommandRelayClient(CommandRelay):
 		
 		self.instrument_online = payload.get("instrument_online")
 		self.remote_interface = payload.get("interface", self.remote_interface)
+		self.remote_address = payload.get("address", self.remote_address)
 		
 		try:
 			self.last_error_kind = RelayErrorKind(payload.get("last_error_kind", RelayErrorKind.UNKNOWN.value))
@@ -1069,13 +1264,36 @@ class RemoteTextCommandRelayListener:
 		rather than a changed format, so an older client simply ignores it.
 
 		Returns:
-			list: [True, {"instrument_online": bool|None, "last_error_kind": str, "interface": str}]
+			list: [True, {"instrument_online": bool|None, "last_error_kind": str, "interface": str,
+				"address": str}]
 		'''
 
 		return [True, {
 			"instrument_online": self.instrument_online,
 			"last_error_kind": self.local_relay.last_error_kind.value,
 			"interface": self.local_relay.interface(),
+			"address": self.address,
+		}]
+
+	def probe(self, timeout_ms:float=1500) -> list:
+		''' A quick bench-side liveness check, for a client's fast disconnect detection. The RPC
+		itself always succeeds if it arrives - `alive` in the payload is the instrument's answer.
+
+		Returns:
+			list: [True, {"alive": bool|None, "instrument_online": bool|None, "last_error_kind": str}]
+		'''
+
+		alive = self.local_relay.probe(float(timeout_ms) / 1000)
+
+		if alive is True:
+			self.instrument_online = True
+		elif alive is False and self.local_relay.last_error_kind != RelayErrorKind.INSTRUMENT:
+			self.instrument_online = False
+
+		return [True, {
+			"alive": alive,
+			"instrument_online": self.instrument_online,
+			"last_error_kind": self.local_relay.last_error_kind.value,
 		}]
 
 	def connect(self) -> bool:

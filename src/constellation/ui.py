@@ -5,6 +5,7 @@ import time
 import threading
 import queue
 import asyncio
+import socket
 from PyQt6 import QtCore, QtGui
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QMainWindow, QGridLayout, QHBoxLayout, QVBoxLayout, QPushButton,
@@ -21,6 +22,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas,
 # __serializer_format__ envelope), so bridge.state_changed would hand widgets a plain dict instead
 # of a reconstructed InstrumentState, breaking every category GUI's on_state_changed / Tracked*.
 from stardust.serializer import from_serial_dict
+from constellation.relay import describe_resource
 from labmesh import DirectorClientAgent
 
 # ============================================================================
@@ -33,6 +35,10 @@ from labmesh import DirectorClientAgent
 # reconstructed InstrumentState objects that arrive via `state_changed`, and call
 # `bridge.request(method_name, *args)` to issue commands.
 # ============================================================================
+
+# Queue entry marking a bridge-internal operation (connect, disconnect, re-address...) rather than a
+# driver method name. Runs on the worker thread like any request, in order with them.
+_BRIDGE_OP = "__bridge_op__"
 
 class InstrumentBridge(QObject):
 	''' Base class. Owns all interaction with an instrument on a dedicated background thread (or
@@ -69,11 +75,37 @@ class InstrumentBridge(QObject):
 	# - its updates arrive whenever the owning process broadcasts - so it has nothing to configure.
 	supports_polling = False
 
+	# Whether this bridge can connect, disconnect, re-address and auto-reconnect its instrument.
+	# An ObserverBridge cannot: another process owns the driver.
+	supports_connection_control = False
+
 	def __init__(self):
 		super().__init__()
 
 		self.poll_enabled = False
 		self.poll_interval_s = None
+
+		self.auto_reconnect = None
+		# The latest describe_connection() snapshot this bridge emitted, so a window opened later
+		# can draw the connection straight away. Written by the worker, read by the GUI thread - a
+		# whole-object assignment, like last_scpi.
+		self.last_connection_state = None
+
+	def connect_instrument(self):
+		''' Opens the connection to the instrument. See supports_connection_control. '''
+		raise NotImplementedError(f"{type(self).__name__} cannot control its instrument's connection.")
+
+	def disconnect_instrument(self):
+		''' Closes the connection and keeps it closed - auto-reconnect will not reopen it. '''
+		raise NotImplementedError(f"{type(self).__name__} cannot control its instrument's connection.")
+
+	def set_address(self, address:str):
+		''' Points the driver at a new address and connects to it. '''
+		raise NotImplementedError(f"{type(self).__name__} cannot control its instrument's connection.")
+
+	def set_auto_reconnect(self, enabled:bool):
+		''' Whether to keep trying to reconnect while the instrument cannot be reached. '''
+		raise NotImplementedError(f"{type(self).__name__} cannot control its instrument's connection.")
 
 	def settings_key(self):
 		''' A stable name for this instrument, under which its panel settings are saved, or None to
@@ -144,6 +176,7 @@ class OwningBridge(InstrumentBridge):
 	'''
 
 	supports_polling = True
+	supports_connection_control = True
 
 	def __init__(self, driver:Driver, poll_interval_s:float=2.0, poll_enabled:bool=True):
 		super().__init__()
@@ -154,6 +187,23 @@ class OwningBridge(InstrumentBridge):
 		# With polling off, the instrument is only touched by explicit requests - which, from a
 		# Parameter* control, means only when the user changes something. See set_polling().
 		self.poll_enabled = poll_enabled
+
+		# Recovery. A Driver on its own has no way back once it is offline unless its policy's
+		# reconnect_on_use is set, and even then only when something calls it - with polling off,
+		# nothing does. So the bridge retries itself, every reconnect_interval_s while the
+		# instrument is unreachable, and turns the driver's reconnect-on-use on to match, so a
+		# command sent while offline also tries. On by default in a GUI: a replugged instrument
+		# coming back on its own is what a person at a bench expects.
+		self.auto_reconnect = True
+		self.reconnect_interval_s = 2.0
+		self._last_reconnect = 0.0
+
+		# Set by disconnect_instrument(): the user closed the connection on purpose, so neither
+		# auto-reconnect nor reconnect-on-use may reopen it. Cleared by connect/set_address.
+		self._held_offline = False
+
+		# Liveness check before each scheduled poll - see Driver.ping().
+		self.ping_timeout_s = 1.5
 
 		self._queue = queue.Queue()
 		self._thread = None
@@ -184,6 +234,14 @@ class OwningBridge(InstrumentBridge):
 
 	def _run(self):
 
+		self._apply_reconnect_policy()
+
+		# A panel builds itself from the first state it is given, so give it one immediately rather
+		# than after the first poll - or, for an instrument that is unreachable, never. Nothing is
+		# read from the instrument here: this is the driver's own state, every value of which reads
+		# as "never read" until something answers.
+		self._poll_and_emit(refresh=False)
+
 		last_poll = 0.0
 
 		while not self._stop_event.is_set():
@@ -193,13 +251,106 @@ class OwningBridge(InstrumentBridge):
 			except queue.Empty:
 				method_name = None
 
-			if method_name is not None:
+			if method_name == _BRIDGE_OP:
+				self._run_bridge_op(args[0])
+				last_poll = time.time()
+
+			elif method_name is not None:
 				self._execute(method_name, args, kwargs)
 				last_poll = time.time()
 
-			elif self.poll_enabled and time.time() - last_poll >= self.poll_interval_s:
-				self._poll_and_emit()
-				last_poll = time.time()
+			else:
+				now = time.time()
+
+				if self._should_reconnect(now):
+					self._reconnect(now)
+					last_poll = time.time()
+
+				elif self.poll_enabled and now - last_poll >= self.poll_interval_s:
+					self._poll_and_emit(ping=True)
+					last_poll = time.time()
+
+	# --- connection control ------------------------------------------------------------------
+	#
+	# Every one of these runs on the worker thread, queued behind any pending commands, like any
+	# other request - the driver is only ever touched from here.
+
+	def _enqueue_op(self, op):
+		self._queue.put((_BRIDGE_OP, (op,), {}))
+
+	def _run_bridge_op(self, op):
+
+		try:
+			op()
+		except Exception as e:
+			self.command_result.emit("bridge_operation", (), False, e)
+
+		self._poll_and_emit(refresh=self.poll_enabled)
+
+	def _apply_reconnect_policy(self):
+		''' The driver's own reconnect-on-use follows auto-reconnect, except while held offline. '''
+
+		policy = getattr(self.driver, "reconnect_policy", None)
+		if policy is not None:
+			policy.reconnect_on_use = bool(self.auto_reconnect and not self._held_offline)
+
+	def _should_reconnect(self, now:float) -> bool:
+
+		return (bool(self.auto_reconnect) and not self._held_offline
+			and not self.driver.online and not getattr(self.driver, "dummy", False)
+			and now - self._last_reconnect >= self.reconnect_interval_s)
+
+	def _reconnect(self, now:float):
+
+		self._last_reconnect = now
+
+		try:
+			ok = self.driver.connect()
+		except Exception:
+			ok = False
+
+		self._poll_and_emit(refresh=self.poll_enabled and bool(ok))
+
+	def connect_instrument(self):
+
+		def op():
+			self._held_offline = False
+			self._apply_reconnect_policy()
+			ok = self.driver.connect()
+			self.command_result.emit("connect", (), bool(ok), None)
+
+		self._enqueue_op(op)
+
+	def disconnect_instrument(self):
+
+		def op():
+			self._held_offline = True
+			self._apply_reconnect_policy()
+			try:
+				self.driver.close()
+			finally:
+				self.driver.online = False
+			self.command_result.emit("close", (), True, None)
+
+		self._enqueue_op(op)
+
+	def set_address(self, address:str):
+
+		address = str(address).strip()
+
+		def op():
+			self._held_offline = False
+			self.driver.set_address(address)
+			self._apply_reconnect_policy()
+			ok = self.driver.connect()
+			self.command_result.emit("set_address", (address,), bool(ok), None)
+
+		self._enqueue_op(op)
+
+	def set_auto_reconnect(self, enabled:bool):
+
+		self.auto_reconnect = bool(enabled)
+		self._enqueue_op(self._apply_reconnect_policy)
 
 	def _execute(self, method_name:str, args:tuple, kwargs:dict):
 
@@ -262,10 +413,23 @@ class OwningBridge(InstrumentBridge):
 		if command is not None:
 			self.last_scpi[method_name] = (command, getattr(relay, "last_response", None))
 
-	def _poll_and_emit(self, refresh:bool=True):
-		''' Emits the driver's state; with `refresh`, reads it from the instrument first. '''
+	def _poll_and_emit(self, refresh:bool=True, ping:bool=False):
+		''' Emits the driver's state; with `refresh`, reads it from the instrument first.
+
+		With `ping` (scheduled polls only, never after a command), a quick Driver.ping() comes
+		first: an instrument that has gone is noticed in about ping_timeout_s, and the refresh is
+		skipped instead of every getter waiting out the relay's full timeout. An offline driver is
+		never refreshed at all - there is nothing to read, and getting it back is _reconnect's job.
+		'''
 
 		try:
+			if refresh and ping and self.driver.online and not getattr(self.driver, "dummy", False):
+				if self.driver.ping(self.ping_timeout_s) is False:
+					refresh = False
+
+			if refresh and not self.driver.online:
+				refresh = False
+
 			state_dict = self.driver.poll() if refresh else self.driver.state_to_dict()
 			self.connection_changed.emit(self.driver.online)
 			# Reconstruct a fresh, independent InstrumentState object rather than emitting
@@ -280,7 +444,11 @@ class OwningBridge(InstrumentBridge):
 		# Read here, on the worker thread, after the poll has updated the relay's flags - never
 		# from the GUI thread, which would race this one over the driver.
 		try:
-			self.connection_state.emit(describe_connection(self.driver))
+			snapshot = describe_connection(self.driver)
+			snapshot.update(auto_reconnect=self.auto_reconnect, held_offline=self._held_offline,
+				polling=self.poll_enabled)
+			self.last_connection_state = snapshot
+			self.connection_state.emit(snapshot)
 		except Exception:
 			pass
 
@@ -351,6 +519,12 @@ class ObserverBridge(InstrumentBridge):
 		except Exception as e:
 			self.command_result.emit(method_name, args, False, e)
 
+	def _emit_observed(self, receiving:bool):
+
+		snapshot = _observer_connection(receiving, self)
+		self.last_connection_state = snapshot
+		self.connection_state.emit(snapshot)
+
 	def _run(self):
 
 		loop = asyncio.new_event_loop()
@@ -373,7 +547,7 @@ class ObserverBridge(InstrumentBridge):
 				return
 			self.connection_changed.emit(True)
 			self.state_changed.emit(from_serial_dict(state))
-			self.connection_state.emit(_observer_connection(True))
+			self._emit_observed(True)
 
 		client.on_state(_on_state)
 
@@ -381,7 +555,7 @@ class ObserverBridge(InstrumentBridge):
 			self._relay_client = await client.get_relay_agent(self.relay_id)
 		except Exception:
 			self.connection_changed.emit(False)
-			self.connection_state.emit(_observer_connection(False))
+			self._emit_observed(False)
 
 		while True:
 			await asyncio.sleep(1)
@@ -1029,7 +1203,7 @@ VERIFICATION_COLORS = {
 	"roundtrip":   "#5dade2",  # blue   - set/read-back agreed on real hardware, nobody watched
 	"untested":    "#f1c40f",  # yellow - implemented, never checked (or the check has expired)
 	"broken":      "#e74c3c",  # red    - checked against hardware and it did not work
-	"unavailable": "#4a4a4a",  # dark   - the hardware cannot do this; the control is disabled
+	"unavailable": "#e87fa6",  # pink   - the hardware cannot do this; the control is disabled
 	"unknown":     "#888888",  # grey   - no local driver to ask (an ObserverBridge)
 }
 
@@ -1044,9 +1218,15 @@ SEND_COLORS = {
 VALUE_COLORS = {
 	"match":       "#2ecc71",  # green  - read back and agrees within tolerance
 	"unqueried":   "#f1c40f",  # yellow - setpoint changed, no read-back since
+	"unknown":     "#888888",  # grey   - nothing has ever been read here (see below)
 	"mismatch":    "#888888",  # grey   - read back and does NOT agree
 	"query_error": "#e74c3c",  # red    - could not read the value at all
 }
+
+# `unknown` is separate from `unqueried` because a panel is drawn before the instrument has
+# answered anything - immediately, and even if the instrument never answers. Those cells hold no
+# reading at all, which is a different thing from a reading that is merely out of date, and the
+# icon style says so with a placeholder rather than a colour.
 
 # `mismatch` is deliberately GREY rather than red. An instrument quantizes: ask a scope for
 # 0.55 V/div and it will report 0.5, forever. That is the instrument working correctly, so
@@ -1073,6 +1253,7 @@ SEND_TEXT = {
 VALUE_TEXT = {
 	"match": "The instrument's value agrees with the setpoint.",
 	"unqueried": "The setpoint changed and nothing has been read back since.",
+	"unknown": "Nothing has been read from the instrument here yet - the panel was drawn before it answered.",
 	"mismatch": "The instrument answered, but with a different value. Usually the instrument snapping to its own grid rather than an error - compare the two numbers.",
 	"query_error": "The value could not be read at all.",
 }
@@ -1097,6 +1278,7 @@ SEND_SHORT = {
 VALUE_SHORT = {
 	"match": "Matches setpoint",
 	"unqueried": "Not read back yet",
+	"unknown": "Never read",
 	"mismatch": "Differs from setpoint",
 	"query_error": "Could not read",
 }
@@ -1229,35 +1411,121 @@ def _verification_key(entry:dict) -> tuple:
 
 	return "untested", note or "implemented, never checked against hardware"
 
-class StatusLamp(QWidget):
-	''' One coloured dot with a tooltip, clickable to open a parameter's detail window.
+class LampStyle:
+	''' How a Parameter* control draws its status lamps.
 
-	Painted rather than styled. An earlier version was a QLabel carrying a stylesheet with
-	`min-width`/`max-width` set to the dot's size - and Qt resolves a widget's stylesheet for its
-	tooltip window too, so the tooltip inherited an 11px width cap and rendered as a single
-	clipped letter. Painting the dot means the widget carries no stylesheet at all, so there is
-	nothing for the tooltip to inherit.
+	ICONS uses the artwork in assets/ (indicator_{v,up,down}_{colour}.png, plus indicator_idk.png
+	for a value nothing has read yet). PAINTED is the original coloured dot, drawn in code - still
+	the fallback whenever a style's artwork is missing, so a control is never an invisible gap.
+	'''
+
+	PAINTED = "painted"
+	ICONS = "icons"
+
+	ORDER = (ICONS, PAINTED)
+
+	LABELS = {ICONS: "Icons", PAINTED: "Dots"}
+
+DEFAULT_LAMP_STYLE = LampStyle.ICONS
+
+# Which artwork each lamp uses: the three lamps have their own shapes (verification, setpoint sent
+# "up", measurement received "down"), and each status picks a colour. None means the placeholder
+# indicator_idk.png - "nothing has been read here yet", which is not the same as a bad reading.
+_LAMP_ROLE_PREFIX = {"verification": "v", "send": "up", "value": "down"}
+
+LAMP_ICON_COLORS = {
+	"verification": {"confirmed": "green", "roundtrip": "blue", "untested": "yellow",
+		"broken": "red", "unavailable": "pink", "unknown": "grey"},
+	"send": {"sent": "green", "unsent": "yellow", "failed": "red"},
+	"value": {"match": "green", "unqueried": "yellow", "unknown": None, "mismatch": "grey",
+		"query_error": "red"},
+}
+
+_LAMP_PIXMAPS = {}
+
+def _lamp_pixmap(name:str, size:int, dpr:float):
+	''' One piece of lamp artwork, scaled and cached. None when there is no such file - the caller
+	falls back to the painted dot. '''
+
+	key = (name, size, round(dpr, 2))
+
+	if key not in _LAMP_PIXMAPS:
+		source = QtGui.QPixmap(os.path.join(ASSETS_DIR, f"{name}.png"))
+		if source.isNull():
+			_LAMP_PIXMAPS[key] = None
+		else:
+			pixmap = source.scaled(max(1, int(size * dpr)), max(1, int(size * dpr)),
+				Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+			pixmap.setDevicePixelRatio(dpr)
+			_LAMP_PIXMAPS[key] = pixmap
+
+	return _LAMP_PIXMAPS[key]
+
+class StatusLamp(QWidget):
+	''' One status indicator with a tooltip, clickable to open a parameter's detail window.
+
+	Two looks, chosen per control (or by DEFAULT_LAMP_STYLE): the packaged artwork, or a coloured
+	dot painted in code. The dot is also what is drawn whenever a style has no artwork for a
+	status, so a missing file costs the icon rather than the lamp.
+
+	The dot is painted rather than styled. An earlier version was a QLabel carrying a stylesheet
+	with `min-width`/`max-width` set to the dot's size - and Qt resolves a widget's stylesheet for
+	its tooltip window too, so the tooltip inherited an 11px width cap and rendered as a single
+	clipped letter. Painting means the widget carries no stylesheet at all.
 	'''
 
 	clicked = pyqtSignal()
 
-	def __init__(self, size:int=11, parent=None):
+	# Artwork needs more room than a dot to read at all; the dot keeps the size it was asked for.
+	ICON_SIZE_BONUS = 5
+
+	def __init__(self, size:int=11, role:str=None, style:str=None, parent=None):
 		super().__init__(parent)
 
 		self._size = size
+		self._role = role
+		self._style = style or DEFAULT_LAMP_STYLE
 		self._color = "#888888"
+		self._status = None
 
-		self.setFixedSize(size, size)
+		self._box = size + (self.ICON_SIZE_BONUS if self._style == LampStyle.ICONS and role else 0)
+		self.setFixedSize(self._box, self._box)
 		self.setCursor(QtGui.QCursor(Qt.CursorShape.PointingHandCursor))
 
 	@property
 	def color(self) -> str:
 		return self._color
 
-	def set(self, color:str, tooltip:str):
+	@property
+	def status(self):
+		return self._status
+
+	def set(self, color:str, tooltip:str, status:str=None):
 		self._color = color
+		self._status = status
 		self.setToolTip(tooltip)
 		self.update()
+
+	def icon_name(self):
+		''' The artwork this lamp would draw, or None when it falls back to the painted dot. '''
+
+		if self._style != LampStyle.ICONS or self._role is None or self._status is None:
+			return None
+
+		colors = LAMP_ICON_COLORS.get(self._role, {})
+		if self._status not in colors:
+			return None
+
+		colour = colors[self._status]
+
+		return "indicator_idk" if colour is None else f"indicator_{_LAMP_ROLE_PREFIX[self._role]}_{colour}"
+
+	def pixmap(self):
+		''' The artwork to draw, or None to paint a dot. '''
+
+		name = self.icon_name()
+
+		return None if name is None else _lamp_pixmap(name, self._box, self.devicePixelRatioF() or 1.0)
 
 	def mousePressEvent(self, event):
 		if event.button() == Qt.MouseButton.LeftButton:
@@ -1268,9 +1536,19 @@ class StatusLamp(QWidget):
 
 		painter = QtGui.QPainter(self)
 		painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-		painter.setBrush(QtGui.QBrush(QtGui.QColor(self._color)))
-		painter.setPen(Qt.PenStyle.NoPen)
-		painter.drawEllipse(0, 0, self._size - 1, self._size - 1)
+
+		pixmap = self.pixmap()
+
+		if pixmap is not None:
+			size = pixmap.size() / (pixmap.devicePixelRatio() or 1.0)
+			painter.drawPixmap(int((self.width() - size.width()) / 2),
+				int((self.height() - size.height()) / 2), pixmap)
+		else:
+			painter.setBrush(QtGui.QBrush(QtGui.QColor(self._color)))
+			painter.setPen(Qt.PenStyle.NoPen)
+			offset = (self._box - self._size) // 2
+			painter.drawEllipse(offset, offset, self._size - 1, self._size - 1)
+
 		painter.end()
 
 class IndicatorLight(QWidget):
@@ -1519,7 +1797,7 @@ class ParameterDetailDialog(QDialog):
 
 		for row, (key, name, colors, short, _long) in enumerate(LAMP_KINDS, start=1):
 
-			lamp = StatusLamp(13)
+			lamp = StatusLamp(13, role=key, style=control.lamp_style)
 			lamp.setCursor(QtGui.QCursor(Qt.CursorShape.ArrowCursor))
 
 			name_label = QLabel()
@@ -1536,9 +1814,9 @@ class ParameterDetailDialog(QDialog):
 
 			entries = {}
 			for i, (state, color) in enumerate(colors.items()):
-				dot = StatusLamp(9)
+				dot = StatusLamp(9, role=key, style=control.lamp_style)
 				dot.setCursor(QtGui.QCursor(Qt.CursorShape.ArrowCursor))
-				dot.set(color, "")
+				dot.set(color, "", state)
 				meaning = QLabel(short.get(state, state))
 				meaning.setTextFormat(Qt.TextFormat.RichText)
 				meaning.setToolTip(f"{state}: {_long.get(state, '')}")
@@ -1658,7 +1936,7 @@ class ParameterDetailDialog(QDialog):
 
 		tooltip = f"{name}: {state}\n{long_text.get(state, '')}" + (f"\n\n{extra}" if extra else "")
 
-		lamp.set(colors.get(state, "#888888"), tooltip)
+		lamp.set(colors.get(state, "#888888"), tooltip, state)
 		now.setText(f"<b>{_html(state)}</b>")
 		now.setToolTip(tooltip)
 
@@ -1698,7 +1976,7 @@ class _ParameterControlBase(_TrackedControlBase):
 			set_args:callable=None, get_method:str=None, get_args:tuple=(), unit:str="",
 			tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0,
 			view:str=ParameterView.COMPACT, edit_width:int=90,
-			prefixes=None, auto_prefix:bool=True):
+			prefixes=None, auto_prefix:bool=True, lamp_style:str=None):
 
 		super().__init__(bridge, label, get, set_method, set_args, stale_after_s)
 
@@ -1755,9 +2033,11 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		self.inline_label = QLabel(f"{label}:")
 
-		self.lamp_verification = StatusLamp()
-		self.lamp_send = StatusLamp()
-		self.lamp_value = StatusLamp()
+		self.lamp_style = lamp_style or DEFAULT_LAMP_STYLE
+
+		self.lamp_verification = StatusLamp(role="verification", style=self.lamp_style)
+		self.lamp_send = StatusLamp(role="send", style=self.lamp_style)
+		self.lamp_value = StatusLamp(role="value", style=self.lamp_style)
 
 		for lamp in (self.lamp_verification, self.lamp_send, self.lamp_value):
 			lamp.clicked.connect(self.show_details)
@@ -2327,7 +2607,12 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		if self.query_error or not self._online:
 			return "query_error"
-		if self._confirmed is None or self._awaiting_readback:
+		if self._confirmed is None:
+			# Waiting for a read-back the user asked for, versus never having had a reading at all:
+			# a panel is drawn before the instrument answers, and those cells are blanks rather
+			# than stale readings.
+			return "unqueried" if self._awaiting_readback else "unknown"
+		if self._awaiting_readback:
 			return "unqueried"
 		if self._setpoint is None or self._matches(self._confirmed, self._setpoint):
 			return "match"
@@ -2347,15 +2632,15 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		self.lamp_verification.set(VERIFICATION_COLORS.get(verification, "#888888"),
 			f"Verification: {verification}\n{VERIFICATION_TEXT.get(verification, '')}\n"
-			+ "\n".join(self.verification_lines) + hint)
+			+ "\n".join(self.verification_lines) + hint, verification)
 
 		self.lamp_send.set(SEND_COLORS[send],
 			f"Setpoint: {send}\n{SEND_TEXT[send]}\nsetpoint = {self._setpoint}"
-			+ (f"\n{self.send_error}" if self.send_error else "") + hint)
+			+ (f"\n{self.send_error}" if self.send_error else "") + hint, send)
 
 		self.lamp_value.set(VALUE_COLORS[value],
 			f"Measurement: {value}\n{VALUE_TEXT[value]}\nmeasured = {self._confirmed}"
-			+ (f"\n{self.query_error}" if self.query_error else "") + hint)
+			+ (f"\n{self.query_error}" if self.query_error else "") + hint, value)
 
 	def _display(self, confirmed_value, setpoint_value, status):
 
@@ -2411,10 +2696,11 @@ class ParameterBox(_ParameterControlBase):
 			set_args:callable=None, get_method:str=None, get_args:tuple=(), validator=None,
 			unit:str="", tolerance:float=0.01, abs_tolerance:float=0.0, stale_after_s:float=5.0,
 			view:str=ParameterView.COMPACT, edit_width:int=90, prefixes=None,
-			auto_prefix:bool=True, lcd:bool=True, lcd_digits:int=6):
+			auto_prefix:bool=True, lcd:bool=True, lcd_digits:int=6, lamp_style:str=None):
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args, unit,
-			tolerance, abs_tolerance, stale_after_s, view, edit_width, prefixes, auto_prefix)
+			tolerance, abs_tolerance, stale_after_s, view, edit_width, prefixes, auto_prefix,
+			lamp_style)
 
 		self.supports_lcd = True
 		self.lcd = bool(lcd)
@@ -2533,10 +2819,11 @@ class ParameterToggle(_ParameterControlBase):
 			set_args:callable=None, get_method:str=None, get_args:tuple=(),
 			on_text:str="Enabled", off_text:str="Disabled", stale_after_s:float=5.0,
 			view:str=ParameterView.COMPACT, edit_width:int=90,
-			on_pixmap=None, off_pixmap=None, indicator_size:int=22):
+			on_pixmap=None, off_pixmap=None, indicator_size:int=22, lamp_style:str=None):
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args,
-			unit="", stale_after_s=stale_after_s, view=view, edit_width=edit_width)
+			unit="", stale_after_s=stale_after_s, view=view, edit_width=edit_width,
+			lamp_style=lamp_style)
 
 		self.on_text = on_text
 		self.off_text = off_text
@@ -2608,12 +2895,13 @@ class ParameterChoice(_ParameterControlBase):
 	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str,
 			choices:list, set_args:callable=None, get_method:str=None, get_args:tuple=(),
 			labels:dict=None, stale_after_s:float=5.0, view:str=ParameterView.COMPACT,
-			edit_width:int=90):
+			edit_width:int=90, lamp_style:str=None):
 
 		self._labels = labels or {}
 
 		super().__init__(bridge, label, get, set_method, set_args, get_method, get_args,
-			unit="", stale_after_s=stale_after_s, view=view, edit_width=edit_width)
+			unit="", stale_after_s=stale_after_s, view=view, edit_width=edit_width,
+			lamp_style=lamp_style)
 
 		self._choices = list(choices)
 
@@ -2951,40 +3239,111 @@ class SaveTraceDialog(QDialog):
 		self.accept()
 
 class ConnectionInfoDialog(QDialog):
-	''' Where this panel's instrument actually is, and whether we can currently reach it.
+	''' Where this panel's instrument is, whether it can be reached, and controls to change that.
 
-	Static identity comes from the bridge (which knows its own addresses without touching a
-	Driver); live status is fetched through `bridge.request("connection_summary")`, so nothing
-	here reads driver state from the GUI thread while the worker thread is using it.
+	At the top, the status bar's connection chain drawn large with the labeled artwork, and a
+	tooltip on every node and link (host, addresses and ports, driver and model). Below it: the
+	instrument address, editable live; Connect and Disconnect; Auto-reconnect. Those act through the
+	bridge (connect_instrument() and friends), so the GUI thread never calls the Driver. An
+	ObserverBridge has no driver to control, so they are disabled for it.
+
+	The bridge's static identity (describe()) and the live connection_summary are under a folded
+	"Details" section.
 	'''
 
-	def __init__(self, bridge, title:str="", parent=None):
+	def __init__(self, bridge, title:str="", parent=None, on_settings_changed=None):
 		super().__init__(parent)
 
 		self.bridge = bridge
+		self._on_settings_changed = on_settings_changed
 
 		self.setWindowTitle(f"Connection info{' - ' + title if title else ''}")
-		self.setMinimumWidth(480)
+		self.setMinimumWidth(520)
 		install_window_shortcuts(self, on_close=self.reject)
 
 		layout = QVBoxLayout()
 
+		# --- the picture ---
+		self.infographic = None
+		if hasattr(bridge, "connection_state"):
+			self.infographic = ConnectionIndicator(bridge, title or "Instrument", height=80,
+				labels=True, detail_tooltips=True)
+			# Seeded from the bridge's latest report, so it is not blank until the next poll.
+			seed = getattr(bridge, "last_connection_state", None)
+			if seed:
+				self.infographic.set_connection_state(seed)
+			picture = QHBoxLayout()
+			picture.addStretch(1)
+			picture.addWidget(self.infographic)
+			picture.addStretch(1)
+			layout.addLayout(picture)
+
+		controllable = bool(getattr(bridge, "supports_connection_control", False))
+
+		# --- address ---
+		address_row = QHBoxLayout()
+		address_row.addWidget(QLabel("Address:"))
+		self.address_edit = QLineEdit(self._current_address())
+		self.address_edit.setPlaceholderText("e.g. TCPIP0::192.168.1.91::INSTR")
+		self.address_edit.returnPressed.connect(self._apply_address)
+		self.apply_address_button = QPushButton("Apply")
+		self.apply_address_button.setToolTip("Close the current connection and connect to this address.")
+		self.apply_address_button.clicked.connect(self._apply_address)
+		address_row.addWidget(self.address_edit, 1)
+		address_row.addWidget(self.apply_address_button)
+		layout.addLayout(address_row)
+
+		# --- connection controls ---
+		controls = QHBoxLayout()
+		self.connect_button = QPushButton("Connect")
+		self.connect_button.clicked.connect(lambda: self.bridge.connect_instrument())
+		self.disconnect_button = QPushButton("Disconnect")
+		self.disconnect_button.setToolTip("Close the connection and stay disconnected - auto-reconnect will not undo it.")
+		self.disconnect_button.clicked.connect(lambda: self.bridge.disconnect_instrument())
+		self.auto_reconnect_check = QCheckBox("Auto-reconnect")
+		self.auto_reconnect_check.setToolTip("While the instrument cannot be reached, try to reconnect every few seconds.")
+		self.auto_reconnect_check.setChecked(bool(getattr(bridge, "auto_reconnect", False)))
+		self.auto_reconnect_check.toggled.connect(self._on_auto_reconnect)
+		controls.addWidget(self.connect_button)
+		controls.addWidget(self.disconnect_button)
+		controls.addSpacing(12)
+		controls.addWidget(self.auto_reconnect_check)
+		controls.addStretch(1)
+		layout.addLayout(controls)
+
+		if not controllable:
+			reason = "Another process owns this instrument - it cannot be controlled from here."
+			for widget in (self.address_edit, self.apply_address_button, self.connect_button,
+					self.disconnect_button, self.auto_reconnect_check):
+				widget.setEnabled(False)
+				widget.setToolTip(reason)
+
+		# --- details, folded ---
 		self.identity = QLabel()
 		self.identity.setTextFormat(Qt.TextFormat.RichText)
 		self.identity.setWordWrap(True)
 		self.identity.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-		layout.addWidget(self.identity)
-
-		line = QFrame()
-		line.setFrameShape(QFrame.Shape.HLine)
-		layout.addWidget(line)
 
 		self.status = QLabel("Asking the instrument...")
 		self.status.setTextFormat(Qt.TextFormat.RichText)
 		self.status.setWordWrap(True)
 		self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-		layout.addWidget(self.status)
 
+		line = QFrame()
+		line.setFrameShape(QFrame.Shape.HLine)
+
+		details_layout = QVBoxLayout()
+		details_layout.setContentsMargins(0, 0, 0, 0)
+		details_layout.addWidget(self.identity)
+		details_layout.addWidget(line)
+		details_layout.addWidget(self.status)
+
+		self.details = CollapsiblePanel("Details", collapsed=True, fold=Qt.Orientation.Vertical)
+		self.details.set_content_layout(details_layout)
+		layout.addWidget(self.details)
+		layout.addStretch(1)
+
+		# --- buttons ---
 		buttons = QHBoxLayout()
 		refresh = QPushButton("Refresh")
 		refresh.clicked.connect(self.refresh)
@@ -3004,6 +3363,29 @@ class ConnectionInfoDialog(QDialog):
 		self._render_identity()
 		self.refresh()
 
+	def _current_address(self) -> str:
+
+		state = getattr(self.bridge, "last_connection_state", None) or {}
+		if state.get("address"):
+			return str(state["address"])
+
+		info = self.bridge.describe() if hasattr(self.bridge, "describe") else {}
+
+		# describe() annotates a networked address - "bench-1  (labmesh relay id)" - for display.
+		return str((info or {}).get("Address", "")).split("  (")[0]
+
+	def _apply_address(self):
+
+		address = self.address_edit.text().strip()
+		if address and getattr(self.bridge, "supports_connection_control", False):
+			self.bridge.set_address(address)
+
+	def _on_auto_reconnect(self, enabled:bool):
+
+		self.bridge.set_auto_reconnect(enabled)
+		if self._on_settings_changed is not None:
+			self._on_settings_changed()
+
 	def _render_identity(self):
 
 		rows = []
@@ -3016,6 +3398,10 @@ class ConnectionInfoDialog(QDialog):
 		self.bridge.request("connection_summary")
 
 	def _on_result(self, method_name, args, success, result):
+
+		if method_name == "set_address":
+			self._render_identity()
+			return
 
 		if method_name != "connection_summary":
 			return
@@ -3037,7 +3423,7 @@ class ConnectionInfoDialog(QDialog):
 # ============================================================================
 
 def describe_connection(driver) -> dict:
-	''' How `driver` reaches its instrument, as a snapshot for the status-bar indicator.
+	''' How `driver` reaches its instrument, as a snapshot for the connection indicator.
 
 	Plain attribute reads - no instrument I/O - so it is cheap enough to take after every poll.
 	Keys:
@@ -3048,12 +3434,24 @@ def describe_connection(driver) -> dict:
 	  error_kind         the relay's last RelayErrorKind, as its string value.
 	  verified           whether *IDN? matched the expected instrument, or None if never checked.
 	  diagnosis          connection_summary()'s one-line explanation.
+	  driver_class, address, idn, expected_idn, relay_class, online
+	                     identity, for the Connection Info window's tooltips.
+	  relay_id, remote_address, broker_address, broker_rpc, broker_xpub
+	                     network only: the labmesh relay id, the bench machine's own address for
+	                     the instrument, and the broker endpoints.
 	'''
 
 	relay = getattr(driver, "relay", None)
+	ident = getattr(driver, "id", None)
 
 	state = {"topology": "local", "interface": None, "link_online": None, "instrument_online": None,
-		"error_kind": None, "verified": getattr(driver, "verified_hardware", None), "diagnosis": ""}
+		"error_kind": None, "verified": getattr(driver, "verified_hardware", None), "diagnosis": "",
+		"driver_class": type(driver).__name__,
+		"address": str(getattr(driver, "address", "") or ""),
+		"idn": str(getattr(ident, "idn_model", "") or "") if ident is not None else "",
+		"expected_idn": str(getattr(driver, "expected_idn", "") or ""),
+		"relay_class": type(relay).__name__ if relay is not None else "",
+		"online": bool(getattr(driver, "online", False))}
 
 	if getattr(driver, "dummy", False):
 		state.update(topology="dummy", diagnosis="Simulated (dummy) - no instrument attached.")
@@ -3076,35 +3474,51 @@ def describe_connection(driver) -> dict:
 		state["topology"] = "network"
 		state["link_online"] = getattr(relay, "link_online", None)
 		state["instrument_online"] = getattr(relay, "instrument_online", None)
+		state["relay_id"] = state["address"]
+		state["remote_address"] = getattr(relay, "remote_address", None)
+		for key in ("broker_address", "broker_rpc", "broker_xpub"):
+			state[key] = getattr(relay, key, None)
 	else:
-		state["instrument_online"] = bool(getattr(driver, "online", False))
+		state["instrument_online"] = state["online"]
 
 	return state
 
-def _observer_connection(receiving:bool) -> dict:
+def _observer_connection(receiving:bool, bridge=None) -> dict:
 	''' The same shape for an ObserverBridge, which has no Driver: all it knows is whether state
 	broadcasts are arriving. The bench side is not in the broadcast, so it stays unknown. '''
 
-	return {"topology": "observer", "interface": None, "link_online": bool(receiving),
+	state = {"topology": "observer", "interface": None, "link_online": bool(receiving),
 		"instrument_online": None, "error_kind": None, "verified": None,
 		"diagnosis": "Receiving state broadcasts from the process that owns this instrument."
 			if receiving else "Cannot reach the process that owns this instrument."}
+
+	if bridge is not None:
+		state["relay_id"] = getattr(bridge, "relay_id", None)
+		for key in ("broker_address", "broker_rpc", "broker_xpub"):
+			state[key] = getattr(bridge, key, None)
+
+	return state
 
 # Buses with their own link artwork; anything else is drawn with the "other" icons.
 _ICON_BUSES = ("lan", "usb", "gpib")
 
 _BUS_NAMES = {"lan": "LAN", "usb": "USB", "gpib": "GPIB", "serial": "Serial", "other": "other"}
 
+def _online_word(value) -> str:
+	return "unknown" if value is None else ("online" if value else "offline")
+
 class ConnectionIndicator(QWidget):
-	''' One instrument's connection, drawn as a chain of icons in the status bar:
+	''' One instrument's connection, drawn as a chain of icons:
 
 		local:     client -- bus -- instrument
 		networked: client -- net -- relay -- bus -- instrument
 
-	Artwork is assets/{client,relay,instr}_{online,offline}.png for the nodes and
-	{net,lan,usb,gpib,other}_{link,break}.png for the connections. Every icon is scaled by ONE
-	factor (node height / NODE_ART_HEIGHT), so the set keeps the proportions it was drawn with - a
-	link is thinner than a node because the artwork says so.
+	Two sizes share this class. The status bar uses the label-free node artwork
+	(assets/{client,relay,instr}_{online,offline}_nl.png), small, with one summary tooltip. The
+	Connection Info window uses the labeled artwork (the same names without _nl), large, with a
+	tooltip on every node and link (`detail_tooltips`). Link artwork -
+	{net,lan,usb,gpib,other}_{link,break}.png - has one version. Every icon in a chain is scaled by
+	ONE factor (height / node artwork height), so the set keeps the proportions it was drawn with.
 
 	There is no artwork for "unknown", so the last-known icon is drawn faded. That covers: nothing
 	heard yet, the bench side of a broken network link, a dummy instrument, and a state older than
@@ -3114,21 +3528,29 @@ class ConnectionIndicator(QWidget):
 
 	clicked = pyqtSignal()
 
-	NODE_ART_HEIGHT = 250     # px - height of the node artwork every icon is scaled against
+	NODE_ART_HEIGHT = 250      # px - labeled node artwork
+	NL_NODE_ART_HEIGHT = 200   # px - label-free (*_nl) node artwork
 	FADED_OPACITY = 0.35
 
-	def __init__(self, bridge, title:str, height:int=24, stale_after_s:float=5.0, parent=None):
+	_NODE_PREFIXES = ("client_", "relay_", "instr_")
+
+	def __init__(self, bridge, title:str, height:int=24, stale_after_s:float=5.0, labels:bool=False,
+			detail_tooltips:bool=False, parent=None):
 		super().__init__(parent)
 
 		self.bridge = bridge
 		self.title = title
 		self.icon_height = height
 		self.stale_after_s = stale_after_s
+		self.labels = labels
+		self.detail_tooltips = detail_tooltips
 
 		self._state = None
 		self._received = 0.0
 		self._shown = None
 		self._pixmaps = {}
+		self._icon_labels = []
+		self._host = socket.gethostname()
 
 		self._layout = QHBoxLayout()
 		self._layout.setContentsMargins(4, 0, 4, 0)
@@ -3164,6 +3586,9 @@ class ConnectionIndicator(QWidget):
 	def is_stale(self) -> bool:
 		return self._state is None or (time.time() - self._received) > self.stale_window_s()
 
+	def _networked(self) -> bool:
+		return self._state is not None and self._state.get("topology") in ("network", "observer")
+
 	def icon_plan(self) -> list:
 		''' [(icon name, faded), ...] left to right - the whole decision, separate from drawing. '''
 
@@ -3177,7 +3602,7 @@ class ConnectionIndicator(QWidget):
 		interface = s.get("interface")
 		bus = interface if interface in _ICON_BUSES else "other"
 
-		if s.get("topology") in ("network", "observer"):
+		if self._networked():
 			link = s.get("link_online")
 			plan.append(("net_break" if link is False else "net_link", link is None or stale))
 			plan.append(("relay_offline" if link is False else "relay_online", link is None or stale))
@@ -3192,7 +3617,18 @@ class ConnectionIndicator(QWidget):
 
 		return plan
 
+	def element_roles(self) -> list:
+		''' What each icon in icon_plan() depicts, in the same order. '''
+
+		if self._networked():
+			return ["client", "net", "relay", "bus", "instr"]
+
+		return ["client", "bus", "instr"]
+
+	# --- words --------------------------------------------------------------------------------
+
 	def tooltip_text(self) -> str:
+		''' The one summary tooltip the small status-bar chain carries. '''
 
 		s = self._state
 		lines = [self.title]
@@ -3206,17 +3642,18 @@ class ConnectionIndicator(QWidget):
 			"observer": "Observing - another process owns this instrument.",
 			"dummy": "Simulated (dummy) - no instrument attached."}.get(topology, ""))
 
-		def word(value):
-			return "unknown" if value is None else ("online" if value else "offline")
-
 		if topology in ("network", "observer"):
-			lines.append(f"Link to relay: {word(s.get('link_online'))}")
+			lines.append(f"Link to relay: {_online_word(s.get('link_online'))}")
 		if topology != "dummy":
-			lines.append(f"Instrument: {word(s.get('instrument_online'))}")
+			lines.append(f"Instrument: {_online_word(s.get('instrument_online'))}")
 			if s.get("interface"):
 				lines.append(f"Bus: {_BUS_NAMES.get(s['interface'], s['interface'])}")
 			if s.get("verified") is False:
 				lines.append("Warning: *IDN? did not match the expected instrument.")
+			if s.get("held_offline"):
+				lines.append("Disconnected on request.")
+			elif s.get("instrument_online") is False and s.get("auto_reconnect"):
+				lines.append("Auto-reconnect is on - retrying.")
 			if s.get("diagnosis"):
 				lines.append(s["diagnosis"])
 
@@ -3226,6 +3663,72 @@ class ConnectionIndicator(QWidget):
 		lines.append("Click for connection details.")
 
 		return "\n".join(line for line in lines if line)
+
+	def element_tooltip(self, role:str) -> str:
+		''' The tooltip for one node or link in the large chain: what it is, and the details a
+		person would look for - host names, addresses and ports, driver and model. '''
+
+		s = self._state or {}
+		topology = s.get("topology")
+		lines = []
+
+		if role == "client":
+			lines = ["This computer", f"Host: {self._host}"]
+			lines.append("Runs this GUI. The instrument's driver runs elsewhere."
+				if topology == "observer" else "Runs this GUI and the instrument's driver.")
+
+		elif role == "net":
+			lines = ["labmesh network", f"Link: {_online_word(s.get('link_online'))}"]
+			for label, key in (("Broker", "broker_address"), ("RPC", "broker_rpc"),
+					("State feed", "broker_xpub"), ("Relay id", "relay_id")):
+				if s.get(key):
+					lines.append(f"{label}: {s[key]}")
+
+		elif role == "relay":
+			lines = ["Relay machine", f"Reachable: {_online_word(s.get('link_online'))}"]
+			if s.get("relay_id"):
+				lines.append(f"Relay id: {s['relay_id']}")
+			if s.get("remote_address"):
+				lines.append(f"Instrument address there: {s['remote_address']}")
+			if topology == "observer":
+				lines.append("Owned by another process - watched, not controlled.")
+
+		elif role == "bus":
+			if topology == "dummy":
+				lines = ["Simulated - no physical connection."]
+			else:
+				bus = _BUS_NAMES.get(s.get("interface") or "", "Unknown")
+				lines = [f"{bus} connection" if s.get("interface") else "Connection type not known"]
+				address = s.get("remote_address") if topology == "network" else s.get("address")
+				if address:
+					lines.append(f"Address: {address}")
+					lines += [f"{key}: {value}" for key, value in describe_resource(address).items()
+						if key != "Address"]
+				lines.append(f"Instrument answering: {_online_word(s.get('instrument_online'))}")
+				if s.get("error_kind") not in (None, "none"):
+					lines.append(f"Last error: {s['error_kind']}")
+
+		elif role == "instr":
+			lines = [s.get("driver_class") or "Instrument"]
+			if topology == "dummy":
+				lines.append("Simulated (dummy) - no instrument attached.")
+			else:
+				fields = [f.strip() for f in (s.get("idn") or "").split(",")]
+				if len(fields) >= 4:
+					lines += [f"Maker: {fields[0]}", f"Model: {fields[1]}", f"Serial: {fields[2]}",
+						f"Firmware: {fields[3]}"]
+				elif s.get("idn"):
+					lines.append(f"Identifies as: {s['idn']}")
+				else:
+					lines.append("Not identified yet.")
+				if s.get("verified") is False:
+					lines.append(f"Warning: not the expected instrument ('{s.get('expected_idn', '')}').")
+				lines.append(f"State: {_online_word(s.get('instrument_online'))}")
+
+		if self.is_stale() and topology not in (None, "dummy") and role != "client":
+			lines.append("(Not checked recently - shown faded.)")
+
+		return "\n".join(lines)
 
 	# --- drawing ------------------------------------------------------------------------------
 
@@ -3238,6 +3741,7 @@ class ConnectionIndicator(QWidget):
 				item = self._layout.takeAt(0)
 				if item.widget() is not None:
 					item.widget().deleteLater()
+			self._icon_labels = []
 			for name, faded in plan:
 				label = QLabel()
 				label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
@@ -3247,9 +3751,27 @@ class ConnectionIndicator(QWidget):
 				else:
 					label.setPixmap(pixmap)
 				self._layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
+				self._icon_labels.append(label)
 			self._shown = plan
 
-		self.setToolTip(self.tooltip_text())
+		if self.detail_tooltips:
+			# One tooltip per node and link; a widget-wide one would cover them all.
+			self.setToolTip("")
+			for label, role in zip(self._icon_labels, self.element_roles()):
+				label.setToolTip(self.element_tooltip(role))
+		else:
+			self.setToolTip(self.tooltip_text())
+
+	def _art_file(self, name:str) -> str:
+		''' The artwork file for an icon name: the label-free node version when drawing without
+		labels (if it exists), otherwise the labeled one. Links have a single version. '''
+
+		if not self.labels and name.startswith(self._NODE_PREFIXES):
+			label_free = os.path.join(ASSETS_DIR, f"{name}_nl.png")
+			if os.path.exists(label_free):
+				return label_free
+
+		return os.path.join(ASSETS_DIR, f"{name}.png")
 
 	def _pixmap(self, name:str, faded:bool):
 
@@ -3257,13 +3779,13 @@ class ConnectionIndicator(QWidget):
 		if key in self._pixmaps:
 			return self._pixmaps[key]
 
-		source = QtGui.QPixmap(os.path.join(ASSETS_DIR, f"{name}.png"))
+		source = QtGui.QPixmap(self._art_file(name))
 		if source.isNull():
 			self._pixmaps[key] = None
 			return None
 
 		# One scale factor for every icon, rendered at device resolution so it stays crisp on HiDPI.
-		scale = self.icon_height / self.NODE_ART_HEIGHT
+		scale = self.icon_height / (self.NODE_ART_HEIGHT if self.labels else self.NL_NODE_ART_HEIGHT)
 		dpr = self.devicePixelRatioF() or 1.0
 		w = max(1, round(source.width() * scale * dpr))
 		h = max(1, round(source.height() * scale * dpr))
@@ -3546,6 +4068,9 @@ class ConstellationWindow(QMainWindow):
 			except (ValueError, TypeError):
 				pass
 
+		if getattr(bridge, "supports_connection_control", False) and s.contains(f"{group}/auto_reconnect"):
+			bridge.auto_reconnect = s.value(f"{group}/auto_reconnect", type=bool)
+
 	def save_sync_settings(self, widget):
 		''' Remembers an instrument's current polling and auto-send settings. '''
 
@@ -3562,6 +4087,10 @@ class ConstellationWindow(QMainWindow):
 
 		s.setValue(f"{group}/auto_send_enabled", bool(widget.auto_send_enabled))
 		s.setValue(f"{group}/auto_send_interval_s", float(widget.auto_send_interval_s))
+
+		if getattr(bridge, "supports_connection_control", False):
+			s.setValue(f"{group}/auto_reconnect", bool(bridge.auto_reconnect))
+
 		s.sync()
 
 	def _add_connection_indicator(self, widget, bridge, title:str):
@@ -3836,7 +4365,9 @@ class ConstellationWindow(QMainWindow):
 
 	def _show_connection_info(self, bridge, title:str):
 
-		dialog = ConnectionInfoDialog(bridge, title=title, parent=self)
+		widget = next((w for w in self.instrument_widgets if w.bridge is bridge), None)
+		dialog = ConnectionInfoDialog(bridge, title=title, parent=self,
+			on_settings_changed=(lambda: self.save_sync_settings(widget)) if widget is not None else None)
 		dialog.show()
 
 		# Held on the window so it is not garbage collected the moment this method returns.

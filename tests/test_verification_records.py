@@ -233,7 +233,16 @@ def test_a_failure_is_not_outranked_into_silence(tmp_path):
 #                     actual SCPI behind a control. Epoch NOT bumped: the calls only assign two
 #                     strings, nothing on the I/O path reads them and nothing branches on them, so
 #                     no instrument can receive anything different. Pure observation.
-EXPECTED_FRAMEWORK_FINGERPRINT = "6e2d9683f7295b29"
+#   4bd1356682cfb761  2026-09-11: Driver._relay_attempt gained ReconnectPolicy.slow_failure_s - an
+#                     attempt that failed only after waiting out a timeout is no longer retried -
+#                     and the failure treatment now breaks the loop explicitly (it was previously
+#                     reachable only on the last attempt, where the loop ended by itself). Epoch
+#                     NOT bumped: both changes are on the FAILURE path only. A call that succeeds
+#                     sends and receives exactly what it did before, so no instrument on a working
+#                     connection can see any difference - and a verification record describes what
+#                     a method does on a working connection. What did change is that a failing
+#                     write is re-sent fewer times.
+EXPECTED_FRAMEWORK_FINGERPRINT = "4bd1356682cfb761"
 EXPECTED_EPOCH = 1
 
 def _record(status="confirmed", **kw):

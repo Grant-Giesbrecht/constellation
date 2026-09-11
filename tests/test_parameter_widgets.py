@@ -88,7 +88,7 @@ def test_lamps_start_in_the_honest_unknown_state(qt_app):
 	widget = _box(FakeBridge())
 
 	assert _color(widget.lamp_send) == SEND_COLORS["unsent"]
-	assert _color(widget.lamp_value) == VALUE_COLORS["unqueried"]
+	assert _color(widget.lamp_value) == VALUE_COLORS["unknown"]   # never read, not merely stale
 
 def test_a_successful_send_greens_only_the_send_lamp(qt_app):
 	""" The value lamp must not follow the send lamp: a command can be accepted by the instrument

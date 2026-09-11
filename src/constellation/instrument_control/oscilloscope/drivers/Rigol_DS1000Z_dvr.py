@@ -293,7 +293,10 @@ class RigolDS1000Z(Oscilloscope, MeasurementsMixin):
 					codes = self.query_binary(":WAV:DATA?", datatype='B')
 					chunk = [(code - yorigin - yref) * yincr for code in codes]
 				else:
-					data = self.query("WAV:DATA?")
+					# ASCII is bulkier than the binary block and just as slow, so it needs the same
+					# room: ordinary commands run on a short timeout.
+					with self.long_operation():
+						data = self.query("WAV:DATA?")
 					# Filter out empty/whitespace-only tokens - a trailing comma before the
 					# terminating newline otherwise leaves a bare '\n' token float() can't parse.
 					chunk = [float(v) for v in data[11:].split(",") if v.strip() != ""]

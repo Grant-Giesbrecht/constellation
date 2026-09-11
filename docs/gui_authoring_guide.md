@@ -176,6 +176,25 @@ dark=last-requested-OFF, grey=nothing requested yet) and a **status** light:
 | `mismatch` | confirmed value differs from what was requested (write failed, or something else changed it) | red |
 | `stale` | no `state_changed` received recently (bridge offline, or instrument unresponsive) | grey |
 
+### Lamp styles
+
+Lamps draw either the packaged artwork (`LampStyle.ICONS`, the default) or the original painted
+dots (`LampStyle.PAINTED`), set per control with `lamp_style=` or globally with
+`DEFAULT_LAMP_STYLE`. Artwork is `assets/indicator_{v,up,down}_{colour}.png` - one shape per lamp
+(verification, setpoint *up*, measurement *down*) and one colour per status, listed in
+`LAMP_ICON_COLORS`. A status with no artwork falls back to the painted dot, so a missing file costs
+the icon and not the lamp; a test lists any that are missing.
+
+Two things worth knowing about the colours:
+
+- **`unavailable` is pink**, not dark grey. Grey read as "off" rather than "this instrument cannot
+  do this".
+- **`indicator_idk.png` is the value lamp's "never read"** - the new `unknown` status, distinct
+  from `unqueried` ("you changed the setpoint, nothing has come back yet"). A panel is drawn as
+  soon as it is docked, before the instrument has answered anything, so its cells start as blanks
+  rather than as stale readings. The bridge emits one state immediately on starting to make that
+  possible - it reads nothing from the instrument, it is the driver's own state.
+
 This is implemented once, in `_TrackedControlBase._status()` (`src/constellation/ui.py`) - you
 don't reimplement it per category, only per control instance via the `get`/`set_method`/`set_args`
 you pass in.
@@ -458,6 +477,12 @@ to fold something away, and a child dragged to zero width just looks broken.
 Every `ConstellationWindow` has a status bar, with or without a menu bar. It holds a **Config**
 button that opens the sync settings for each docked instrument, applied immediately:
 
+Instrument timeouts follow the same idea: `DirectSCPIRelay` runs ordinary commands on
+`text_timeout_ms` (3 s - it is how quickly a lost instrument is noticed) and raises to
+`timeout_ms` (30 s) only inside `long_operation()`. Binary block transfers do that themselves;
+a driver wraps a slow *text* query in `Driver.long_operation()` - the scope's ASCII `:WAV:DATA?`
+read and the Keithley's `READ?` do.
+
 - **Poll instrument, every N s** - `bridge.set_polling(enabled, interval_s)`. On by default (2 s).
   With it off, the instrument is read only when a command runs, and a command no longer triggers a
   full refresh of every parameter - only the value it set is read back. An `ObserverBridge` has
@@ -484,10 +509,13 @@ work - `push_setpoints()` finds every `Parameter*` control on the panel itself.
 The status bar shows one chain of icons per instrument, left to right in the order they were
 added: `client -- bus -- instrument` for a local instrument, `client -- net -- relay -- bus --
 instrument` for one reached through a relay machine. Clicking a chain opens that instrument's
-Connection Info. Artwork lives in `assets/`: `{client,relay,instr}_{online,offline}.png` for the
-nodes and `{net,lan,usb,gpib,other}_{link,break}.png` for the connections. Every icon is scaled by
-**one** factor (node height ÷ `ConnectionIndicator.NODE_ART_HEIGHT`, 250 px), so the set keeps the
-proportions it was drawn with.
+Connection Info. Two sizes share `ConnectionIndicator`. The status bar draws the label-free node artwork
+(`assets/{client,relay,instr}_{online,offline}_nl.png`), small, with one summary tooltip. The
+Connection Info window draws the labeled node artwork (the same names without `_nl`), large, with
+a tooltip on every node and link (`detail_tooltips=True`). Link artwork,
+`{net,lan,usb,gpib,other}_{link,break}.png`, has one version. Every icon in a chain is scaled by
+**one** factor (height ÷ the node artwork's height: 250 px labeled, 200 px label-free), so the set
+keeps the proportions it was drawn with.
 
 What it draws comes from `bridge.connection_state`, a `describe_connection()` dict the bridge
 emits after every poll and command (an `ObserverBridge` emits on every broadcast):
@@ -505,6 +533,30 @@ emits after every poll and command (an `ObserverBridge` emits on every broadcast
 
 `ConnectionIndicator.icon_plan()` returns the `(icon, faded)` list and is the whole decision; the
 tests check it per state, and that every file any state can name exists.
+
+### Connection Info: control and recovery
+
+Clicking a chain opens **Connection Info**: the chain drawn large, then the instrument address
+(editable - Apply closes the connection and connects to the new one), **Connect**, **Disconnect**
+and **Auto-reconnect**. The bridge's `describe()` and the live `connection_summary` sit under a
+folded *Details* section. The controls call `bridge.connect_instrument()`,
+`disconnect_instrument()`, `set_address()` and `set_auto_reconnect()`, which run on the worker
+thread in order with every other request; an `ObserverBridge` has `supports_connection_control =
+False` and the window disables them.
+
+How the GUI notices a lost instrument, and gets it back:
+
+- **Before each scheduled poll** (never before a command) the bridge calls `Driver.ping()`: a
+  1.5 s `*IDN?` with no retries. Every SCPI instrument answers that at once, so silence means it
+  is gone - noticed in about one poll interval plus 1.5 s. The refresh is then skipped, rather than
+  every getter waiting out the relay's 30 s timeout, which has to stay that long for real waveform
+  and trace transfers. An offline driver is never refreshed at all.
+- **Auto-reconnect** (on by default in a GUI, remembered per instrument): while the instrument is
+  unreachable the bridge calls `connect()` every `reconnect_interval_s` (2 s), whether or not
+  polling is on, and sets the driver's `reconnect_on_use` to match. `DirectSCPIRelay` bounds each
+  attempt with a 2 s open timeout and closes the dead session first.
+- **Disconnect** holds the instrument offline - neither auto-reconnect nor reconnect-on-use
+  reopens it until Connect or a new address.
 
 ## The Instrument and View menus
 

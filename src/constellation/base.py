@@ -997,13 +997,19 @@ class ReconnectPolicy:
 		retry_pause_s (float): Seconds to wait between attempts.
 		reconnect_on_use (bool): When offline, attempt a full reconnect on the next call.
 		reconnect_cooldown_s (float): Minimum seconds between reconnect attempts.
+		slow_failure_s (float): An attempt that failed only after at least this long is not
+			retried. In-call retry is for the fast blip; a failure that took a whole timeout to
+			arrive is a lost instrument, and retrying it just multiplies the wait - three 10 s mesh
+			timeouts, or three VISA timeouts before a GUI notices an unplugged cable. None retries
+			regardless of how long the failure took.
 	'''
 
-	def __init__(self, retry_enabled:bool=True, num_retries:int=2, retry_pause_s:float=0.25, reconnect_on_use:bool=False, reconnect_cooldown_s:float=5.0):
+	def __init__(self, retry_enabled:bool=True, num_retries:int=2, retry_pause_s:float=0.25, reconnect_on_use:bool=False, reconnect_cooldown_s:float=5.0, slow_failure_s:float=1.0):
 
 		self.retry_enabled = retry_enabled
 		self.num_retries = num_retries
 		self.retry_pause_s = retry_pause_s
+		self.slow_failure_s = slow_failure_s
 
 		self.reconnect_on_use = reconnect_on_use
 		self.reconnect_cooldown_s = reconnect_cooldown_s
@@ -1019,7 +1025,7 @@ class ReconnectPolicy:
 	def __repr__(self):
 		return (f"ReconnectPolicy(retry_enabled={self.retry_enabled}, num_retries={self.num_retries}, "
 			f"retry_pause_s={self.retry_pause_s}, reconnect_on_use={self.reconnect_on_use}, "
-			f"reconnect_cooldown_s={self.reconnect_cooldown_s})")
+			f"reconnect_cooldown_s={self.reconnect_cooldown_s}, slow_failure_s={self.slow_failure_s})")
 
 # Template used by any Driver constructed without an explicit `reconnect_policy=`. Change its
 # fields at startup to shift the default for a whole application.
@@ -1357,12 +1363,25 @@ class Driver(ABC):
 				self.online = False
 				return
 			
-			# Check if instrument is online
-			_, rv = self.relay.query("*IDN?") # Note we don't call self.relay() to avoid an infinite loop
-			if len(rv) > 0:
-				self.online = True
-			else:
-				self.online = False
+			# Check if instrument is online. This runs straight after a failed call, so use the
+			# relay's quick probe where it has one: a plain *IDN? waits out the relay's full timeout
+			# (30 s on a VISA relay, sized for waveform transfers), which doubled the time taken to
+			# conclude that an unplugged instrument is gone. Relays that cannot probe fall back to
+			# *IDN?. Either way the relay is called directly, never self.query(), to avoid a loop.
+			try:
+				probe = getattr(self.relay, "probe", None)
+				alive = probe(1.5) if probe is not None else None
+			except Exception:
+				alive = None
+			
+			if alive is False and getattr(self.relay, "last_error_kind", None) == RelayErrorKind.INSTRUMENT:
+				alive = True   # a garbled reply still means something answered
+			
+			if alive is None:
+				_, rv = self.relay.query("*IDN?")
+				alive = len(rv) > 0
+			
+			self.online = bool(alive)
 			
 			self.debug(f">Driver.check_online()<: self.online --\\> {self.online}")
 	
@@ -1495,6 +1514,7 @@ class Driver(ABC):
 		for attempt in range(attempts):
 			
 			is_last = (attempt == attempts - 1)
+			started = time.time()
 			
 			try:
 				ok, value = call()
@@ -1521,15 +1541,23 @@ class Driver(ABC):
 				self.error(f"Cannot {operation} on instrument {self.address} - the call is not valid for this relay. ({reason})", detail="Not retried, and the connection is left untouched: this is a usage error, not a communication failure.")
 				return False, failure_value
 			
-			if not is_last:
+			# A failure that took a whole timeout to arrive is not the blip retry exists for -
+			# retrying it would only repeat the wait. See ReconnectPolicy.slow_failure_s.
+			elapsed = time.time() - started
+			slow = policy.slow_failure_s is not None and elapsed >= policy.slow_failure_s
+			if slow and not is_last:
+				self.debug(f"Not retrying {operation}: it failed only after >{elapsed:.1f}s<, so it is not a transient blip.")
+			
+			if not is_last and not slow:
 				self.debug(f"Attempt >{attempt+1}</>{attempts}< to {operation} failed (>:q{kind.value}<: {reason}). Retrying in >{policy.retry_pause_s}s<.")
 				if policy.retry_pause_s > 0:
 					time.sleep(policy.retry_pause_s)
 				continue
 			
 			# Final attempt failed - now it counts.
-			if attempts > 1:
-				self.error(f"Failed to {operation} on instrument {self.address} after >{attempts}< attempts. (>:q{kind.value}<: {reason})")
+			tried = attempt + 1
+			if tried > 1:
+				self.error(f"Failed to {operation} on instrument {self.address} after >{tried}< attempts. (>:q{kind.value}<: {reason})")
 			else:
 				self.error(f"Failed to {operation} on instrument {self.address}. (>:q{kind.value}<: {reason})")
 			
@@ -1542,6 +1570,8 @@ class Driver(ABC):
 			else:
 				self.online = False
 				self.check_online()
+			
+			break
 		
 		return False, failure_value
 	
@@ -2013,6 +2043,75 @@ class Driver(ABC):
 		
 		# Apply to state
 		return self.load_state_dict(in_dict)
+	
+	def long_operation(self):
+		''' Context manager for a call that is legitimately slow, so the relay allows it more time.
+		
+		Ordinary commands use a short timeout - that is how quickly a lost instrument is noticed -
+		but a full-memory waveform or trace read can take tens of seconds and must not be cut off.
+		Binary block transfers raise the timeout themselves; wrap a slow *text* query in this:
+		
+			with self.long_operation():
+				data = self.query(":WAV:DATA?")
+		
+		Returns:
+			A context manager. Relays that have no timeout to raise return a no-op one.
+		'''
+		
+		return self.relay.long_operation()
+	
+	def ping(self, timeout_s:float=1.5):
+		''' A quick "is the instrument still there?" check, with a short timeout and no retries.
+		
+		The ordinary path is slow to notice a lost instrument: a relay's normal timeout has to
+		cover the slowest legitimate transfer (a long waveform or trace read), so the first query
+		to an unplugged instrument can wait that long. A GUI calls this before each scheduled poll,
+		so a lost instrument is noticed in about `timeout_s` and the poll is skipped rather than
+		every getter waiting out a timeout.
+		
+		Returns:
+			bool|None: True if the instrument answered; False if it did not, in which case the
+				driver is marked offline; None if this relay has no way to probe.
+		'''
+		
+		if self.dummy:
+			return True
+		
+		if not self.online:
+			return False
+		
+		probe = getattr(self.relay, "probe", None)
+		if probe is None:
+			return None
+		
+		try:
+			alive = probe(timeout_s)
+		except Exception as e:
+			self.relay.note_failure(e)
+			alive = False
+		
+		if alive is False:
+			# Same rule as an ordinary failed call: a garbled reply means the instrument is there.
+			if getattr(self.relay, "last_error_kind", None) == RelayErrorKind.INSTRUMENT:
+				return True
+			self.warning(f"Instrument at >{self.address}< did not answer a liveness check - marking it offline.")
+			self.online = False
+		
+		return alive
+	
+	def set_address(self, address:str) -> None:
+		''' Points the driver at a different instrument address. Closes the current connection
+		first; call connect() afterwards to open the new one. '''
+		
+		try:
+			self.close()
+		except Exception as e:
+			self.warning(f"Closing >{self.address}< before changing address failed. ({e})")
+		
+		self.online = False
+		self.address = address
+		self.id.address = address
+		self.relay.configure(address, self.log)
 	
 	def restore_and_apply_state(self, filename:str) -> bool:
 		''' Loads a state from file and sends it to the instrument, as one operation.
