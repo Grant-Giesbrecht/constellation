@@ -161,3 +161,145 @@ def test_waiting_for_a_readback_is_not_the_same_as_never_having_had_one(qt_app):
 
 	assert widget.value_status() == "unqueried"
 	assert widget.lamp_value.icon_name() == "indicator_down_yellow"
+
+# --- how the lamps are arranged, per style ------------------------------------------------------
+
+def test_painted_dots_stack_beside_the_rows(qt_app):
+	""" Small enough to sit in a column next to the field they annotate. """
+
+	control = _box(lamp_style=LampStyle.PAINTED)
+
+	assert control.lamps_vertical()
+	assert control.lamp_value._box == 11
+
+def test_icons_sit_in_a_row_and_match_the_toggle_indicator(qt_app):
+	""" Three stacked would make a control three lamps tall, and the artwork needs the same room as
+	a ParameterToggle's indicator so every indicator on a panel is one size. """
+
+	from constellation.ui import ParameterToggle
+
+	control = _box(lamp_style=LampStyle.ICONS)
+	toggle = ParameterToggle(FakeBridge(), "Output", get=lambda s: s.value, set_method="set_output_enable")
+
+	assert not control.lamps_vertical()          # compact: a row
+	assert control.lamp_value._box == 22 == toggle.indicator._size
+
+def test_icon_lamps_line_up_horizontally(qt_app):
+
+	control = _box(lamp_style=LampStyle.ICONS, view=ParameterView.COMPACT)
+	control.show()
+	qt_app.processEvents()
+
+	lamps = control.visible_lamps()
+	assert len({lamp.geometry().top() for lamp in lamps}) == 1        # one row
+	assert len({lamp.geometry().left() for lamp in lamps}) == len(lamps)
+
+	control.hide()
+
+def test_painted_lamps_line_up_vertically(qt_app):
+
+	control = _box(lamp_style=LampStyle.PAINTED, view=ParameterView.FULL)
+	control.show()
+	qt_app.processEvents()
+
+	lamps = control.visible_lamps()
+	assert len({lamp.geometry().left() for lamp in lamps}) == 1       # one column
+	assert len({lamp.geometry().top() for lamp in lamps}) == len(lamps)
+
+	control.hide()
+
+# --- the minimal density ------------------------------------------------------------------------
+
+def test_minimal_shows_only_the_measurement_lamp(qt_app):
+	""" The one question a panel is watched for: does the instrument agree with what it was asked. """
+
+	control = _box(view=ParameterView.MINIMAL)
+
+	assert control.visible_lamps() == [control.lamp_value]
+
+def test_minimal_keeps_the_inline_label(qt_app):
+	""" There is no title in either compact view, so the field needs its name beside it. """
+
+	control = _box(view=ParameterView.MINIMAL)
+
+	assert control.show_inline_label()
+	assert not control.show_sp_icon()
+
+def test_a_minimal_toggle_still_says_what_it_is(qt_app):
+
+	from constellation.ui import ParameterToggle
+
+	toggle = ParameterToggle(FakeBridge(), "Output 1", get=lambda s: s.value,
+		set_method="set_output_enable", view=ParameterView.MINIMAL)
+
+	assert toggle.button.text() == "Output 1"
+
+def test_the_densities_run_least_to_most(qt_app):
+
+	assert ParameterView.ORDER == (ParameterView.MINIMAL, ParameterView.COMPACT, ParameterView.FULL)
+	assert ParameterView.LABELS[ParameterView.MINIMAL] == "Minimal"
+
+def test_switching_down_to_minimal_in_place(qt_app):
+
+	control = _box(view=ParameterView.FULL)
+	control.set_view(ParameterView.MINIMAL)
+
+	assert control.view == ParameterView.MINIMAL
+	assert control.visible_lamps() == [control.lamp_value]
+
+
+# --- which way the lamps run --------------------------------------------------------------------
+
+@pytest.mark.parametrize("view,vertical", [
+	(ParameterView.FULL, True),        # already three rows tall - a column keeps each lamp beside
+	(ParameterView.COMPACT, False),    # ...its rows. One row of fields: the lamps go beside it.
+	(ParameterView.MINIMAL, False),
+])
+def test_icons_stack_only_in_the_full_view(qt_app, view, vertical):
+
+	assert _box(lamp_style=LampStyle.ICONS, view=view).lamps_vertical() is vertical
+
+@pytest.mark.parametrize("view", list(ParameterView.ORDER))
+def test_painted_dots_stack_in_every_view(qt_app, view):
+	""" Small enough that a column never makes a control taller than its rows. """
+
+	assert _box(lamp_style=LampStyle.PAINTED, view=view).lamps_vertical() is True
+
+def test_icon_lamps_stack_in_the_full_view(qt_app):
+
+	control = _box(lamp_style=LampStyle.ICONS, view=ParameterView.FULL)
+	control.show()
+	qt_app.processEvents()
+
+	lamps = control.visible_lamps()
+
+	assert len({lamp.geometry().left() for lamp in lamps}) == 1       # one column
+	assert len({lamp.geometry().top() for lamp in lamps}) == len(lamps)
+
+	control.hide()
+
+def test_switching_density_re_orients_the_lamps(qt_app):
+	""" The container itself changes between a column and a row, so the switch has to survive
+	being made live - which is how a user meets it, by clicking a lamp. """
+
+	control = _box(lamp_style=LampStyle.ICONS, view=ParameterView.COMPACT)
+	control.show()
+	qt_app.processEvents()
+
+	assert len({lamp.geometry().top() for lamp in control.visible_lamps()}) == 1
+
+	control.set_view(ParameterView.FULL)
+	qt_app.processEvents()
+
+	lamps = control.visible_lamps()
+	assert control.lamps_vertical()
+	assert len({lamp.geometry().left() for lamp in lamps}) == 1
+	assert len({lamp.geometry().top() for lamp in lamps}) == len(lamps)
+
+	control.set_view(ParameterView.MINIMAL)
+	qt_app.processEvents()
+
+	assert not control.lamps_vertical()
+	assert control.visible_lamps() == [control.lamp_value]
+
+	control.hide()

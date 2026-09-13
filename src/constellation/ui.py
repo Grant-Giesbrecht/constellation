@@ -1177,6 +1177,9 @@ class ParameterView:
 	FULL:    title, setpoint row, measured row, three lamps (verification, sent, measured).
 	COMPACT: inline label, setpoint row, two lamps (sent, measured). The default, and what the
 	         category widgets use.
+	MINIMAL: inline label, setpoint row, one lamp - the measurement. The least a control can show
+	         and still answer the question a panel is watched for: does the instrument agree with
+	         what it was asked for. Everything else is one click away in the detail window.
 
 	COMPACT deliberately drops the *verification* lamp rather than one of the runtime lamps.
 	Verification is a fixed property of the driver and the records - it cannot change while a
@@ -1188,12 +1191,15 @@ class ParameterView:
 
 	FULL = "full"
 	COMPACT = "compact"
+	MINIMAL = "minimal"
 
-	ORDER = (COMPACT, FULL)
+	# Least to most detail - the order the density dropdown and the View menu offer them in.
+	ORDER = (MINIMAL, COMPACT, FULL)
 
 	LABELS = {
 		FULL: "Full",
 		COMPACT: "Compact",
+		MINIMAL: "Minimal",
 	}
 
 # Verification: can this driver method be trusted? Sourced from the hardware-verification records
@@ -1476,10 +1482,10 @@ class StatusLamp(QWidget):
 
 	clicked = pyqtSignal()
 
-	# Artwork needs more room than a dot to read at all; the dot keeps the size it was asked for.
-	ICON_SIZE_BONUS = 5
-
-	def __init__(self, size:int=11, role:str=None, style:str=None, parent=None):
+	def __init__(self, size:int=11, role:str=None, style:str=None, icon_size:int=22, parent=None):
+		''' `size` is the painted dot; `icon_size` is the artwork, which needs far more room to
+		read and defaults to the size of a ParameterToggle's indicator, so every indicator on a
+		panel is the same size. '''
 		super().__init__(parent)
 
 		self._size = size
@@ -1488,7 +1494,7 @@ class StatusLamp(QWidget):
 		self._color = "#888888"
 		self._status = None
 
-		self._box = size + (self.ICON_SIZE_BONUS if self._style == LampStyle.ICONS and role else 0)
+		self._box = icon_size if (self._style == LampStyle.ICONS and role) else size
 		self.setFixedSize(self._box, self._box)
 		self.setCursor(QtGui.QCursor(Qt.CursorShape.PointingHandCursor))
 
@@ -1814,7 +1820,7 @@ class ParameterDetailDialog(QDialog):
 
 			entries = {}
 			for i, (state, color) in enumerate(colors.items()):
-				dot = StatusLamp(9, role=key, style=control.lamp_style)
+				dot = StatusLamp(9, role=key, style=control.lamp_style, icon_size=14)
 				dot.setCursor(QtGui.QCursor(Qt.CursorShape.ArrowCursor))
 				dot.set(color, "", state)
 				meaning = QLabel(short.get(state, state))
@@ -2216,8 +2222,15 @@ class _ParameterControlBase(_TrackedControlBase):
 		self._pv_row = QHBoxLayout()
 		self._pv_row.setSpacing(4)
 
-		self._lamp_column = QVBoxLayout()
-		self._lamp_column.setSpacing(3)
+		# Which way the lamps run depends on the view as well as the style (see lamps_vertical()),
+		# so BOTH containers are built here and _apply_view() points _lamp_column at the one it
+		# needs. Built once, like every other layout in this skeleton: a density switch moves
+		# existing widgets between existing containers rather than churning Qt's widget tree.
+		self._lamp_col_vertical = QVBoxLayout()
+		self._lamp_col_vertical.setSpacing(3)
+		self._lamp_col_horizontal = QHBoxLayout()
+		self._lamp_col_horizontal.setSpacing(3)
+		self._lamp_column = self._lamp_col_vertical
 
 		self._apply_view()
 
@@ -2258,7 +2271,19 @@ class _ParameterControlBase(_TrackedControlBase):
 		return self.view == ParameterView.FULL
 
 	def show_inline_label(self) -> bool:
-		return self.view == ParameterView.COMPACT
+		# Neither compact view has a title, so the label goes inline with the field.
+		return self.view in (ParameterView.COMPACT, ParameterView.MINIMAL)
+
+	def lamps_vertical(self) -> bool:
+		''' Whether the lamps stack in a column beside the rows, or run in a row.
+
+		Painted dots are small enough to stack in every view. The artwork is twice the size, so in
+		the compact views it runs in a row - three stacked would make a one-row control three lamps
+		tall. The full view is already three rows tall, and there a column keeps each lamp beside
+		the rows it describes.
+		'''
+
+		return self.lamp_style != LampStyle.ICONS or self.view == ParameterView.FULL
 
 	def visible_lamps(self) -> list:
 		''' Which lamps this density shows. See ParameterView for why compact drops the
@@ -2266,6 +2291,9 @@ class _ParameterControlBase(_TrackedControlBase):
 
 		if self.view == ParameterView.FULL:
 			return [self.lamp_verification, self.lamp_send, self.lamp_value]
+
+		if self.view == ParameterView.MINIMAL:
+			return [self.lamp_value]
 
 		return [self.lamp_send, self.lamp_value]
 
@@ -2294,7 +2322,8 @@ class _ParameterControlBase(_TrackedControlBase):
 		# Empty every layout, keeping the layouts themselves. takeAt() detaches an item without
 		# touching the widget's parent, so nothing is created or destroyed here - the widgets are
 		# simply re-placed.
-		for layout in (self._sp_row, self._pv_row, self._lamp_column, self._rows, self._body, self._root):
+		for layout in (self._sp_row, self._pv_row, self._lamp_col_vertical, self._lamp_col_horizontal,
+				self._rows, self._body, self._root):
 			_drain_layout(layout)
 
 		for widget in self._managed_widgets():
@@ -2350,16 +2379,26 @@ class _ParameterControlBase(_TrackedControlBase):
 			self._rows.addLayout(self._pv_row)
 
 		# --- lamps ---
-		# Stretch on BOTH sides centres the lamp column against the rows it annotates. With a
-		# stretch only underneath, the lamps rode the top of whatever cell the control was placed
-		# in and drifted away from the control they describe as soon as the row got taller.
-		self._lamp_column.addStretch(1)
+		# A column or a row, per lamps_vertical() - both already exist, and both were emptied above.
+		vertical = self.lamps_vertical()
+		self._lamp_column = self._lamp_col_vertical if vertical else self._lamp_col_horizontal
+
+		# Stretch on BOTH sides centres a lamp COLUMN against the rows it annotates. With a stretch
+		# only underneath, the lamps rode the top of whatever cell the control was placed in and
+		# drifted away from the control they describe as soon as the row got taller. A lamp ROW is
+		# centred per widget instead, since the layout itself is already the height of the rows.
+		if vertical:
+			self._lamp_column.addStretch(1)
 
 		for lamp in self.visible_lamps():
 			lamp.setVisible(True)
-			self._lamp_column.addWidget(lamp)
+			if vertical:
+				self._lamp_column.addWidget(lamp)
+			else:
+				self._lamp_column.addWidget(lamp, 0, Qt.AlignmentFlag.AlignVCenter)
 
-		self._lamp_column.addStretch(1)
+		if vertical:
+			self._lamp_column.addStretch(1)
 
 		self._body.addLayout(self._rows)
 		self._body.addLayout(self._lamp_column)
@@ -2858,8 +2897,8 @@ class ParameterToggle(_ParameterControlBase):
 
 	def _button_text(self, checked:bool) -> str:
 
-		if self.view == ParameterView.COMPACT:
-			return self.label
+		if self.view != ParameterView.FULL:
+			return self.label   # no title in the compact views, so the button carries the name
 
 		return self.on_text if checked else self.off_text
 
@@ -3933,6 +3972,8 @@ def add_view_arguments(parser):
 		help="Show every control in the full view (title, setpoint and measured rows, three lamps).")
 	group.add_argument("--compact", dest="parameter_view", action="store_const", const=ParameterView.COMPACT,
 		help="Show every control in the compact view (one row, two lamps).")
+	group.add_argument("--minimal", dest="parameter_view", action="store_const", const=ParameterView.MINIMAL,
+		help="Show every control in the minimal view (one row, one lamp - the measurement).")
 
 	return parser
 
@@ -4263,7 +4304,7 @@ class ConstellationWindow(QMainWindow):
 
 		menu.clear()
 
-		for view in (ParameterView.FULL, ParameterView.COMPACT):
+		for view in reversed(ParameterView.ORDER):
 			action = QAction(f"All Controls: {ParameterView.LABELS[view]}", self)
 			action.triggered.connect(lambda checked=False, view=view: self.set_parameter_view(view))
 			menu.addAction(action)
@@ -4282,7 +4323,7 @@ class ConstellationWindow(QMainWindow):
 
 			sub = menu.addMenu(title)
 
-			for view in (ParameterView.FULL, ParameterView.COMPACT):
+			for view in reversed(ParameterView.ORDER):
 				action = QAction(f"Controls: {ParameterView.LABELS[view]}", self)
 				action.triggered.connect(lambda checked=False, widget=widget, view=view: widget.set_parameter_view(view))
 				sub.addAction(action)

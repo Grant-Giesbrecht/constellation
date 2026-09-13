@@ -230,3 +230,27 @@ def test_apply_to_similar_is_disabled_when_there_is_nothing_similar(qt_app):
 	assert not lone._dialog.similar_button.isEnabled()
 
 	lone._dialog.close()
+
+# --- the minimal density is offered everywhere ---------------------------------------------------
+
+def test_the_flag_offers_minimal_too():
+
+	args = add_view_arguments(argparse.ArgumentParser()).parse_args(["--minimal"])
+
+	assert view_from_arguments(args) == ParameterView.MINIMAL
+
+def test_the_view_menu_offers_every_density(qt_app, log):
+
+	window = ConstellationWindow(log)
+	widget = _awg_panel(window, log)
+	window._rebuild_instrument_menu()
+
+	actions = {a.text(): a for a in window.view_menu.actions()}
+
+	assert "All Controls: Minimal" in actions
+	assert [t for t in actions if t.startswith("All Controls")] == [
+		"All Controls: Full", "All Controls: Compact", "All Controls: Minimal"]
+
+	actions["All Controls: Minimal"].trigger()
+
+	assert _views(widget) == {ParameterView.MINIMAL}

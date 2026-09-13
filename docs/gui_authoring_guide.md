@@ -182,7 +182,16 @@ Lamps draw either the packaged artwork (`LampStyle.ICONS`, the default) or the o
 dots (`LampStyle.PAINTED`), set per control with `lamp_style=` or globally with
 `DEFAULT_LAMP_STYLE`. Artwork is `assets/indicator_{v,up,down}_{colour}.png` - one shape per lamp
 (verification, setpoint *up*, measurement *down*) and one colour per status, listed in
-`LAMP_ICON_COLORS`. A status with no artwork falls back to the painted dot, so a missing file costs
+`LAMP_ICON_COLORS`.
+
+The two styles are arranged differently, because their sizes differ by a factor of two, and
+`lamps_vertical()` is the whole rule. **Painted dots** (11 px) stack in a column in every view.
+**Icons** are drawn at 22 px - the same size as a `ParameterToggle`'s indicator, so every indicator
+on a panel matches - and run in a **row** in the compact views, where three stacked would make a
+one-row control three lamps tall. In the **full** view they stack like the dots: that view is
+already three rows tall, and a column keeps each lamp beside the rows it describes. The container
+swaps between a column and a row when a control's density changes, so it holds up under a live
+switch. A status with no artwork falls back to the painted dot, so a missing file costs
 the icon and not the lamp; a test lists any that are missing.
 
 Two things worth knowing about the colours:
@@ -255,18 +264,21 @@ poll silently replaced half-typed text with the last known value, and a field si
 
 ### Density: `ParameterView`
 
-The same control renders at two densities, set per control and changeable live:
+The same control renders at three densities, set per control and changeable live:
 
 ```
-FULL                              COMPACT
+FULL                              COMPACT                    MINIMAL
   Parameter Name
-◀SP [ 0.55  ] V    ● ● ●          Name: [ 0.55 ] V   ● ●
+◀SP [ 0.55  ] V    ● ● ●          Name: [ 0.55 ] V   ● ●     Name: [ 0.55 ] V   ●
 PV▶ [ 0.5   ] V
 ```
 
 - **`ParameterView.FULL`** — title, setpoint row, measured row, three lamps.
 - **`ParameterView.COMPACT`** — the default, and what the category GUIs use. Inline label,
   setpoint row, two lamps.
+- **`ParameterView.MINIMAL`** — inline label, setpoint row, one lamp: the **measurement**. The
+  least a control can show and still answer what a panel is watched for — does the instrument
+  agree with what it was asked for. `--minimal` and the View menu offer it alongside the others.
 
 COMPACT drops the **verification** lamp, not one of the runtime lamps. Verification is a fixed
 property of the driver and its records — it cannot change while a panel is open, so it is reference

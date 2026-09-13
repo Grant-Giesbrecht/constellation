@@ -361,4 +361,4 @@ def test_with_no_panels_the_view_menu_still_offers_control_density(qt_app, log):
 	window = ConstellationWindow(log)
 	texts = [a.text() for a in window.view_menu.actions() if not a.isSeparator()]
 
-	assert texts == ["All Controls: Full", "All Controls: Compact"]
+	assert texts == ["All Controls: Full", "All Controls: Compact", "All Controls: Minimal"]

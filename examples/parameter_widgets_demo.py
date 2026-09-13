@@ -150,6 +150,7 @@ layout.addWidget(build_fault_buttons(bridge, panel))
 # The same controls, same bridge, at the two shorter densities. Click a lamp on any of them to
 # change that control's density in place.
 layout.addWidget(build_panel(bridge, "COMPACT - the default, and what the category GUIs use", ParameterView.COMPACT))
+layout.addWidget(build_panel(bridge, "MINIMAL - one lamp: does the instrument agree with what it was asked?", ParameterView.MINIMAL))
 
 # A DS1000E: the timebase controls are genuinely impossible over SCPI on this instrument, so they
 # come up dark and disabled rather than raising FeatureUnavailable when clicked.
