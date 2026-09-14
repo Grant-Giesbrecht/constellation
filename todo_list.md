@@ -1109,8 +1109,8 @@ default.
 - [ ] Decide (a)/(b)/(c) above.
 - [ ] Then: delete `DataEntry` and `Driver.data` (~15 lines) if the answer is (a) or (b).
 - [ ] Then: audit `is_data` labelling for consistency — it is currently wrong in at least one
-      place. `PowerSupplyChannelState.voltage_meas`/`current_meas` are measurements and are **not**
-      flagged, while `DAQ.last_value_V` is. Whatever the rule turns out to be, the labels have to
+      place. `PowerSupplyChannelState.voltage_meas`/`current_meas` were measurements **not**
+      flagged (fixed 2026-09-14, along with the new `power_meas`), while `DAQ.last_value_V` is. Whatever the rule turns out to be, the labels have to
       agree with it before they can drive behavior. *confirmed*
 - [ ] Then: resolve `include_data` (item immediately below) as part of the same change.
 
@@ -1706,12 +1706,15 @@ is per-method, per-model, perishable and re-checkable. Recorded as data in the r
       probes a few plausible names and reports the format unavailable (shown greyed, with the
       reason, rather than hidden) until one exists. Wire it up there; a test asserts it is still
       missing, so it will fail loudly once TOME arrives.
-- [ ] **Roll `Parameter*` and `CollapsiblePanel` into `power_supply_gui.py`**, which still uses
-      `Tracked*` and `QGroupBox`. Its measured
-      voltage/current labels are a good test of whether a read-only variant is worth adding.
-- [ ] **The `Tracked*` family still has the `hasFocus()` bug** in `TrackedValue._display()`, and
-      still compares with exact `!=`. Either fix it or retire the family once
-      `power_supply_gui.py` moves off it.
+- [x] **Roll `Parameter*` and `CollapsiblePanel` into `power_supply_gui.py`** (done 2026-09-14,
+      alongside OVP/OCP and measured power). The readings stay read-only fields rather than a
+      read-only `Parameter*` variant: with no setpoint there is nothing for the lamps to compare,
+      and one panel's worth of plain fields didn't justify a new control class.
+- [x] **The `Tracked*` family had the `hasFocus()` bug** in `TrackedValue._display()` and compared
+      with exact `!=`. Fixed rather than retired (2026-09-14), since the data-acquisition GUI still
+      uses the family: `TrackedValue` tracks uncommitted edits via `textEdited` like
+      `ParameterBox`, and the mismatch check uses the same tolerance (`_matches()` now lives on the
+      shared base). `tests/test_tracked_controls.py`.
 
 ## Execution order (agreed)
 

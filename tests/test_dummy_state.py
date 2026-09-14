@@ -401,7 +401,7 @@ from constellation.instrument_control.oscilloscope.oscilloscope_ctg import Measu
 ALLOWED_ENABLEDUMMY = {
 	"Oscilloscope": {"get_waveform", "run_acquisition", "stop_acquisition",
 	                 "do_single_trigger", "do_force_trigger"},
-	"PowerSupply": {"get_measured_output"},
+	"PowerSupply": {"get_measured_voltage", "get_measured_current", "get_measured_power"},
 	"BasicVectorNetworkAnalyzerCtg": {"get_trace_data"},
 	"DigitalMultimeter": {"get_value"},
 	"SpectrumAnalyzer": {"get_trace_data"},
@@ -559,9 +559,9 @@ def test_dummy_power_supply_roundtrips_and_synthesizes_measurements():
 
 	# measured V/I are synthetic (setpoint + noise), so they must be near - not equal to - the
 	# setpoint, and must actually vary between reads.
-	v1, i1 = psu.get_measured_output(2)
+	v1 = psu.get_measured_voltage(2)
 	assert abs(v1 - 3.3) < 0.2
-	assert (v1, i1) != psu.get_measured_output(2)
+	assert v1 != psu.get_measured_voltage(2)
 
 def test_dummy_awg_roundtrips_without_a_dummy_responder():
 	awg = SiglentSDG2000X("dummy", make_log(), dummy=True)

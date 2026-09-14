@@ -110,7 +110,7 @@ so code can be developed and tested without physical instruments attached.
 Dummy mode has **one** dispatch point: `Driver.modify_state()`. If a `set_*`/`get_*` maps to a field in
 `self.state` it needs no dummy-specific code at all — in dummy mode setters store the passed value and
 getters read the tracked value back. `@enabledummy` + `dummy_responder()` is a narrow escape hatch reserved
-for values dummy mode must *invent* (`get_waveform` synthesizing a sine, `get_measured_output` adding noise
+for values dummy mode must *invent* (`get_waveform` synthesizing a sine, `get_measured_voltage` adding noise
 to a setpoint) and for pure actions with no state. Putting `@enabledummy` on a plain setter is a bug: it
 bypasses `modify_state()`, so the value is silently dropped. A test pins down the exact set of methods
 allowed to carry it. See `docs/dummy_mode.md`.

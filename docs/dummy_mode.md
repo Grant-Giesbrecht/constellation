@@ -121,14 +121,15 @@ flowchart TD
 
 ### The complete list of methods still carrying `@enabledummy`
 
-Seven, down from 51. Anything not on this list must not be decorated.
+Anything not on this list must not be decorated. The authoritative list is `ALLOWED_ENABLEDUMMY` in
+`tests/test_dummy_state.py`, which fails if the two disagree with the code.
 
 | Class | Method | Why |
 |---|---|---|
 | `Oscilloscope` | `get_waveform` | Generates a synthetic clipped sine from the current timebase/scale |
 | `Oscilloscope` | `run_acquisition`, `stop_acquisition` | Pure hardware actions, no state |
 | `Oscilloscope` | `do_single_trigger`, `do_force_trigger` | Pure hardware actions, no state |
-| `PowerSupply` | `get_measured_output` | Measured V/I are readings, not settings — setpoint + noise |
+| `PowerSupply` | `get_measured_voltage`, `get_measured_current`, `get_measured_power` | Readings, not settings — setpoint + noise while the output is on, near zero while off |
 | `BasicVectorNetworkAnalyzerCtg` | `get_trace_data` | Measurement data, not a setting |
 
 `ArbitraryWaveformGenerator`, `DigitalMultimeter` and `SpectrumAnalyzer` have **no**

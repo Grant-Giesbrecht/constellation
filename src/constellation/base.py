@@ -1900,7 +1900,7 @@ class Driver(ABC):
 			#
 			# This is what lets get_* methods work in dummy mode WITHOUT a hand-written
 			# dummy_responder case. Only genuinely synthetic getters (get_waveform,
-			# get_measured_output, ...) still need @enabledummy + a dummy_responder entry.
+			# get_measured_voltage, ...) still need @enabledummy + a dummy_responder entry.
 			val = self.state.get(params, indices=indices, fragment=fragment)
 			self.log.add_log(self.state_change_log_level, f"(>:q{self.id.short_str()}<) State read (dummy): {param_idx_to_str(params, indices=indices)} -\\> >:a{truncate_str(val)}<.")
 			return val
@@ -2361,7 +2361,7 @@ def enabledummy(func):
 	needs no decorator at all - modify_state() handles dummy mode for those generically
 	(setters store the value, getters read it back). Use this only where dummy mode has to
 	*invent* something that isn't already in the state tracker, e.g. generating a waveform
-	(get_waveform) or noisy meter readings (get_measured_output).
+	(get_waveform) or noisy meter readings (get_measured_voltage).
 	
 	Putting it on a plain setter is a bug: it bypasses modify_state() entirely, so the value
 	is silently dropped unless dummy_responder() happens to have a matching case.'''

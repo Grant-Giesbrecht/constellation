@@ -644,7 +644,7 @@ class _TrackedControlBase(QWidget):
 	''' Shared setpoint/pending/mismatch/stale state machine used by every Tracked* control. Not
 	instantiated directly - see TrackedToggle/TrackedValue/TrackedChoice. '''
 
-	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str, set_args:callable=None, stale_after_s:float=5.0):
+	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str, set_args:callable=None, stale_after_s:float=5.0, tolerance:float=0.01, abs_tolerance:float=0.0):
 		super().__init__()
 
 		self.bridge = bridge
@@ -652,6 +652,10 @@ class _TrackedControlBase(QWidget):
 		self.set_method = set_method
 		self.set_args = set_args if set_args is not None else (lambda v: (v,))
 		self.stale_after_s = stale_after_s
+
+		# How close a read-back must be to the setpoint to count as agreeing - see _matches().
+		self.tolerance = tolerance
+		self.abs_tolerance = abs_tolerance
 
 		self._setpoint = None    # last value the user requested - None until they request one
 		self._confirmed = None   # last confirmed value seen in a state_changed update
@@ -709,6 +713,27 @@ class _TrackedControlBase(QWidget):
 		if self._last_update and (time.time() - self._last_update) > self.stale_after_s:
 			self._refresh_display()
 
+	def _matches(self, a, b) -> bool:
+		''' Whether a read-back agrees with a setpoint.
+
+		Instruments quantize - a scope asked for 0.55 V/div reports 0.5 - so exact equality marks a
+		correctly-working instrument as mismatched forever. Numeric comparisons get a relative
+		tolerance; everything else falls back to equality.
+		'''
+
+		if a is None or b is None:
+			return False
+
+		if isinstance(a, bool) or isinstance(b, bool):
+			return bool(a) == bool(b)
+
+		try:
+			a_f, b_f = float(a), float(b)
+		except (TypeError, ValueError):
+			return a == b
+
+		return abs(a_f - b_f) <= max(self.abs_tolerance, abs(b_f) * self.tolerance)
+
 	def _status(self) -> str:
 		# Pending takes priority over staleness: a freshly-built control (constructed lazily
 		# inside a state_changed handler, e.g. OscilloscopeWidget._build_channels) never actually
@@ -720,7 +745,7 @@ class _TrackedControlBase(QWidget):
 			return "pending"
 		if self._last_update == 0 or (time.time() - self._last_update) > self.stale_after_s:
 			return "stale"
-		if self._setpoint is not None and self._confirmed is not None and self._setpoint != self._confirmed:
+		if self._setpoint is not None and self._confirmed is not None and not self._matches(self._confirmed, self._setpoint):
 			return "mismatch"
 		return "confirmed"
 
@@ -764,13 +789,20 @@ class TrackedValue(_TrackedControlBase):
 		TrackedValue(bridge, "Volts/div", get=lambda s: s.channels[1].div_volt, set_method="set_div_volt", set_args=lambda v: (1, v), unit="V")
 	'''
 
-	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str, set_args:callable=None, validator=None, unit:str="", stale_after_s:float=5.0):
-		super().__init__(bridge, label, get, set_method, set_args, stale_after_s)
+	def __init__(self, bridge:InstrumentBridge, label:str, get:callable, set_method:str, set_args:callable=None, validator=None, unit:str="", stale_after_s:float=5.0, tolerance:float=0.01, abs_tolerance:float=0.0):
+		super().__init__(bridge, label, get, set_method, set_args, stale_after_s, tolerance=tolerance, abs_tolerance=abs_tolerance)
+
+		# True while the user has typed something they haven't committed - see _display().
+		self._dirty = False
 
 		self.edit = QLineEdit()
 		if validator is not None:
 			self.edit.setValidator(validator)
 		self.edit.editingFinished.connect(self._on_edited)
+
+		# textEdited fires only for user typing, never for setText() - exactly the distinction the
+		# overwrite guard needs.
+		self.edit.textEdited.connect(self._on_text_edited)
 
 		self._setpoint_light = QLabel()
 		self._status_light = QLabel()
@@ -789,7 +821,18 @@ class TrackedValue(_TrackedControlBase):
 		layout.addLayout(lights)
 		self.setLayout(layout)
 
+	def _on_text_edited(self, text):
+		self._dirty = True
+
 	def _on_edited(self):
+
+		# editingFinished fires on Return and on focus-out whether or not anything was typed. Only a
+		# real edit may send anything.
+		if not self._dirty:
+			self._refresh_display()
+			return
+
+		self._dirty = False
 		text = self.edit.text()
 		try:
 			value = float(text)
@@ -797,13 +840,17 @@ class TrackedValue(_TrackedControlBase):
 			self._refresh_display()  # revert to last known-good display
 			return
 		if value == self._setpoint:
+			self._refresh_display()
 			return
 		self._user_changed(value)
 
 	def _display(self, confirmed_value, setpoint_value, status):
 
+		# Never overwrite input the user has typed but not committed. This used to test hasFocus(),
+		# which is False whenever the window is not the active one - so a background poll replaced
+		# half-typed text.
 		shown = setpoint_value if setpoint_value is not None else confirmed_value
-		if shown is not None and not self.edit.hasFocus():
+		if shown is not None and not self._dirty:
 			self.edit.setText(str(shown))
 
 		self._setpoint_light.setStyleSheet(_dot_style("#2ecc71" if setpoint_value is not None else "#888888"))
@@ -2475,28 +2522,6 @@ class _ParameterControlBase(_TrackedControlBase):
 		self.bridge.request(self.get_method, *self.get_args)
 
 	# --- state machine ------------------------------------------------------
-
-	def _matches(self, a, b) -> bool:
-		''' Whether a read-back agrees with a setpoint.
-
-		Instruments quantize - a scope asked for 0.55 V/div reports 0.5 - so exact equality
-		(which is what the single-lamp Tracked* controls use) marks a correctly-working
-		instrument as mismatched forever. Numeric comparisons get a relative tolerance;
-		everything else falls back to equality.
-		'''
-
-		if a is None or b is None:
-			return False
-
-		if isinstance(a, bool) or isinstance(b, bool):
-			return bool(a) == bool(b)
-
-		try:
-			a_f, b_f = float(a), float(b)
-		except (TypeError, ValueError):
-			return a == b
-
-		return abs(a_f - b_f) <= max(self.abs_tolerance, abs(b_f) * self.tolerance)
 
 	@property
 	def user_setpoint(self):

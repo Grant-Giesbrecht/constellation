@@ -10,7 +10,7 @@ psu.print_state()
 # Channel 2 set to output 15 volts
 psu.set_voltage(2, 15)
 
-# Printing the state will show 15 volts out, but the measurement wont be updated until you call get_measured_output or refresh_state():
+# Printing the state will show 15 volts set, but the readings won't be updated until you call get_measured_voltage() (and friends) or refresh_state():
 psu.print_state() # <-- this will have out of date measurements.
 
 psu.refresh_state()

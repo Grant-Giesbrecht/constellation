@@ -24,7 +24,7 @@ Three finished examples to read alongside this guide, in order of complexity:
   - **Write**: `self.bridge.request("set_voltage", channel, 3.3)` - fire-and-forget, the outcome
     comes back later via a signal. Same call whether the instrument is local or on the other side
     of labmesh.
-  - **Read**: connect to `bridge.state_changed` (or just use `TrackedControl`s, which already do
+  - **Read**: connect to `bridge.state_changed` (or just use `Parameter*` controls, which already do
     this for you) - never read `bridge.driver` directly.
 - **Never touch `bridge.driver`.** This is the one hard rule. It's what keeps a slow/stuck
   instrument from freezing every other panel, and what avoids racing the bridge's own worker thread
@@ -97,10 +97,12 @@ Two things that deliberately are *not* wrapped in a `Parameter*` control:
   `oscilloscope_gui.py`'s acquisition box). There's no "confirmed vs. requested" concept for an
   action - which is also why the hardware suite can only ever mark them `confirmed`, never
   `roundtrip`.
-- **Read-only measured values** - a power supply's measured voltage/current, for example. There's
-  no setpoint for a measurement, only a reported number, so the pending/mismatch/stale machinery
-  doesn't apply. Just a plain `QLabel` updated from `on_state_changed()` (see
-  `power_supply_gui.py`'s `_update_measurements`).
+- **Read-only measured values** - a power supply's measured voltage, current and power, for
+  example. There's no setpoint for a measurement, only a reported number, so a `Parameter*`
+  control's setpoint and lamp machinery doesn't apply. Use a read-only field updated from
+  `on_state_changed()` (see `power_supply_gui.py`'s `_update_readings`). Clearing a tripped
+  protection is an action like any other: a plain button, enabled only while the state says
+  something has tripped.
 
 ### 5. Handle anything beyond per-field controls in `on_state_changed`
 
@@ -156,14 +158,14 @@ own button that calls `bridge.request(...)` explicitly, and pick the result up v
 `oscilloscope_gui.py::_on_command_result`).
 
 Conversely, if your category's "expensive" read is actually cheap (e.g. `PowerSupply`'s
-`get_measured_output()` is a single quick query, so it's already folded into `refresh_state()` and
-arrives for free with every `state_changed`), don't add a needless capture button - just read it in
-`on_state_changed`, as `power_supply_gui.py` does.
+`get_measured_voltage()`, `_current()` and `_power()` are single quick queries, so they're already
+folded into `refresh_state()` and arrive for free with every `state_changed`), don't add a needless
+capture button - just read them in `on_state_changed`, as `power_supply_gui.py` does.
 
 ## The older `Tracked*` status convention
 
-`Tracked*` predates `Parameter*` and is documented here because both category GUIs used it until
-recently and it is still in `ui.py`. New widgets should use `Parameter*`.
+`Tracked*` predates `Parameter*` and is documented here because it is still in `ui.py` and the
+data-acquisition GUI still uses it. New widgets should use `Parameter*`.
 
 Every `Tracked*` control shows two small lights (or, for `TrackedToggle`'s `IndicatorButton`, one
 light plus the button's own on/off face): a **setpoint** light (green=last-requested-ON,
@@ -208,10 +210,10 @@ This is implemented once, in `_TrackedControlBase._status()` (`src/constellation
 don't reimplement it per category, only per control instance via the `get`/`set_method`/`set_args`
 you pass in.
 
-Note the `mismatch` comparison here is exact equality, which means an instrument that quantizes
-(ask a scope for 0.55 V/div, get 0.5) sits on red forever. The `Parameter*` controls below fix that
-with a tolerance, and separate this one lamp into the three independent questions it is currently
-collapsing.
+The `mismatch` comparison uses the same tolerance as `Parameter*` (`tolerance=0.01` relative,
+`abs_tolerance=0.0`, both settable), so an instrument that stores a value slightly differently does
+not sit on red. It used to be exact equality. The `Parameter*` controls below also separate this one
+lamp into the three independent questions it collapses.
 
 ## The `Parameter*` controls
 
@@ -411,9 +413,8 @@ so centring over the title too pushed them out of line with what they describe.
 
 ### `Tracked*` vs `Parameter*`
 
-`Tracked*` is the older, simpler family: one box, two lamps, no read-back row, no detail window, and
-exact-equality comparison. It still works and is used nowhere structural. Prefer `Parameter*` for
-new work.
+`Tracked*` is the older, simpler family: one box, two lamps, no read-back row and no detail window.
+It still works, and the data-acquisition GUI uses it. Prefer `Parameter*` for new work.
 
 `examples/parameter_widgets_demo.py` runs the whole family at all three densities against two dummy
 scopes, with buttons that simulate a failed send and a dropped connection.
@@ -666,7 +667,7 @@ real hardware or a visible display.
 - [ ] No code path touches `bridge.driver` or any `Driver` method/attribute directly
 - [ ] Per-channel/per-index closures bind the loop variable as a default argument
 - [ ] Actions (no setpoint) are plain buttons; settings (have a setpoint) are `Parameter*`;
-      read-only measurements are plain labels updated from `on_state_changed`
+      read-only measurements are read-only fields updated from `on_state_changed`
 - [ ] Containers give `Parameter*` controls an empty stretch column so slack lands between them
 - [ ] Numeric controls that an instrument will quantize carry a sensible `tolerance`/`abs_tolerance`
 - [ ] Parameters whose natural values are far from 1 (timebases, currents) carry `prefixes=`

@@ -29,7 +29,7 @@ app.setStyle("Fusion")
 main_window = ConstellationWindow(log)
 main_window.add_instrument(driver=psu, title="Power Supply" + (" (dummy)" if args.dummy else ""))
 main_window.setWindowTitle("Power Supply GUI Demo")
-main_window.resize(700, 400)
+main_window.resize(1100, 650)
 main_window.show()
 
 app.exec()
