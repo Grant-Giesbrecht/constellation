@@ -45,7 +45,7 @@ VERIFICATION_FILENAME = "verification.yaml"
 # What IS automated is noticing that you touched the plumbing: FRAMEWORK_CRITICAL_FUNCTIONS below
 # is hashed by a test that fails if it changed without an epoch bump. See
 # tests/test_verification_records.py and docs/hardware_verification.md.
-VERIFICATION_EPOCH = 1
+VERIFICATION_EPOCH = 2
 
 # The functions every SCPI call passes through. Deliberately a short, explicit list rather than a
 # call graph: the point is to catch changes to the shared path, not to track every dependency.

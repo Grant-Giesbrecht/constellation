@@ -1353,16 +1353,6 @@ class Driver(ABC):
 			
 			self.debug(f">Driver.check_online()<: Performing automatic online status check.")
 			
-			# Verify is a SCPI instrument.
-			# NOTE: this branch used to set self.online = False and then fall straight through
-			# to the *IDN?* query below, which immediately overwrote it - so the "cannot use
-			# AUTO for non-SCPI instruments" warning was followed by doing exactly that. The
-			# return is the fix.
-			if not self.is_scpi:
-				self.warning(f"Cannot use CheckOnline.AUTO for non-SCPI instruments. Defaulting to OFFLINE.")
-				self.online = False
-				return
-			
 			# Check if instrument is online. This runs straight after a failed call, so use the
 			# relay's quick probe where it has one: a plain *IDN? waits out the relay's full timeout
 			# (30 s on a VISA relay, sized for waveform transfers), which doubled the time taken to
@@ -1378,6 +1368,13 @@ class Driver(ABC):
 				alive = True   # a garbled reply still means something answered
 			
 			if alive is None:
+				# The *IDN? fallback is SCPI-only. A non-SCPI instrument whose relay cannot probe has
+				# no way to check. (This used to refuse AUTO for every non-SCPI instrument, even one
+				# whose relay could probe it.)
+				if not self.is_scpi:
+					self.warning(f"Cannot check a non-SCPI instrument whose relay has no probe(). Defaulting to OFFLINE.")
+					self.online = False
+					return
 				_, rv = self.relay.query("*IDN?")
 				alive = len(rv) > 0
 			
@@ -1672,36 +1669,36 @@ class Driver(ABC):
 		else:
 			return False
 		
-	def write(self, cmd:str) -> None:
-		''' Sends a SCPI command via the drivers Relay. Updates
-		self.online with write success/fail.
-		
+	def write(self, cmd:str) -> bool:
+		''' Sends a command via the driver's Relay. Updates self.online with write success/fail.
+
+		Not limited to SCPI instruments: what a command means is the relay's business (an
+		HTTPRelay takes "VERB /path"), so is_scpi gates only the SCPI-specific methods - query_id,
+		preset, wait_ready and the binary block transfers.
+
 		Args:
 			cmd (str): Command to relay to instrument
-		
+
 		Returns:
-			None
+			bool: True if the write succeeded (always True in dummy mode).
 		'''
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default write() function, instrument does recognize SCPI commands.")
-			return
-		
+
 		# Abort if offline (may reconnect first, per the driver's ReconnectPolicy)
 		if not self._ensure_online("write"):
-			return
-		
+			return False
+
 		# Spoof if dummy
 		if self.dummy:
 			self.lowdebug(f"Writing to dummy: >@:LOCK{cmd}@:UNLOCK<.") # Put the SCPI command within a Lock - otherwise it can confuse the markdown
-			return
-		
+			return True
+
 		# Attempt write. relay.write returns a bare bool, so it's adapted to the (ok, value)
 		# shape _relay_attempt works in.
 		ok, _ = self._relay_attempt("write", lambda: (self.relay.write(cmd), None), None)
 		if ok:
 			self.lowdebug(f"Wrote to instrument: >@:LOCK{cmd}@:UNLOCK<.")
+
+		return ok
 	
 	def read(self) -> str:
 		''' Reads via the relay. Updates self.online with read success/
@@ -1710,11 +1707,6 @@ class Driver(ABC):
 		Returns:
 			str: Value received from instrument relay.
 		'''
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
-			return ""
 		
 		# Abort if offline (may reconnect first, per the driver's ReconnectPolicy)
 		if not self._ensure_online("read"):
@@ -1742,11 +1734,6 @@ class Driver(ABC):
 		Returns:
 			str: Value received from instrument relay.
 		'''
-		
-		# Abort if not an SCPI instrument
-		if not self.is_scpi:
-			self.error(f"Cannot use default read() function, instrument does recognize SCPI commands.")
-			return ""
 		
 		# Abort if offline (may reconnect first, per the driver's ReconnectPolicy)
 		if not self._ensure_online("query"):

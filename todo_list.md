@@ -1157,6 +1157,43 @@ default.
 
 ## Priority 14 — feature gaps
 
+### Audio analyzer (QuantAsylum QA403) — follow-ups
+
+Category, driver and `HTTPRelay` added 2026-09-13. Checked read-only against a live QA403 under
+QA40x-rs 0.4.0 (identify, ping, waveform/spectrum/measurement reads); **no setting or acquisition
+has been sent to hardware yet.**
+
+- [ ] **Run the setters and `acquire()` on hardware** — every command follows the documented API and
+      QA40x-rs's `rest.rs`, and is pinned by a stub-relay test, but none has been sent to a real
+      server. Needs a safe loopback on the outputs, since `acquire()` plays the generators.
+- [ ] **Untested against QuantAsylum's official application.** Commands follow its signatures, but the
+      QA40x-rs-only `/Data` volts conversion is keyed on `SessionId == "qa40x-rs"`; confirm the
+      official app's `/Data` really is in volts, and what its `/Settings/Default` resets (the driver
+      assumes sample rate and input range survive it, as on QA40x-rs).
+- [ ] **No hardware suite / `verification.yaml`** for this category yet, and no GUI.
+- [ ] **Future option: a continuous trigger policy for the QA403** — a background loop in the driver
+      that keeps sending `POST /Acquisition` while enabled, so getters return the latest capture
+      without waiting. Neither application has a REST run mode (QuantAsylum: "there's not a way to
+      tell it to run continuously" — looping acquisitions yourself is their suggestion, and there's
+      no per-acquisition callback). Decide before building: generators then play non-stop;
+      consecutive getters can straddle captures (report a capture timestamp/counter?); a setting
+      changed mid-loop takes effect at the next capture; the thread must coexist with the network
+      relays. Would be a third value for `set_trigger_policy()`.
+- [ ] **`refresh_data()` under the default `on_get` policy captures once per getter** — four captures
+      for spectrum + waveform on two channels, each playing the generators.
+- [ ] **`RemoteTextCommandRelayListener` wrapping an `HTTPRelay`** should work (commands are text) but
+      has not been run. `/Data/Time` at a 32768 buffer is ~700 KB of JSON, under the RPC warning
+      threshold; a multi-megabyte buffer would cross it.
+
+### BUG: `DataAcquisition` dummy setters drop every value
+
+*confirmed (2026-09-13)* — `data_acquisition_ctg.py` records settings with
+`modify_state(None, ...)`, which `modify_state()` treats as a *getter* in dummy mode: it reads the
+tracked value back instead of storing. So `set_sample_rate(12345)` on a dummy DAQ leaves 1000.0, and
+`init_dummy_state()`'s own seeding (`10000.0`) never lands either. `AudioAnalyzer._store()` shows one
+fix: the standard category shape, `set_x` passing `self.get_x` as `query_func`. (For hardware with
+no read-back, the QA403 driver shows the pattern: getters `@feature_unavailable`, `blind_state_update`.)
+
 ### Add a `num_points` (sweep points) field to the SpectrumAnalyzer category
 
 Not a bug — a missing feature. The scaffolding was written, then commented out everywhere, and

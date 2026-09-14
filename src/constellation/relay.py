@@ -2,6 +2,9 @@ import contextlib
 import pylogfile.base as plf
 import base64
 import struct
+import urllib.error
+import urllib.parse
+import urllib.request
 from abc import abstractmethod
 from pyvicp import Client
 import pyvisa as pv
@@ -76,6 +79,12 @@ def classify_relay_exception(e:Exception) -> RelayErrorKind:
 
 	if isinstance(e, pv.errors.InvalidSession):
 		return RelayErrorKind.TRANSPORT
+
+	# HTTP (HTTPRelay). The server answered, so the link is fine: a 4xx means the request itself was
+	# refused (unknown endpoint, out-of-range argument, nothing acquired yet) and a 5xx that the
+	# instrument side failed. HTTPError is an OSError subclass, so this must precede the check below.
+	if isinstance(e, urllib.error.HTTPError):
+		return RelayErrorKind.USAGE if e.code < 500 else RelayErrorKind.INSTRUMENT
 
 	# Sockets, and pyvicp/labmesh failures, which surface as plain OSError subclasses.
 	# TimeoutError is an OSError subclass in Python 3.10+, so it's covered here too.
@@ -710,6 +719,210 @@ class DirectSCPIRelay(CommandRelay):
 		except Exception as e:
 			self.note_failure(e)
 			self.log.error(f"DirectSCPIRelay failed to write binary block to instrument {self.address}. ({e})")
+			return False
+
+		return True
+
+_HTTP_VERBS = ("GET", "PUT", "POST", "PATCH", "DELETE", "HEAD")
+
+class HTTPRelay(CommandRelay):
+	''' A relay for instruments controlled through an HTTP/REST API instead of VISA - e.g. the
+	QuantAsylum QA40x audio analyzers, whose control application serves JSON on port 9402.
+
+	Commands are text of the form "VERB /path" ("GET /Status/Version", "PUT /Settings/BufferSize/32768");
+	a bare path is sent as GET. Keeping commands as text means nothing above the relay changes, and a
+	RemoteTextCommandRelayListener can wrap this relay like any other.
+
+	The address is the server's base URL ("http://localhost:9402"); a missing scheme is taken as http.
+	Every request is its own connection, so there is no session to open or lose - connect() only checks
+	that the server answers.
+
+	Failure kinds: no answer at all (refused, timed out) is TRANSPORT; an HTTP 4xx is USAGE, since the
+	server understood and refused the request and retrying cannot help; an HTTP 5xx is INSTRUMENT.
+	'''
+
+	def __init__(self, timeout_s:float=5.0, long_timeout_s:float=120.0, token:str=None, probe_cmd:str="GET /", probe_check:callable=None, interface:str=None):
+		'''
+		Args:
+			timeout_s (float): Timeout for ordinary requests - how long a lost server takes to notice.
+			long_timeout_s (float): Timeout inside long_operation(), for acquisitions and bulk data.
+			token (str): Bearer token, for a server that requires one (QA40x-rs does when exposed
+				to the network).
+			probe_cmd (str): Request probe() sends.
+			probe_check (callable): Optional reply body -> bool, letting probe() require more than
+				"the server answered" - e.g. that the instrument behind it is attached.
+			interface (str): Bus between the server and the instrument ("usb", ...), which the URL
+				cannot reveal.
+		'''
+
+		super().__init__()
+
+		self.timeout_s = timeout_s
+		self.long_timeout_s = long_timeout_s
+		self.token = token
+		self.probe_cmd = probe_cmd
+		self.probe_check = probe_check
+		self._interface = interface
+
+		self.base_url = ""
+		self._active_timeout_s = timeout_s
+
+		# No proxies: an instrument server is local or on the lab network, and an environment proxy
+		# setting would otherwise route even localhost requests through it.
+		self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+	def configure(self, address:str, log:plf.LogPile):
+
+		super().configure(address, log)
+
+		url = str(address or "").strip()
+		if url and "://" not in url:
+			url = "http://" + url
+		self.base_url = url.rstrip("/")
+
+	def interface(self):
+		return self._interface if self._interface is not None else "other"
+
+	@staticmethod
+	def split_command(cmd:str) -> tuple:
+		''' Splits "VERB /path" into (verb, path). A bare path is a GET. '''
+
+		parts = str(cmd).strip().split(None, 1)
+
+		if len(parts) == 2 and parts[0].upper() in _HTTP_VERBS:
+			verb, path = parts[0].upper(), parts[1].strip()
+		elif len(parts) == 1 and parts[0].upper() in _HTTP_VERBS:
+			verb, path = parts[0].upper(), "/"
+		else:
+			verb, path = "GET", str(cmd).strip()
+
+		if not path.startswith("/"):
+			path = "/" + path
+
+		return verb, path
+
+	def _request(self, cmd:str, timeout_s:float=None) -> str:
+
+		verb, path = self.split_command(cmd)
+		url = self.base_url + urllib.parse.quote(path, safe="/%:@!$&'()*+,;=-._~?")
+
+		# Arguments travel in the path. An empty body still gives PUT/POST a Content-Length.
+		data = b"" if verb in ("PUT", "POST", "PATCH") else None
+		request = urllib.request.Request(url, data=data, method=verb)
+		if self.token:
+			request.add_header("Authorization", f"Bearer {self.token}")
+
+		timeout = timeout_s if timeout_s is not None else self._active_timeout_s
+		with self._opener.open(request, timeout=timeout) as response:
+			return response.read().decode("utf-8")
+
+	@staticmethod
+	def _describe(e:Exception) -> str:
+		''' An exception as a log message, including the server's error body for an HTTP error. '''
+
+		if isinstance(e, urllib.error.HTTPError):
+			try:
+				body = e.read().decode("utf-8", "replace").strip()
+			except Exception:
+				body = ""
+			return f"HTTP {e.code}: {body or e.reason}"
+
+		return f"{e}"
+
+	def connect(self) -> bool:
+
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+
+		try:
+			self._request("GET /", timeout_s=self.timeout_s)
+		except urllib.error.HTTPError:
+			pass   # the server answered - refusing "/" still means it is there
+		except Exception as e:
+			self.note_failure(e)
+			self.log.debug(f"HTTPRelay could not reach server at >{self.base_url}<. ({self._describe(e)})")
+			return False
+
+		self.log.debug(f"HTTPRelay reached server at >{self.base_url}<.")
+		return True
+
+	def close(self) -> None:
+		''' Nothing to close: every request opens and closes its own connection. '''
+		return
+
+	def write(self, cmd:str) -> bool:
+		''' Sends a request, discarding the reply body.
+
+		Returns:
+			bool: True if the server answered with a 2xx status.
+		'''
+
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+
+		try:
+			self._request(cmd)
+			self.note_command(cmd)
+			self.log.lowdebug(f"HTTPRelay sent >@:LOCK{cmd}@:UNLOCK<.")
+		except Exception as e:
+			self.note_failure(e)
+			self.log.error(f"HTTPRelay failed to send >@:LOCK{cmd}@:UNLOCK< to {self.base_url}. ({self._describe(e)})")
+			return False
+
+		return True
+
+	def read(self) -> tuple:
+		''' Not possible: every reply returns with its own request - use query(). '''
+
+		self.note_failure(NotImplementedError("HTTPRelay has no read(); every reply returns with its request."))
+		self.log.error(f"HTTPRelay cannot read() - use query(), which returns the reply to its own request.")
+		return False, ""
+
+	def query(self, cmd:str) -> tuple:
+		''' Sends a request and returns the reply body.
+
+		Returns:
+			tuple: Element 0 = success status, element 1 = reply body text.
+		'''
+
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+
+		try:
+			rv = self._request(cmd)
+			self.note_command(cmd, rv)
+			self.log.lowdebug(f"HTTPRelay queried >@:LOCK{cmd}@:UNLOCK<: >:a{len(rv)} chars<.")
+		except Exception as e:
+			self.note_failure(e)
+			self.log.error(f"HTTPRelay failed to query >@:LOCK{cmd}@:UNLOCK< from {self.base_url}. ({self._describe(e)})")
+			return False, ""
+
+		return True, rv
+
+	@contextlib.contextmanager
+	def long_operation(self):
+		''' Raises the request timeout to `long_timeout_s` for the duration. '''
+
+		previous = self._active_timeout_s
+		self._active_timeout_s = max(previous, self.long_timeout_s)
+		try:
+			yield
+		finally:
+			self._active_timeout_s = previous
+
+	def probe(self, timeout_s:float=1.5):
+		''' Sends `probe_cmd` with a short timeout. True if the server answered (and `probe_check`,
+		if given, accepts the reply). '''
+
+		self.note_success()   # cleared up front, so last_error_kind always describes the latest attempt
+
+		try:
+			body = self._request(self.probe_cmd, timeout_s=timeout_s)
+		except Exception as e:
+			self.note_failure(e)
+			return False
+
+		if self.probe_check is not None and not self.probe_check(body):
+			# The server is up but reports the instrument behind it gone - which, to the driver, is
+			# as unreachable as a dead link.
+			self.last_error_kind = RelayErrorKind.TRANSPORT
 			return False
 
 		return True

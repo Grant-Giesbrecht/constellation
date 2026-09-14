@@ -242,8 +242,14 @@ def test_a_failure_is_not_outranked_into_silence(tmp_path):
 #                     connection can see any difference - and a verification record describes what
 #                     a method does on a working connection. What did change is that a failing
 #                     write is re-sent fewer times.
-EXPECTED_FRAMEWORK_FINGERPRINT = "4bd1356682cfb761"
-EXPECTED_EPOCH = 1
+#   4a2a9d4cd3a1fa5c  2026-09-13: Driver.write/read/query no longer refuse is_scpi=False drivers (the
+#                     relay defines what a command means; is_scpi now gates only *IDN?/*RST/*OPC and
+#                     binary blocks), and Driver.write returns its success flag instead of None.
+#                     Epoch BUMPED to 2: non-SCPI drivers that could not send at all now can, which
+#                     changes what a driver does to hardware. No records were lost - every existing
+#                     record was `unverified`.
+EXPECTED_FRAMEWORK_FINGERPRINT = "4a2a9d4cd3a1fa5c"
+EXPECTED_EPOCH = 2
 
 def _record(status="confirmed", **kw):
 	base = {

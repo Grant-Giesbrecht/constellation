@@ -405,6 +405,8 @@ ALLOWED_ENABLEDUMMY = {
 	"BasicVectorNetworkAnalyzerCtg": {"get_trace_data"},
 	"DigitalMultimeter": {"get_value"},
 	"SpectrumAnalyzer": {"get_trace_data"},
+	"AudioAnalyzer": {"send_manual_trigger", "get_waveform", "get_spectrum", "get_rms_level", "get_peak_level",
+	                  "get_peak_freq", "get_thd", "get_thdn", "get_snr"},
 }
 
 def _enabledummy_methods(cls):

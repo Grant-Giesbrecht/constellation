@@ -100,7 +100,7 @@ class DataAcquisition(Driver):
 
 		_state = DataAcquisitionState(first_channel, max_ai_channels, num_digital_lines=num_digital_lines, log=log)
 
-		# A DAQ is not a SCPI instrument - is_scpi=False disables the base class's *IDN?/*RST/write
+		# A DAQ is not a SCPI instrument - is_scpi=False disables the base class's *IDN?/*RST/*OPC
 		# machinery, which would be meaningless here.
 		super().__init__(address, log, relay, _state, expected_idn=expected_idn, is_scpi=False,
 			dummy=dummy, first_channel_num=first_channel, **kwargs)

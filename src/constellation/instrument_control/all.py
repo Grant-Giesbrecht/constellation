@@ -25,3 +25,6 @@ from constellation.instrument_control.power_supply.drivers.Rigol_DP832_dvr impor
 from constellation.instrument_control.spectrum_analyzer.spectrum_analyzer_ctg import *
 from constellation.instrument_control.spectrum_analyzer.drivers.RohdeSchwarz_FSE_dvr import *
 from constellation.instrument_control.spectrum_analyzer.drivers.Siglent_SSA3000X_dvr import *
+
+from constellation.instrument_control.audio_analyzer.audio_analyzer_ctg import *
+from constellation.instrument_control.audio_analyzer.drivers.QuantAsylum_QA403_dvr import *

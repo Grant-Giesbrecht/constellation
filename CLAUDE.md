@@ -27,7 +27,7 @@ and optional AES-encrypted networking so instruments can be controlled/monitored
 ### Category → Driver → (Mixin) hierarchy
 
 Each instrument type (oscilloscope, vector_network_analyzer, power_supply, digital_multimeter,
-spectrum_analyzer, arb_waveform_generator) lives under `src/constellation/instrument_control/<category>/`
+spectrum_analyzer, arb_waveform_generator, audio_analyzer) lives under `src/constellation/instrument_control/<category>/`
 and follows the same three-layer pattern:
 
 1. **Category class** (`<category>_ctg.py`, e.g. `oscilloscope_ctg.py`): defines an abstract `Driver`
@@ -52,6 +52,12 @@ and follows the same three-layer pattern:
 New drivers should only need to translate SCPI commands in the driver file — the category class and
 `Driver` base handle state tracking, logging, online-status checks, and dummy-mode plumbing.
 
+A category describes what *any* instrument of its kind does, so it never contains one instrument's or
+vendor's quirks — command formats, value tables, protocol workarounds and transport overrides belong in
+the driver or relay. And every `set_*`/`get_*` handles exactly one parameter: when hardware can only set
+several at once (Siglent's `BSWV`, the QA40x's `/Settings/AudioGen`), the driver composes that command
+internally.
+
 Not every instrument can do everything its category declares — a Rigol DS1000E has no SCPI
 timebase control at all. Such a driver still defines **every** abstract method, marking the
 impossible ones `@feature_unavailable("<what the hardware can't do>")` (never combined with
@@ -60,7 +66,8 @@ raises `FeatureUnavailable`, `Driver.unavailable_features()`/`feature_is_availab
 gaps before they're called, and `refresh_state`/`apply_state`/`refresh_data`/`init_dummy_state`
 skip them instead of aborting the sweep. Use `@feature_unimplemented("...")` instead for methods the hardware probably *can* do but nobody
 has written yet — same behaviour, opposite meaning about the future, reported separately by
-`unimplemented_features()`. `RigolDS1000E` is the reference example for both; see
+`unimplemented_features()`. `RigolDS1000E` is the reference example for both, and `QuantAsylumQA403` for hardware that can
+set but not read back (unavailable getters plus `blind_state_update`); see
 `docs/partial_compliance.md`. Whether an implemented method has been *checked against hardware* is
 tracked separately in `verification.yaml` — see `docs/hardware_verification.md`.
 
@@ -88,6 +95,11 @@ tracked separately in `verification.yaml` — see `docs/hardware_verification.md
 to a `CommandRelay` (`src/constellation/relay.py`), which is swappable per-driver at construction time:
 - `DirectSCPIRelay` — local `pyvisa` connection (the default for most drivers).
 - `VICPDirectSCPIRelay` — VICP protocol via `pyvicp` (needed for LeCroy scopes, which don't speak plain VISA).
+- `HTTPRelay` — REST/JSON instruments (QuantAsylum QA40x, via its control application). Commands are
+  `"VERB /path"` text, so `Driver.write()`/`query()` work unchanged; stdlib `urllib` only. `is_scpi=False`
+  disables only the SCPI-specific parts of `Driver` (`*IDN?`, `*RST`, `*OPC`, IEEE 488.2 binary blocks),
+  not `write`/`read`/`query` — a non-SCPI driver overrides `query_id()`/`preset()` itself. See
+  `QuantAsylum_QA403_dvr.py`.
 - `RemoteTextCommandRelayClient`/`...Listener` — routes commands over Constellation's network layer instead
   of talking to hardware locally.
 
@@ -180,6 +192,8 @@ connected instruments.
   write records. `src/constellation/verification_writer.py` does the writing — never lowering a
   status within the same code, always recording failures, never destroying the file's header.
 - `docs/superreturn.md` — how drivers hand parsed values up to their category class.
+- `docs/quantasylum_qa403.md` — how the QA403 is really controlled (a PC app's REST server, not the
+  instrument), its trigger policy, write-only settings, and the QA40x-rs quirks the driver absorbs.
 - `docs/networking_data_paths.md` — RPC vs DataBank: which channel bulk data should take, and why
   binary on the RPC path is base64.
 - `todo_list.md` — the live list of known bugs, open design questions, and remaining cleanup work.
