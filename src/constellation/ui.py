@@ -3421,8 +3421,14 @@ class ConnectionInfoDialog(QDialog):
 
 		self.setLayout(layout)
 
+		# Refresh only when the online status actually CHANGES. The bridge emits connection_changed
+		# after every command it runs - including the connection_summary this dialog requests - so
+		# refreshing on every emission fed the dialog's own request back into itself: about a
+		# thousand full instrument refreshes a second, carrying on after the dialog was closed.
+		self._last_online = None
 		bridge.command_result.connect(self._on_result)
-		bridge.connection_changed.connect(lambda online: self.refresh())
+		bridge.connection_changed.connect(self._on_connection_changed)
+		self.finished.connect(self._release_bridge)
 
 		self._render_identity()
 		self.refresh()
@@ -3460,6 +3466,27 @@ class ConnectionInfoDialog(QDialog):
 
 	def refresh(self):
 		self.bridge.request("connection_summary")
+
+	def _on_connection_changed(self, online):
+
+		if online == self._last_online:
+			return
+
+		self._last_online = online
+		self.refresh()
+
+	def _release_bridge(self, result=None):
+		''' Closing a dialog only hides it, and a hidden dialog is still connected to the bridge -
+		so disconnect, and let Qt delete it. '''
+
+		for signal, slot in ((self.bridge.command_result, self._on_result),
+				(self.bridge.connection_changed, self._on_connection_changed)):
+			try:
+				signal.disconnect(slot)
+			except (TypeError, RuntimeError):
+				pass
+
+		self.deleteLater()
 
 	def _on_result(self, method_name, args, success, result):
 

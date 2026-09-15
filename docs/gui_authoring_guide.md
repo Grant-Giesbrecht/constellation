@@ -99,8 +99,9 @@ Two things that deliberately are *not* wrapped in a `Parameter*` control:
   `roundtrip`.
 - **Read-only measured values** - a power supply's measured voltage, current and power, for
   example. There's no setpoint for a measurement, only a reported number, so a `Parameter*`
-  control's setpoint and lamp machinery doesn't apply. Use a read-only field updated from
-  `on_state_changed()` (see `power_supply_gui.py`'s `_update_readings`). Clearing a tripped
+  control's setpoint and lamp machinery doesn't apply. Show them in a readout updated from
+  `on_state_changed()` - `power_supply_gui.py`'s `Readout` is an LCD by default, switchable to a
+  read-only text field from the View menu, so it can't be mistaken for an editable setpoint. Clearing a tripped
   protection is an action like any other: a plain button, enabled only while the state says
   something has tripped.
 
