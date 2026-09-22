@@ -18,6 +18,9 @@ from constellation.instrument_control.arb_waveform_generator.drivers.Siglent_SDG
 from constellation.instrument_control.arb_waveform_generator.drivers.Keysight_33500_dvr import *
 from constellation.instrument_control.arb_waveform_generator.arb_waveform_generator_gui import *
 
+from constellation.instrument_control.microwave_source.microwave_source_ctg import *
+from constellation.instrument_control.microwave_source.drivers.Agilent_83711B_dvr import *
+
 from constellation.instrument_control.power_supply.power_supply_ctg import *
 from constellation.instrument_control.power_supply.power_supply_gui import *
 from constellation.instrument_control.power_supply.drivers.Rigol_DP832_dvr import *
