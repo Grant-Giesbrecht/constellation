@@ -10,7 +10,7 @@ and the reason it is not a flavour of `ArbitraryWaveformGenerator`:
   rescale an amplitude against, so `output_load` has no meaning here either;
 - frequency ranges are GHz-scale, where an AWG's sample-rate-bound parameters are meaningless.
 
-Covers single-output boxes (Rohde & Schwarz SGS100A / SGMA, HP-Agilent 83711B) and multi-output
+Covers single-output boxes (Rohde & Schwarz SGS100A / SGMA, HP-Agilent 8371xB) and multi-output
 ones (R&S SMW200A with a second RF path), so every setting is per channel and the channel count
 is given at construction via `max_channels`.
 
@@ -22,7 +22,7 @@ real modulating source, not in the common API every CW generator must implement.
 
 from constellation.base import *
 
-class MicrowaveSourceChannelState(InstrumentState):
+class RFSignalGeneratorChannelState(InstrumentState):
 	
 	__state_fields__ = ("frequency", "power", "power_offset", "phase", "alc_enable", "output_enable")
 	
@@ -37,7 +37,7 @@ class MicrowaveSourceChannelState(InstrumentState):
 		self.add_param("alc_enable", unit="bool")
 		self.add_param("output_enable", unit="bool")
 
-class MicrowaveSourceState(InstrumentState):
+class RFSignalGeneratorState(InstrumentState):
 	
 	__state_fields__ = ("first_channel", "num_channels", "reference_source", "channels")
 	
@@ -51,12 +51,12 @@ class MicrowaveSourceState(InstrumentState):
 		# setting rather than one per channel.
 		self.add_param("reference_source", unit="")
 		
-		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=MicrowaveSourceChannelState, log=log))
+		self.add_param("channels", unit="", value=IndexedList(self.first_channel, self.num_channels, validate_type=RFSignalGeneratorChannelState, log=log))
 		
 		for ch_no in self.channels.get_range():
-			self.channels[ch_no] = MicrowaveSourceChannelState(log=log)
+			self.channels[ch_no] = RFSignalGeneratorChannelState(log=log)
 
-class MicrowaveSource(Driver):
+class RFSignalGenerator(Driver):
 	
 	# Where the 10 MHz timebase comes from. Which one is in force decides whether this source's
 	# frequency is its own or the rack's, so it is tracked rather than left to the front panel.
@@ -69,7 +69,7 @@ class MicrowaveSource(Driver):
 				are single-output - unlike an AWG, where two is the norm.
 		'''
 		
-		_state = MicrowaveSourceState(first_channel, max_channels, log=log)
+		_state = RFSignalGeneratorState(first_channel, max_channels, log=log)
 		super().__init__(address, log, relay, _state, expected_idn=expected_idn, dummy=dummy, first_channel_num=first_channel, **kwargs)
 		
 		self.max_channels = max_channels

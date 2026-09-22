@@ -27,7 +27,7 @@ and optional AES-encrypted networking so instruments can be controlled/monitored
 ### Category → Driver → (Mixin) hierarchy
 
 Each instrument type (oscilloscope, vector_network_analyzer, power_supply, digital_multimeter,
-spectrum_analyzer, arb_waveform_generator, audio_analyzer, microwave_source) lives under `src/constellation/instrument_control/<category>/`
+spectrum_analyzer, arb_waveform_generator, audio_analyzer, rf_signal_generator) lives under `src/constellation/instrument_control/<category>/`
 and follows the same three-layer pattern:
 
 1. **Category class** (`<category>_ctg.py`, e.g. `oscilloscope_ctg.py`): defines an abstract `Driver`

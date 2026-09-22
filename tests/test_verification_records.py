@@ -22,13 +22,13 @@ from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000E_dvr imp
 from constellation.instrument_control.arb_waveform_generator.drivers.Siglent_SDG2000X_dvr import SiglentSDG2000X
 from constellation.instrument_control.arb_waveform_generator.drivers.Keysight_33500_dvr import Keysight33500
 from constellation.instrument_control.power_supply.drivers.Rigol_DP832_dvr import RigolDP832
-from constellation.instrument_control.microwave_source.drivers.Agilent_83711B_dvr import Agilent83711B
+from constellation.instrument_control.rf_signal_generator.drivers.Agilent_837xxB_dvr import Agilent837xxB
 
 # Drivers whose records are cross-checked. Add a driver here once its verification.yaml exists;
 # until every driver is covered this is a deliberate opt-in list rather than a sweep of all
 # drivers, so the un-migrated ones don't fail the suite.
 TRACKED_DRIVERS = [RigolDS1000Z, RigolDS1000E, SiglentSDG2000X, Keysight33500, RigolDP832,
-	Agilent83711B]
+	Agilent837xxB]
 TRACKED_IDS = [cls.__name__ for cls in TRACKED_DRIVERS]
 
 @pytest.mark.parametrize("driver_cls", TRACKED_DRIVERS, ids=TRACKED_IDS)

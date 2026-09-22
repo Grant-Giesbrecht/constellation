@@ -20,7 +20,7 @@
 #               useful than "nothing is known", and it is not outranked by weaker records.
 #
 # Records are a LIST per method, keyed by model, because one driver covers a series: an 83711B
-# and an 83712B share the 8371xB command set, and a command can work on one and not the other.
+# and an 83732B share the 837xxB command set, and a command can work on one and not the other.
 #
 # EXPIRY. A record is evidence about a moment, not a certificate. A `roundtrip`/`confirmed` record
 # must therefore carry enough to be invalidated later, and all of it is captured automatically by
@@ -36,7 +36,7 @@
 #
 # Do not write `unavailable`, `unimplemented`, or any `stale-*` status here - all are derived.
 
-Agilent83711B:
+Agilent837xxB:
   get_alc_enable:
   - status: unverified
   get_frequency:

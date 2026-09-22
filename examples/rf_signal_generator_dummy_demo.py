@@ -1,18 +1,18 @@
-''' Drives an HP/Agilent 83711B CW source with no hardware attached.
+''' Drives an HP/Agilent 8371xB CW source with no hardware attached.
 
 Shows the two things that are specific to this category: a level is a power in dBm rather than an
-amplitude, and the 83711B genuinely cannot set a phase - so that call raises instead of quietly
+amplitude, and this family genuinely cannot set a phase - so that call raises instead of quietly
 recording a value the instrument never received.
 '''
 
-from constellation.instrument_control.microwave_source.microwave_source_ctg import *
-from constellation.instrument_control.microwave_source.drivers.Agilent_83711B_dvr import *
+from constellation.instrument_control.rf_signal_generator.rf_signal_generator_ctg import *
+from constellation.instrument_control.rf_signal_generator.drivers.Agilent_837xxB_dvr import *
 
 log = plf.LogPile()
 
-src = Agilent83711B("GPIB0::19::INSTR", log, dummy=True)
+src = Agilent837xxB("GPIB0::19::INSTR", log, dummy=True)
 
-src.set_reference_source(MicrowaveSource.REF_EXTERNAL)
+src.set_reference_source(RFSignalGenerator.REF_EXTERNAL)
 
 # -1.4 dB of cable loss between the front panel and the device under test. Applied before the
 # level, since it changes what the level means.

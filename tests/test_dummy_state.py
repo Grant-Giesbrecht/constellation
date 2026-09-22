@@ -16,7 +16,7 @@ from constellation.base import InstrumentState, IndexedList, Driver, CheckOnline
 from constellation.relay import DirectSCPIRelay, VICPDirectSCPIRelay, CommandRelay
 from constellation.all import (RigolDS1000Z as _RZ, SiglentSSA3000X, RigolDP832, SiglentSDM3000X,
 	Keysight34400, Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE,
-	Agilent83711B, MicrowaveSource, DigitalMultimeter)
+	Agilent837xxB, RFSignalGenerator, DigitalMultimeter)
 from constellation.instrument_control.oscilloscope.oscilloscope_ctg import Oscilloscope, OscilloscopeChannelState
 from constellation.instrument_control.oscilloscope.drivers.Rigol_DS1000Z_dvr import RigolDS1000Z
 
@@ -360,7 +360,7 @@ def test_vicp_relay_init_names_the_attribute_its_methods_use():
 # can't be instantiated at all. That's a separate, pre-existing gap (see todo_list.md).
 ALL_DRIVERS = [
 	RigolDS1000Z, SiglentSSA3000X, RigolDP832, SiglentSDM3000X, Keysight34400,
-	Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE, Agilent83711B,
+	Keithley2700, RohdeSchwarzZVA, SiglentSDG2000X, RohdeSchwarzFSE, Agilent837xxB,
 ]
 
 @pytest.mark.parametrize("driver_cls", ALL_DRIVERS, ids=lambda c: c.__name__)
@@ -573,27 +573,27 @@ def test_dummy_awg_roundtrips_without_a_dummy_responder():
 	assert awg.get_amplitude(1) == 0.8
 	assert awg.get_output_enable(1) is True
 
-def test_dummy_microwave_source_roundtrips_without_a_dummy_responder():
-	src = Agilent83711B("dummy", make_log(), dummy=True)
+def test_dummy_rf_signal_generator_roundtrips_without_a_dummy_responder():
+	src = Agilent837xxB("dummy", make_log(), dummy=True)
 	src.set_frequency(1, 12.5e9)
 	src.set_power(1, -8.5)
 	src.set_alc_enable(1, False)
 	src.set_output_enable(1, True)
-	src.set_reference_source(MicrowaveSource.REF_EXTERNAL)
+	src.set_reference_source(RFSignalGenerator.REF_EXTERNAL)
 
 	assert src.get_frequency(1) == 12.5e9
 	assert src.get_power(1) == -8.5
 	assert src.get_alc_enable(1) is False
 	assert src.get_output_enable(1) is True
-	assert src.get_reference_source() == MicrowaveSource.REF_EXTERNAL
+	assert src.get_reference_source() == RFSignalGenerator.REF_EXTERNAL
 
-def test_microwave_source_phase_is_unavailable_not_silently_tracked():
-	""" The 83711B has no phase control. A direct call must raise rather than write a phase into
+def test_rf_signal_generator_phase_is_unavailable_not_silently_tracked():
+	""" The 8371xB/8373xB have no phase control. A direct call must raise rather than write a phase into
 	state that the instrument was never told about - but a state sweep must step over it. """
 
 	from constellation.base import FeatureUnavailable
 
-	src = Agilent83711B("dummy", make_log(), dummy=True)
+	src = Agilent837xxB("dummy", make_log(), dummy=True)
 
 	with pytest.raises(FeatureUnavailable):
 		src.set_phase(1, 45)

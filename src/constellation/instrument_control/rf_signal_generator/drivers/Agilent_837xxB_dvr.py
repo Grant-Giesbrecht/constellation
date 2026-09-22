@@ -1,44 +1,47 @@
-''' HP / Agilent 83711B synthesized CW generator (1 - 20 GHz, single output).
+''' HP / Agilent 8371xB and 8373xB synthesized CW generators, single output.
 
-A deliberately plain instrument: one RF connector, one carrier, no waveform of any kind. Its
-sibling 8371xB/8373xB models (83712B, 83731B, 83732B) share this command set and differ only in
-frequency span and output power, so they can be driven by this class with a looser
-`expected_idn`.
+Deliberately plain instruments: one RF connector, one carrier, no waveform of any kind. The four
+models in the family - 83711B and 83712B (1 - 20 GHz and 10 MHz - 20 GHz) and the higher-power
+83731B and 83732B - share this command set and differ only in frequency span and output power,
+so one class covers all of them.
 
 	HP 8371xB/8373xB Synthesized CW Generator User's Guide - SCPI command reference.
 
-Two things about this instrument shape the driver:
+Two things about these instruments shape the driver:
 
-- **It has no phase control.** There is no PHASe subsystem; the synthesizer's phase relative to
-  the reference is simply not addressable. `set_phase`/`get_phase` are therefore marked
+- **They have no phase control.** There is no PHASe subsystem; the synthesizer's phase relative
+  to the reference is simply not addressable. `set_phase`/`get_phase` are therefore marked
   `@feature_unavailable` rather than silently doing nothing - see docs/partial_compliance.md.
 - **RF output on/off is `:POWer:STATe`, not `:OUTPut:STATe`.** This family predates the SCPI
   OUTPut subsystem's wide adoption, and the level and the on/off switch both live under POWer.
 
 None of the SCPI below has been checked against hardware yet; every method is recorded
 `unverified` in verification.yaml until a `pytest tests/hardware --address ...` run says
-otherwise.
+otherwise. Records are per model, so verifying an 83711B says nothing about an 83732B.
 '''
 
 from constellation.base import *
-from constellation.instrument_control.microwave_source.microwave_source_ctg import *
+from constellation.instrument_control.rf_signal_generator.rf_signal_generator_ctg import *
 
 # Category constant <-> the `:ROSCillator:SOURce` token, with a generated reverse lookup so the
 # setter and the getter cannot drift into different vocabularies.
 REF_CODES = {
-	MicrowaveSource.REF_INTERNAL: "INT",
-	MicrowaveSource.REF_EXTERNAL: "EXT",
+	RFSignalGenerator.REF_INTERNAL: "INT",
+	RFSignalGenerator.REF_EXTERNAL: "EXT",
 }
 REF_CODES_INV = {code: source for source, code in REF_CODES.items()}
 
-class Agilent83711B(MicrowaveSource):
+class Agilent837xxB(RFSignalGenerator):
 	
-	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn:str="83711B", **kwargs):
+	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn:str="837", **kwargs):
 		''' Args:
-			expected_idn (str): An 83711B answers "HEWLETT-PACKARD,83711B,...". Loosen this to
-				"8371" or "HEWLETT-PACKARD,837" to accept a sibling model.
+			expected_idn (str): Default matches every model in the family. Deliberately the model
+				prefix and not the vendor word: these were sold across the HP-to-Agilent rename,
+				so the same 83712B answers "HEWLETT-PACKARD,83712B,..." or
+				"Agilent Technologies,83712B,..." depending on when it was built, and only the
+				"837" is common to all of them. Pass your exact model for a stricter check.
 		
-		`max_channels` is not a parameter: the instrument has exactly one RF output, and letting a
+		`max_channels` is not a parameter: every model has exactly one RF output, and letting a
 		caller claim otherwise would build channel state that no command can ever reach.
 		'''
 		
@@ -117,11 +120,11 @@ class Agilent83711B(MicrowaveSource):
 	def get_power_offset(self, channel:int):
 		return self._parse_number(self.query(":POW:OFFS?"))
 	
-	@feature_unavailable("83711B has no phase offset control - the 8371xB command set has no PHASe subsystem")
+	@feature_unavailable("8371xB/8373xB have no phase offset control - the command set has no PHASe subsystem")
 	def set_phase(self, channel:int, phase_deg:float):
 		pass
 	
-	@feature_unavailable("83711B has no phase offset control - the 8371xB command set has no PHASe subsystem")
+	@feature_unavailable("8371xB/8373xB have no phase offset control - the command set has no PHASe subsystem")
 	def get_phase(self, channel:int):
 		pass
 	
