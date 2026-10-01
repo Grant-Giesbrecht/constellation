@@ -278,7 +278,7 @@ class BasicVectorNetworkAnalyzerCtg(Driver):
 	
 	@abstractmethod
 	def set_freq_end(self, f_Hz:float, channel:int=1):
-		self.modify_state(self.get_freq_start, ["channels", "freq_end"], f_Hz, indices=[channel])
+		self.modify_state(self.get_freq_end, ["channels", "freq_end"], f_Hz, indices=[channel])
 	
 	@abstractmethod
 	def get_freq_end(self, channel:int=1):

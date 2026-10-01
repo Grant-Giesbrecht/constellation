@@ -300,10 +300,6 @@ class RohdeSchwarzZVA(BasicVectorNetworkAnalyzerCtg):
 	def get_rf_power(self, channel:int=1):
 		return float(self.query(f"SOUR{channel}:POW?"))
 	
-	@superreturn
-	def get_rf_power(self):
-		return str_to_bool(self.query(f"OUTP:STAT?"))
-	
 	def clear_traces(self):
 		self.write(f"CALC:PAR:DEL:ALL")
 		
