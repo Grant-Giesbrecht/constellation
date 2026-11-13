@@ -40,20 +40,27 @@ def test_a_recording_round_trips_with_its_metadata(tmp_path):
 	# Read back through stardust's own tome reader: the file is a tome, so it comes back as a dict
 	# with every value its proper type.
 	d = tome_to_dict(str(path))
+	assert set(d) == {"time_domain", "acquisition_info"}
+
+	samples = d["time_domain"]
+	assert set(samples) == {"ai0", "ai2"}          # samples only - nothing else in this group
 	for ch in (0, 2):
-		assert d[f"ai{ch}"]["data"].dtype == np.float64
-		assert d[f"ai{ch}"]["data"].tolist() == [float(k) for k in range(500)]
-	assert d["format"] == "constellation-daq-stream" and d["format_version"] == 1
-	assert d["dt_s"] == pytest.approx(1e-3) and d["sample_rate_Hz"] == pytest.approx(1000.0)
-	assert d["first_sample"] == 0 and d["chunk_samples"] == 100
-	assert d["channels"] == [0, 2]
-	assert d["device_identity"] == "Vendor,STUB,0001,1.0" and d["driver"] == "_StubDAQ"
-	assert d["samples_written"] == 500 and d["complete"] is True
-	assert d["stop_reason"] == "max_chunks=5 reached"
-	assert d["start_time"] <= d["end_time"]
-	assert d["ai2"] | {"data": None} == {"data": None, "units": "V", "terminal_config": "nrse",
+		assert samples[f"ai{ch}"].dtype == np.float64
+		assert samples[f"ai{ch}"].tolist() == [float(k) for k in range(500)]
+
+	info = d["acquisition_info"]
+	assert info["format"] == "constellation-daq-stream" and info["format_version"] == 1
+	assert info["dt_s"] == pytest.approx(1e-3) and info["sample_rate_Hz"] == pytest.approx(1000.0)
+	assert info["first_sample"] == 0 and info["chunk_samples"] == 100
+	assert info["channels"] == [0, 2]
+	assert info["device_identity"] == "Vendor,STUB,0001,1.0" and info["driver"] == "_StubDAQ"
+	assert info["samples_written"] == 500 and info["complete"] is True
+	assert info["stop_reason"] == "max_chunks=5 reached"
+	assert info["start_time"] <= info["end_time"]
+	assert info["channel_settings"]["ai2"] == {"units": "V", "terminal_config": "nrse",
 		"range_min_V": -1.0, "range_max_V": 1.0}
-	assert "writer_error" not in d
+	assert set(info["channel_settings"]) == {"ai0", "ai2"}
+	assert "writer_error" not in info
 
 def test_the_file_follows_the_tome_rules(tmp_path):
 	""" Every node tagged, and no user data in attributes - the rules that make a tome loadable
@@ -71,7 +78,8 @@ def test_the_file_follows_the_tome_rules(tmp_path):
 			assert "__pytype__" in node.attrs, node.name
 			assert set(node.attrs) <= allowed, (node.name, set(node.attrs) - allowed)
 		assert f["/"].attrs["__pytype__"] == "dict"
-		assert f["ai0/data"].attrs["__pytype__"] == "ndarray" and f["ai0/data"].attrs["dtype"] == "float64"
+		ds = f["time_domain/ai0"]
+		assert ds.attrs["__pytype__"] == "ndarray" and ds.attrs["dtype"] == "float64"
 
 def test_an_existing_file_is_not_overwritten_by_default(tmp_path):
 	path = tmp_path / "run.h5"
@@ -82,7 +90,7 @@ def test_an_existing_file_is_not_overwritten_by_default(tmp_path):
 
 	with HDF5StreamRecorder(path, _daq(), overwrite=True) as rec:
 		rec.write(_chunk(0, 10))
-	assert tome_to_dict(str(path))["samples_written"] == 10
+	assert tome_to_dict(str(path))["acquisition_info"]["samples_written"] == 10
 
 def test_an_interrupted_recording_keeps_its_data_and_says_why(tmp_path):
 	path = tmp_path / "run.h5"
@@ -99,8 +107,8 @@ def test_an_interrupted_recording_keeps_its_data_and_says_why(tmp_path):
 
 	assert not daq.is_streaming()
 	d = tome_to_dict(str(path))
-	assert d["ai0"]["data"].tolist() == [float(k) for k in range(30)]
-	assert d["stop_reason"] == "interrupted" and d["complete"] is True
+	assert d["time_domain"]["ai0"].tolist() == [float(k) for k in range(30)]
+	assert d["acquisition_info"]["stop_reason"] == "interrupted" and d["acquisition_info"]["complete"] is True
 
 def test_a_gap_is_refused_not_written_as_continuous(tmp_path):
 	with HDF5StreamRecorder(tmp_path / "run.h5", _daq()) as rec:
@@ -136,13 +144,13 @@ def test_a_writer_failure_surfaces_and_marks_the_file_incomplete(tmp_path, monke
 			daq.stream(lambda c: (rec.write(c), time.sleep(0.01)), channels=[0], chunk_samples=10)
 
 	assert not daq.is_streaming()
-	d = tome_to_dict(str(path))
-	assert d["complete"] is False and "disk full" in d["writer_error"]
+	info = tome_to_dict(str(path))["acquisition_info"]
+	assert info["complete"] is False and "disk full" in info["writer_error"]
 
 _SWMR_READER = textwrap.dedent("""
 	import sys, h5py
 	with h5py.File(sys.argv[1], "r", libver="latest", swmr=True) as f:
-		ds = f["ai0/data"]
+		ds = f["time_domain/ai0"]
 		ds.refresh()
 		print(len(ds), ds[-1] if len(ds) else "")
 """)
@@ -158,7 +166,7 @@ def test_another_process_can_watch_a_recording_live(tmp_path):
 		assert out.stdout.split() == ["500", "499.0"]
 		rec.write(_chunk(500, 100))
 
-	assert len(tome_to_dict(str(path))["ai0"]["data"]) == 600
+	assert len(tome_to_dict(str(path))["time_domain"]["ai0"]) == 600
 
 _CRASHING_WRITER = textwrap.dedent("""
 	import os, sys, time
@@ -184,8 +192,8 @@ def test_a_writer_killed_mid_recording_leaves_a_readable_file(tmp_path):
 	assert out.returncode == 1, out.stderr
 
 	with h5py.File(path, "r", libver="latest", swmr=True) as f:
-		assert f["ai0/data"][:].tolist() == [float(k) for k in range(1000)]
-		assert "complete" not in f                # how a reader tells it wasn't closed cleanly
+		assert f["time_domain/ai0"][:].tolist() == [float(k) for k in range(1000)]
+		assert "complete" not in f["acquisition_info"]   # how a reader tells it wasn't closed cleanly
 
 # ---------------------------------------------------------------------------------------------
 # group=: recording as one entry of a larger tome
@@ -203,17 +211,19 @@ def test_a_recording_goes_into_a_group_of_an_existing_tome(tmp_path):
 	assert d["x"].tolist() == [0.0, 1.0, 2.0] and d["notes"] == "bench 2"
 	assert d["DAQ_data"]["Daq0"] == {"kept": 1}
 	r = d["DAQ_data"]["Daq1"]
-	assert r["ai2"]["data"].tolist() == [float(k) for k in range(30)]
-	assert r["channels"] == [0, 2] and r["samples_written"] == 30 and r["complete"] is True
-	assert r["stop_reason"] == "max_chunks=3 reached"
-	assert "complete" not in d and "ai0" not in d          # nothing leaked to the root
+	assert set(r) == {"time_domain", "acquisition_info"}
+	assert r["time_domain"]["ai2"].tolist() == [float(k) for k in range(30)]
+	info = r["acquisition_info"]
+	assert info["channels"] == [0, 2] and info["samples_written"] == 30 and info["complete"] is True
+	assert info["stop_reason"] == "max_chunks=3 reached"
+	assert set(d) == {"x", "notes", "DAQ_data"}        # nothing leaked to the root
 
 def test_a_group_in_a_new_file_creates_the_file(tmp_path):
 	path = str(tmp_path / "new.tome")
 	with HDF5StreamRecorder(path, _daq(), group="/a/b/") as rec:
 		rec.write(_chunk(0, 10))
 	d = tome_to_dict(path)
-	assert list(d) == ["a"] and d["a"]["b"]["samples_written"] == 10
+	assert list(d) == ["a"] and d["a"]["b"]["acquisition_info"]["samples_written"] == 10
 
 def test_an_existing_group_is_refused_unless_overwrite(tmp_path):
 	path = str(tmp_path / "run.tome")
@@ -226,7 +236,8 @@ def test_an_existing_group_is_refused_unless_overwrite(tmp_path):
 	with HDF5StreamRecorder(path, _daq(), group="rec", overwrite=True) as rec:
 		rec.write(_chunk(0, 10))
 	d = tome_to_dict(path)
-	assert d["x"] == 1 and "old" not in d["rec"] and d["rec"]["samples_written"] == 10
+	assert d["x"] == 1 and set(d["rec"]) == {"time_domain", "acquisition_info"}
+	assert d["rec"]["acquisition_info"]["samples_written"] == 10
 
 @pytest.mark.parametrize("group", ["x/rec", "events/rec"])
 def test_a_non_dict_on_the_path_is_refused(tmp_path, group):
@@ -248,7 +259,7 @@ def test_an_old_superblock_file_is_refused_before_anything_is_written(tmp_path):
 def test_a_group_recording_can_be_watched_live(tmp_path):
 	path = str(tmp_path / "run.tome")
 	assert dict_to_tome({"x": 1}, path)
-	reader = _SWMR_READER.replace('f["ai0/data"]', 'f["DAQ_data/Daq1/ai0/data"]')
+	reader = _SWMR_READER.replace('f["time_domain/ai0"]', 'f["DAQ_data/Daq1/time_domain/ai0"]')
 	with HDF5StreamRecorder(path, _daq(), group="DAQ_data/Daq1", flush_interval_s=0.05) as rec:
 		for k in range(5):
 			rec.write(_chunk(k * 100, 100))
@@ -282,7 +293,7 @@ def test_a_crash_while_recording_into_a_tome_keeps_the_existing_entries(tmp_path
 
 	with h5py.File(path, "r", libver="latest", swmr=True) as f:
 		assert f["x"][:].tolist() == [0.0, 1.0, 2.0, 3.0, 4.0]
-		assert f["DAQ_data/Daq1/ai0/data"][:].tolist() == [float(k) for k in range(1000)]
-		assert "complete" not in f["DAQ_data/Daq1"]
+		assert f["DAQ_data/Daq1/time_domain/ai0"][:].tolist() == [float(k) for k in range(1000)]
+		assert "complete" not in f["DAQ_data/Daq1/acquisition_info"]
 	d = tome_to_dict(str(path))
 	assert d["notes"] == "precious"

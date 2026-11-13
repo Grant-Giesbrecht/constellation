@@ -11,46 +11,50 @@ FILE LAYOUT
 The file is a tome (stardust.tome; spec in stardust's docs/tome/format.md): every value is a
 dataset or group tagged with a `__pytype__` attribute, and nothing else is stored in attributes. So
 `stardust.tome.tome_to_dict(path)` returns the whole recording as a dict, and MATLAB reads any
-field directly, e.g. `h5read(path, '/ai0/data')` or `h5read(path, '/dt_s')`.
+field directly, e.g. `h5read(path, '/time_domain/ai0')` or `h5read(path, '/acquisition_info/dt_s')`.
 
-By default the recording is the whole file. With `group=`, it is one entry of a larger tome
-instead - a new file, or one that already exists (see WRITING INTO AN EXISTING TOME):
+A recording is two groups: `time_domain` holds only the samples, and `acquisition_info` holds
+everything describing them. By default they sit at the root of a file of their own. With `group=`,
+they sit in that group of a larger tome instead - a new file, or one that already exists (see
+WRITING INTO AN EXISTING TOME):
 
 	dict_to_tome({"x": x, "y": y}, "run.tome")
 	with HDF5StreamRecorder("run.tome", daq, group="DAQ_data/Daq1") as rec: ...
-	tome_to_dict("run.tome")    # {"x": ..., "y": ..., "DAQ_data": {"Daq1": {"dt_s": ..., "ai0": ...}}}
+	tome_to_dict("run.tome")
+	# {"x": ..., "y": ..., "DAQ_data": {"Daq1": {"acquisition_info": {...}, "time_domain": {"ai0": ...}}}}
 
-The layout below then starts at that group rather than at `/`.
+	<group>/                 dict    the file root, or `group`
+	  time_domain/           dict
+	    ai<n>                ndarray float64 [samples], one per streamed channel; grows while recording
+	  acquisition_info/      dict
+	    format               str     "constellation-daq-stream"
+	    format_version       int
+	    created_at           str     ISO 8601, UTC
+	    start_time           str     ISO 8601, UTC - when sample 0 was taken   } from the first chunk
+	    sample_rate_Hz       float   the rate the board actually used          }
+	    dt_s                 float                                             }
+	    first_sample         int     stream index of time_domain/ai<n>[0]      }
+	    chunk_samples        int                                               }
+	    channels             list    of int, e.g. [0, 1]                       }
+	    device_identity      str                                               }
+	    driver               str                                               }
+	    channel_settings/    dict                                              }
+	      ai<n>/             dict    one per streamed channel                  }
+	        units            str     "V"
+	        terminal_config  str
+	        range_min_V      float
+	        range_max_V      float
+	    end_time             str     } written at close
+	    samples_written      int     }
+	    stop_reason          str     }
+	    complete             bool    } false if the disk writer failed
+	    writer_error         str     } only if it did
 
-	/                    dict
-	  format             str     "constellation-daq-stream"
-	  format_version     int
-	  created_at         str     ISO 8601, UTC
-	  start_time         str     ISO 8601, UTC - when sample 0 was taken    } from the first chunk
-	  sample_rate_Hz     float   the rate the board actually used           }
-	  dt_s               float                                              }
-	  first_sample       int     stream index of data[0]                    }
-	  chunk_samples      int                                                }
-	  channels           list    of int, e.g. [0, 1]                        }
-	  device_identity    str                                                }
-	  driver             str                                                }
-	  ai<n>/             dict    one per streamed channel                   }
-	    data             ndarray float64 [samples], grows while recording
-	    units            str     "V"
-	    terminal_config  str
-	    range_min_V      float
-	    range_max_V      float
-	  end_time           str     } written at close
-	  samples_written    int     }
-	  stop_reason        str     }
-	  complete           bool    } false if the disk writer failed
-	  writer_error       str     } only if it did
-
-There is no time column: `data[k]` is stream sample `first_sample + k`, at
+There is no time column: `time_domain/ai<n>[k]` is stream sample `first_sample + k`, at
 `(first_sample + k) * dt_s` seconds after `start_time`. Storing time would cost a third more space
 and say nothing those two values don't.
 
-The `data` datasets are chunked and resizable, unlike those dict_to_tome() writes; the format
+The sample datasets are chunked and resizable, unlike those dict_to_tome() writes; the format
 allows any HDF5 layout, and readers don't see the difference.
 
 WHY A WRITER THREAD. write() only queues the chunk and returns, so the acquisition loop never
@@ -65,11 +69,12 @@ stays valid at every flush; a hard crash loses at most the last `flush_interval_
 also lets another process watch a recording live:
 
 	f = h5py.File("run.h5", "r", libver="latest", swmr=True)
-	ds = f["ai0/data"]; ds.refresh(); latest = ds[-1000:]
+	ds = f["time_domain/ai0"]; ds.refresh(); latest = ds[-1000:]
 
 SWMR forbids creating anything new while writing, so the closing values (end_time,
 samples_written, stop_reason, complete) are added by reopening the file once the writer is done. A
-recording without `complete` was not closed cleanly - its data is still valid up to the last flush.
+recording whose acquisition_info has no `complete` was not closed cleanly - its data is still
+valid up to the last flush.
 
 WRITING INTO AN EXISTING TOME. The file is opened for appending and the rest of it is left alone.
 Some things to know:
@@ -98,6 +103,8 @@ from stardust.tome import TYPE_ATTR, require_tome_group, write_tome_value
 
 FILE_FORMAT = "constellation-daq-stream"
 FORMAT_VERSION = 1
+
+INFO_GROUP = "acquisition_info"
 
 # HDF5 storage chunk size bounds, in samples. Independent of the stream's chunk size: tiny storage
 # chunks make large files slow to read, huge ones waste space on a short recording.
@@ -156,6 +163,7 @@ class HDF5StreamRecorder:
 		self._channels = None
 		self._file = None
 		self._root = None              # the recording's group: the file itself, or self.group in it
+		self._info = None              # its acquisition_info group
 		self._datasets = {}
 		self._queue = None
 		self._thread = None
@@ -198,9 +206,10 @@ class HDF5StreamRecorder:
 						f"replace it, or choose another group.")
 				del f[self.group]
 			self._root = require_tome_group(f, self.group)
-			_put(self._root, "format", FILE_FORMAT)
-			_put(self._root, "format_version", FORMAT_VERSION)
-			_put(self._root, "created_at", _utc_now().isoformat())
+			self._info = require_tome_group(self._root, INFO_GROUP)
+			_put(self._info, "format", FILE_FORMAT)
+			_put(self._info, "format_version", FORMAT_VERSION)
+			_put(self._info, "created_at", _utc_now().isoformat())
 		except BaseException:
 			f.close()
 			raise
@@ -262,7 +271,7 @@ class HDF5StreamRecorder:
 				stop_reason = "closed"
 
 		with h5py.File(self.path, "a", libver="latest") as f:
-			g = f[self.group]
+			g = f[self.group][INFO_GROUP]
 			_put(g, "end_time", _utc_now().isoformat())
 			_put(g, "samples_written", self.samples_written)
 			_put(g, "stop_reason", stop_reason)
@@ -323,28 +332,31 @@ class HDF5StreamRecorder:
 		self._channels = sorted(chunk["channels"])
 		self._next_sample = int(chunk["first_sample"])
 
-		f = self._root
+		meta = self._info
 		start = info["started_at"].isoformat() if info else _utc_now().isoformat()
-		_put(f, "start_time", start)
-		_put(f, "sample_rate_Hz", 1.0 / dt)
-		_put(f, "dt_s", dt)
-		_put(f, "first_sample", self._next_sample)
-		_put(f, "chunk_samples", n)
-		_put(f, "channels", [int(ch) for ch in self._channels])
-		_put(f, "device_identity", str(getattr(getattr(self.daq, "id", None), "idn_model", "") or ""))
-		_put(f, "driver", type(self.daq).__name__)
+		_put(meta, "start_time", start)
+		_put(meta, "sample_rate_Hz", 1.0 / dt)
+		_put(meta, "dt_s", dt)
+		_put(meta, "first_sample", self._next_sample)
+		_put(meta, "chunk_samples", n)
+		_put(meta, "channels", [int(ch) for ch in self._channels])
+		_put(meta, "device_identity", str(getattr(getattr(self.daq, "id", None), "idn_model", "") or ""))
+		_put(meta, "driver", type(self.daq).__name__)
 
+		settings = require_tome_group(meta, "channel_settings")
+		samples = require_tome_group(self._root, "time_domain")
 		storage_chunk = min(max(n, _MIN_STORAGE_CHUNK), _MAX_STORAGE_CHUNK)
 		for ch in self._channels:
-			grp = f.create_group(f"ai{ch}")
-			grp.attrs[TYPE_ATTR] = "dict"
-			ds = grp.create_dataset("data", shape=(0,), maxshape=(None,), dtype="f8", chunks=(storage_chunk,))
+			name = f"ai{ch}"
+			ds = samples.create_dataset(name, shape=(0,), maxshape=(None,), dtype="f8", chunks=(storage_chunk,))
 			ds.attrs[TYPE_ATTR] = "ndarray"
 			ds.attrs["dtype"] = "float64"
-			_put(grp, "units", "V")
-			for key, value in ((info or {}).get("channels", {}).get(ch) or {}).items():
-				_put(grp, key, value)
 			self._datasets[ch] = ds
+
+			ch_settings = require_tome_group(settings, name)
+			_put(ch_settings, "units", "V")
+			for key, value in ((info or {}).get("channels", {}).get(ch) or {}).items():
+				_put(ch_settings, key, value)
 
 		self._file.swmr_mode = True
 
