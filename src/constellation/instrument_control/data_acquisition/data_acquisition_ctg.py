@@ -7,14 +7,24 @@ back a block of samples; between tasks the hardware holds essentially no state. 
 shape this category:
 
   1. Configuration (sample rate, per-channel range/terminal-config/enable, ...) is authoritative in
-     the driver's InstrumentState, not on the hardware. So the set_* methods here are plain blind
-     state updates (query_func=None) - there is nothing to read back to verify, and refresh_state()
-     has nothing to re-read.
+     the driver's InstrumentState, not on the hardware. The category therefore runs with
+     `blind_state_update` set, and every set_* stores its value through `_record()` - there is
+     nothing to read back to verify, and refresh_state() has nothing to re-read.
   2. Everything that actually touches hardware is funnelled through a small set of abstract
      `_hw_*` primitives. A concrete driver only implements those (translating them to nidaqmx, or
      comedi, or a reverse-engineered USB protocol); all orchestration, state tracking and dummy
      simulation live here, mirroring how the SCPI categories keep everything but the SCPI strings
      out of the driver file.
+
+Because the `_hw_*` primitives are this category's abstract methods, they are also what
+`verification.yaml` records for a DAQ driver (see docs/hardware_verification.md): they are the only
+code a DAQ driver author writes, so they are what hardware evidence describes, and their code hash
+is what expires it. The public methods above them are shared category code.
+
+Every primitive call goes through `_run_hw()`, which does for a DAQ what Driver.write/query do for a
+SCPI driver: refuses to run while offline (or reconnects, per the ReconnectPolicy), lets the relay
+classify a failure (a bad channel name is USAGE, an unplugged device is TRANSPORT), and marks the
+driver offline only when the device is really gone.
 
 Because a DAQ is not SCPI, drivers in this category are constructed with is_scpi=False, and this
 category overrides query_id() to identify the device via `_hw_device_identity()` rather than
@@ -89,11 +99,13 @@ class DataAcquisition(Driver):
 	TERM_RSE = "rse"
 	TERM_NRSE = "nrse"
 	TERM_PSEUDODIFF = "pseudodifferential"
+	TERMINAL_CONFIGS = (TERM_DIFF, TERM_RSE, TERM_NRSE, TERM_PSEUDODIFF)
 
 	# --- Acquisition modes ---
 	MODE_FINITE = "finite"          # Fixed number of hardware-timed samples, then stop.
 	MODE_CONTINUOUS = "continuous"  # Free-running hardware-timed acquisition.
 	MODE_ON_DEMAND = "on_demand"    # Software-timed, one sample per read (no sample clock).
+	ACQUISITION_MODES = (MODE_FINITE, MODE_CONTINUOUS, MODE_ON_DEMAND)
 
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn:str="",
 			max_ai_channels:int=16, num_digital_lines:int=0, dummy:bool=False, first_channel:int=0, **kwargs):
@@ -108,6 +120,10 @@ class DataAcquisition(Driver):
 		self.max_channels = max_ai_channels
 		self.num_digital_lines = num_digital_lines
 
+		# Configuration is authoritative in state (see module docstring), so values are stored as
+		# sent rather than read back. Required, not cosmetic: see _record().
+		self.blind_state_update = True
+
 		if self.dummy:
 			self.init_dummy_state()
 
@@ -118,11 +134,16 @@ class DataAcquisition(Driver):
 	def query_id(self) -> None:
 		''' Identifies the device via the driver's `_hw_device_identity()` rather than "*IDN?".
 		Called by Driver.connect() during construction (skipped entirely in dummy mode, where
-		connect() returns early). '''
+		connect() returns early).
+
+		The identity should follow the *IDN? field order - "<vendor>,<model>,<serial>,<firmware>" -
+		because the hardware-verification recorder reads the model and firmware out of fields 1 and
+		3, and the firmware field is what makes a record go stale-firmware when it changes. '''
 
 		try:
 			idn = self._hw_device_identity()
 		except Exception as e:
+			self.relay.note_failure(e)
 			self.error(f"Failed to read device identity. ({e})")
 			self.online = False
 			return
@@ -171,56 +192,140 @@ class DataAcquisition(Driver):
 		return val
 
 	# ==================================================================================
-	# Configuration (blind state updates - nothing to read back from hardware)
+	# State plumbing
+	# ==================================================================================
+
+	def _record(self, params:list, value, indices:list=None):
+		''' Stores a DAQ setting or result in state, through the modify_state() choke point.
+
+		modify_state() reads a None query_func as "this is a getter", and in dummy mode a getter
+		reads the tracked value back instead of storing - which is how every DAQ setter used to
+		drop its value in dummy mode. Passing a query_func marks this as a store; with
+		blind_state_update set (always, for a DAQ) it is never actually called, in either mode,
+		because there is no hardware register to read back from. '''
+
+		return self.modify_state(lambda: value, params, value, indices=indices)
+
+	def _valid_channel(self, channel:int, operation:str) -> bool:
+		try:
+			self.state.ai_channels.get_valid_idx(channel)
+			return True
+		except Exception:
+			first = self.state.first_channel
+			self.error(f"{operation}: no analog-input channel >{channel}<. Valid channels are {first}..{first + self.state.num_ai_channels - 1}.")
+			return False
+
+	def _valid_line(self, line:int, operation:str) -> bool:
+		if isinstance(line, int) and 0 <= line < self.num_digital_lines:
+			return True
+		self.error(f"{operation}: no digital line >{line}<. This device has {self.num_digital_lines} line(s), numbered from 0.")
+		return False
+
+	def _run_hw(self, operation:str, primitive, *args) -> tuple:
+		''' Calls one `_hw_*` primitive. The DAQ counterpart of Driver.write()/query().
+
+		Returns:
+			tuple: (success, result). On failure the error is logged, the relay records its kind,
+				and the driver goes offline only if the relay judges the device unreachable - a
+				rejected channel name must not take the instrument offline.
+		'''
+
+		if not self._ensure_online(operation):
+			return False, None
+
+		try:
+			result = primitive(*args)
+		except Exception as e:
+			kind = self.relay.note_failure(e)
+			self.error(f"{operation} failed ({kind.value}). ({e})")
+			if kind in (RelayErrorKind.TRANSPORT, RelayErrorKind.UNKNOWN):
+				self.check_online()
+			return False, None
+
+		self.relay.note_success()
+		return True, result
+
+	# ==================================================================================
+	# Configuration (stored in state - nothing to read back from hardware)
 	# ==================================================================================
 
 	def set_sample_rate(self, rate_Hz:float):
 		''' Sets the hardware sample-clock rate (samples/second/channel) for buffered acquisition. '''
-		return self.modify_state(None, ["sample_rate_Hz"], float(rate_Hz))
+		rate_Hz = float(rate_Hz)
+		if not rate_Hz > 0:
+			self.error(f"Sample rate must be positive, got >{rate_Hz}<.")
+			return None
+		return self._record(["sample_rate_Hz"], rate_Hz)
 
 	def get_sample_rate(self) -> float:
 		return self.state.sample_rate_Hz
 
 	def set_samples_per_channel(self, n:int):
-		''' Sets how many samples per channel a finite buffered acquisition captures. '''
-		return self.modify_state(None, ["samples_per_channel"], int(n))
+		''' Sets how many samples per channel a buffered acquisition captures. '''
+		n = int(n)
+		if n < 1:
+			self.error(f"Samples per channel must be at least 1, got >{n}<.")
+			return None
+		return self._record(["samples_per_channel"], n)
 
 	def get_samples_per_channel(self) -> int:
 		return self.state.samples_per_channel
 
 	def set_acquisition_mode(self, mode:str):
 		''' One of MODE_FINITE / MODE_CONTINUOUS / MODE_ON_DEMAND. '''
-		if mode not in (DataAcquisition.MODE_FINITE, DataAcquisition.MODE_CONTINUOUS, DataAcquisition.MODE_ON_DEMAND):
+		if mode not in DataAcquisition.ACQUISITION_MODES:
 			self.error(f"Unrecognised acquisition mode >{mode}<.")
 			return None
-		return self.modify_state(None, ["acquisition_mode"], mode)
+		return self._record(["acquisition_mode"], mode)
 
 	def get_acquisition_mode(self) -> str:
 		return self.state.acquisition_mode
 
 	def set_clock_source(self, source:str):
 		''' Sample-clock source terminal (empty string = onboard clock). '''
-		return self.modify_state(None, ["clock_source"], source)
+		return self._record(["clock_source"], str(source or ""))
+
+	def get_clock_source(self) -> str:
+		return self.state.clock_source
 
 	def set_ai_channel(self, channel:int, range_min_V:float=-10.0, range_max_V:float=10.0,
 			terminal_config:str=None, enabled:bool=True):
-		''' Configures one analog-input channel in a single call. '''
+		''' Convenience: configures one analog-input channel's terminal config, range and enable in
+		a single call, via the single-parameter setters. '''
 		if terminal_config is None:
 			terminal_config = DataAcquisition.TERM_DIFF
-		self.modify_state(None, ["ai_channels", "terminal_config"], terminal_config, indices=[channel])
-		self.modify_state(None, ["ai_channels", "range_min_V"], float(range_min_V), indices=[channel])
-		self.modify_state(None, ["ai_channels", "range_max_V"], float(range_max_V), indices=[channel])
-		self.modify_state(None, ["ai_channels", "enabled"], bool(enabled), indices=[channel])
+		if not self._valid_channel(channel, "set_ai_channel"):
+			return None
+		self.set_ai_channel_terminal_config(channel, terminal_config)
+		self.set_ai_channel_range(channel, range_min_V, range_max_V)
+		self.set_ai_channel_enabled(channel, enabled)
 
 	def set_ai_channel_enabled(self, channel:int, enabled:bool):
-		return self.modify_state(None, ["ai_channels", "enabled"], bool(enabled), indices=[channel])
+		if not self._valid_channel(channel, "set_ai_channel_enabled"):
+			return None
+		return self._record(["ai_channels", "enabled"], bool(enabled), indices=[channel])
 
 	def set_ai_channel_terminal_config(self, channel:int, terminal_config:str):
-		return self.modify_state(None, ["ai_channels", "terminal_config"], terminal_config, indices=[channel])
+		''' One of the TERM_* constants. Whether the hardware supports it on this channel is checked
+		by the driver when a task is built, since that is device-specific. '''
+		if not self._valid_channel(channel, "set_ai_channel_terminal_config"):
+			return None
+		if terminal_config not in DataAcquisition.TERMINAL_CONFIGS:
+			self.error(f"Unrecognised terminal configuration >{terminal_config}<.")
+			return None
+		return self._record(["ai_channels", "terminal_config"], terminal_config, indices=[channel])
 
 	def set_ai_channel_range(self, channel:int, range_min_V:float, range_max_V:float):
-		self.modify_state(None, ["ai_channels", "range_min_V"], float(range_min_V), indices=[channel])
-		self.modify_state(None, ["ai_channels", "range_max_V"], float(range_max_V), indices=[channel])
+		''' Sets the expected input range. The two ends are set together because they are one
+		setting to the hardware: a DAQ picks its gain from the pair. '''
+		if not self._valid_channel(channel, "set_ai_channel_range"):
+			return None
+		range_min_V, range_max_V = float(range_min_V), float(range_max_V)
+		if not range_min_V < range_max_V:
+			self.error(f"Range minimum >{range_min_V}< must be below maximum >{range_max_V}<.")
+			return None
+		self._record(["ai_channels", "range_min_V"], range_min_V, indices=[channel])
+		self._record(["ai_channels", "range_max_V"], range_max_V, indices=[channel])
 
 	def set_ai_channel_range_pm(self, channel:int, half_range_V:float):
 		''' Convenience for the common symmetric case: sets the range to +/- half_range_V. '''
@@ -237,6 +342,8 @@ class DataAcquisition(Driver):
 		specs = []
 		rng = self.state.ai_channels.get_range() if channels is None else channels
 		for ch in rng:
+			if channels is not None and not self._valid_channel(ch, "channel list"):
+				continue
 			cs = self.state.ai_channels[ch]
 			if cs is None:
 				continue
@@ -253,7 +360,8 @@ class DataAcquisition(Driver):
 	def read_ai_single(self, channels=None) -> dict:
 		''' Software-timed single-sample read of the requested (default: all enabled) AI channels.
 		Returns {channel:int -> volts:float} and updates each channel's `last_value_V`. Cheap; safe
-		to call interactively. '''
+		to call interactively. Returns {} if nothing was read (no channels, or a hardware error,
+		which is logged). '''
 
 		specs = self._enabled_channel_specs(channels)
 		if len(specs) == 0:
@@ -263,24 +371,29 @@ class DataAcquisition(Driver):
 		if self.dummy:
 			values = [self._dummy_sample(s["channel"]) for s in specs]
 		else:
-			values = self._hw_read_ai_single(specs)
+			ok, values = self._run_hw("read_ai_single", self._hw_read_ai_single, specs)
+			if not ok:
+				return {}
 
 		result = {}
 		for s, v in zip(specs, values):
 			ch = s["channel"]
 			v = float(v)
-			self.modify_state(None, ["ai_channels", "last_value_V"], v, indices=[ch])
+			self._record(["ai_channels", "last_value_V"], v, indices=[ch])
 			result[ch] = v
 		return result
 
 	def acquire(self, channels=None) -> dict:
-		''' Runs one hardware-timed buffered acquisition using the configured sample rate / samples
-		/ mode, over the requested (default: all enabled) AI channels. Potentially slow (seconds) -
-		call it from an explicit action, never from automatic polling.
+		''' Runs one buffered acquisition using the configured sample rate / samples / mode, over
+		the requested (default: all enabled) AI channels. Potentially slow (seconds) - call it from
+		an explicit action, never from automatic polling.
 
 		Returns a dict with int channel keys for convenient local plotting:
 			{"dt_s": float, "sample_rate_Hz": float, "t_s": [...], "channels": {ch:int -> [floats]}}
-		and stores a JSON-serialisable copy (string channel keys) in state.last_acquisition. '''
+		and stores a JSON-serialisable copy (string channel keys) in state.last_acquisition.
+		`dt_s` is the sample spacing the hardware actually used, which can differ from the
+		configured rate (DAQ clocks coerce to an achievable divisor). Returns {} if nothing was
+		acquired (no channels, or a hardware error, which is logged). '''
 
 		specs = self._enabled_channel_specs(channels)
 		if len(specs) == 0:
@@ -296,41 +409,56 @@ class DataAcquisition(Driver):
 			dt = 1.0 / rate if rate else 0.0
 			data = {s["channel"]: [self._dummy_sample(s["channel"], k, dt) for k in range(n)] for s in specs}
 		else:
-			dt, data = self._hw_acquire(specs, rate, n, mode, clock)
+			ok, out = self._run_hw("acquire", self._hw_acquire, specs, rate, n, mode, clock)
+			if not ok:
+				return {}
+			dt, data = out
+
+		actual_rate = 1.0 / dt if dt else rate
 
 		# Persist a serialisation-safe copy (string keys) as the tracked "last acquisition" data.
-		acq_state = {"dt_s": dt, "sample_rate_Hz": rate,
+		acq_state = {"dt_s": dt, "sample_rate_Hz": actual_rate,
 			"channels": {str(ch): list(v) for ch, v in data.items()}}
-		self.modify_state(None, ["last_acquisition"], acq_state)
+		self._record(["last_acquisition"], acq_state)
 
 		# Fold the last sample of each channel into its live reading too.
 		for ch, v in data.items():
 			if len(v) > 0:
-				self.modify_state(None, ["ai_channels", "last_value_V"], float(v[-1]), indices=[ch])
+				self._record(["ai_channels", "last_value_V"], float(v[-1]), indices=[ch])
 
 		n_pts = max((len(v) for v in data.values()), default=0)
-		return {"dt_s": dt, "sample_rate_Hz": rate, "t_s": [k * dt for k in range(n_pts)],
+		return {"dt_s": dt, "sample_rate_Hz": actual_rate, "t_s": [k * dt for k in range(n_pts)],
 			"channels": {ch: list(v) for ch, v in data.items()}}
 
-	def read_digital_line(self, line:int) -> bool:
-		''' Reads a single digital input line. Updates state.digital_in. '''
+	def read_digital_line(self, line:int):
+		''' Reads a single digital input line. Updates state.digital_in. Returns None on error. '''
+		if not self._valid_line(line, "read_digital_line"):
+			return None
 		if self.dummy:
 			val = bool(self.state.digital_out.get(str(line), False))  # loop-back so dummy is deterministic
 		else:
-			val = bool(self._hw_read_digital_line(line))
+			ok, val = self._run_hw("read_digital_line", self._hw_read_digital_line, line)
+			if not ok:
+				return None
+			val = bool(val)
 		di = dict(self.state.digital_in)
 		di[str(line)] = val
-		self.modify_state(None, ["digital_in"], di)
+		self._record(["digital_in"], di)
 		return val
 
-	def write_digital_line(self, line:int, value:bool) -> bool:
-		''' Writes a single digital output line. Updates state.digital_out. '''
+	def write_digital_line(self, line:int, value:bool):
+		''' Writes a single digital output line. Updates state.digital_out only if the write
+		succeeded. Returns the value written, or None on error. '''
+		if not self._valid_line(line, "write_digital_line"):
+			return None
 		value = bool(value)
 		if not self.dummy:
-			self._hw_write_digital_line(line, value)
+			ok, _ = self._run_hw("write_digital_line", self._hw_write_digital_line, line, value)
+			if not ok:
+				return None
 		do = dict(self.state.digital_out)
 		do[str(line)] = value
-		self.modify_state(None, ["digital_out"], do)
+		self._record(["digital_out"], do)
 		return value
 
 	# ==================================================================================
@@ -356,7 +484,8 @@ class DataAcquisition(Driver):
 			self.lowdebug(f"refresh_data() skipped: {e}")
 
 	# ==================================================================================
-	# Hardware primitives - a concrete driver implements ONLY these.
+	# Hardware primitives - a concrete driver implements ONLY these. They may raise; the
+	# category calls them through _run_hw(), which handles the failure.
 	# ==================================================================================
 
 	@abstractmethod
@@ -367,7 +496,9 @@ class DataAcquisition(Driver):
 
 	@abstractmethod
 	def _hw_acquire(self, specs:list, sample_rate:float, n_samples:int, mode:str, clock_source:str) -> tuple:
-		''' Run a buffered, hardware-timed acquisition. Return (dt_s, {channel:int -> [floats]}). '''
+		''' Run a buffered acquisition of `n_samples` per channel. Return
+		(dt_s, {channel:int -> [floats]}), where dt_s is the spacing the hardware really used.
+		MODE_ON_DEMAND has no sample clock: software-timed reads, with dt_s the mean interval. '''
 		...
 
 	@abstractmethod
@@ -382,6 +513,7 @@ class DataAcquisition(Driver):
 
 	@abstractmethod
 	def _hw_device_identity(self) -> str:
-		''' Return a human-readable identity string (e.g. "National Instruments,USB-6210,0x...") -
-		used by query_id() in place of "*IDN?". '''
+		''' Return the device identity in *IDN? field order,
+		"<vendor>,<model>,<serial>,<firmware/driver version>" - used by query_id() in place of
+		"*IDN?". See query_id() for why the field order matters. '''
 		...

@@ -1185,7 +1185,13 @@ has been sent to hardware yet.**
       has not been run. `/Data/Time` at a 32768 buffer is ~700 KB of JSON, under the RPC warning
       threshold; a multi-megabyte buffer would cross it.
 
-### BUG: `DataAcquisition` dummy setters drop every value
+### ~~BUG: `DataAcquisition` dummy setters drop every value~~ — FIXED 2026-11-13
+
+**Fixed:** the category now sets `blind_state_update` and stores every setting/result through
+`DataAcquisition._record()`, which passes a `query_func` so dummy mode stores rather than reads
+back. Hardware calls also now go through `_run_hw()` (online gate + relay failure classification).
+Pinned by `tests/test_data_acquisition.py`; found while bringing up constellation-ni's USB-6210
+driver, whose dummy tests all failed on it. Original report:
 
 *confirmed (2026-09-13)* — `data_acquisition_ctg.py` records settings with
 `modify_state(None, ...)`, which `modify_state()` treats as a *getter* in dummy mode: it reads the
