@@ -54,7 +54,7 @@ class DataAcquisitionWidget(InstrumentWidget):
 			set_method="set_samples_per_channel", validator=QDoubleValidator())
 		self.mode = TrackedChoice(
 			bridge, "Mode", get=lambda s: s.acquisition_mode, set_method="set_acquisition_mode",
-			choices=[DataAcquisition.MODE_FINITE, DataAcquisition.MODE_CONTINUOUS, DataAcquisition.MODE_ON_DEMAND])
+			choices=list(DataAcquisition.ACQUISITION_MODES))
 		settings_layout.addWidget(QLabel("Sample rate:"), 0, 0)
 		settings_layout.addWidget(self.sample_rate, 0, 1)
 		settings_layout.addWidget(QLabel("Samples/chan:"), 1, 0)

@@ -26,13 +26,32 @@ SCPI driver: refuses to run while offline (or reconnects, per the ReconnectPolic
 classify a failure (a bad channel name is USAGE, an unplugged device is TRANSPORT), and marks the
 driver offline only when the device is really gone.
 
+Two ways to take samples, because a DAQ is used two ways:
+
+  - `acquire()` is a SNAPSHOT: build a task, capture `samples_per_channel` samples, close the task.
+    Like pressing Single on a scope. Calling it in a loop leaves a gap between captures, during
+    which the board is not sampling, and each capture's time base restarts at zero.
+  - `start_stream()` / `read_stream()` / `stop_stream()` is a RECORDING: one task runs
+    continuously into a buffer on the host, and each read_stream() drains the next contiguous
+    block. Chunk k+1 begins exactly one sample period after chunk k ends, and `first_sample` / `t_s`
+    keep counting across chunks. `stream(callback)` wraps the three in a loop for "record until I
+    say stop". Stream data is returned, never stored in state: an unbounded recording does not
+    belong in a serialisable state object (state only tracks `streaming` and each channel's latest
+    value). Chunks hold numpy arrays - a long recording in Python lists costs ~4x the memory - and
+    `recording.HDF5StreamRecorder` is a ready-made `stream()` callback that writes them to disk.
+
+acquire() results stay plain lists, because they are stored in state and cross labmesh as JSON.
+
 Because a DAQ is not SCPI, drivers in this category are constructed with is_scpi=False, and this
 category overrides query_id() to identify the device via `_hw_device_identity()` rather than
 "*IDN?".
 '''
 
+import datetime
 import math
-import random
+import time
+
+import numpy as np
 
 from constellation.base import *
 
@@ -63,7 +82,7 @@ class DataAcquisitionState(InstrumentState):
 
 	__state_fields__ = ("first_channel", "num_ai_channels", "sample_rate_Hz", "samples_per_channel",
 		"acquisition_mode", "clock_source", "num_digital_lines", "digital_out", "digital_in",
-		"ai_channels", "last_acquisition")
+		"ai_channels", "last_acquisition", "streaming")
 
 	def __init__(self, first_channel:int, num_ai_channels:int, num_digital_lines:int=0, log:plf.LogPile=None):
 		super().__init__(log=log)
@@ -87,6 +106,10 @@ class DataAcquisitionState(InstrumentState):
 
 		self.add_param("last_acquisition", unit="", is_data=True, value=None)
 
+		# Whether a stream is running. A status, not a setting - restoring a saved state must not
+		# be read as a request to start one - so it is flagged as data.
+		self.add_param("streaming", unit="bool", is_data=True, value=False)
+
 
 
 class DataAcquisition(Driver):
@@ -102,15 +125,23 @@ class DataAcquisition(Driver):
 	TERMINAL_CONFIGS = (TERM_DIFF, TERM_RSE, TERM_NRSE, TERM_PSEUDODIFF)
 
 	# --- Acquisition modes ---
+	# Timing of acquire()'s snapshot. Continuous recording is start_stream()/read_stream().
 	MODE_FINITE = "finite"          # Fixed number of hardware-timed samples, then stop.
-	MODE_CONTINUOUS = "continuous"  # Free-running hardware-timed acquisition.
 	MODE_ON_DEMAND = "on_demand"    # Software-timed, one sample per read (no sample clock).
-	ACQUISITION_MODES = (MODE_FINITE, MODE_CONTINUOUS, MODE_ON_DEMAND)
+	ACQUISITION_MODES = (MODE_FINITE, MODE_ON_DEMAND)
 
 	def __init__(self, address:str, log:plf.LogPile, relay:CommandRelay=None, expected_idn:str="",
 			max_ai_channels:int=16, num_digital_lines:int=0, dummy:bool=False, first_channel:int=0, **kwargs):
 
 		_state = DataAcquisitionState(first_channel, max_ai_channels, num_digital_lines=num_digital_lines, log=log)
+
+		# The running stream, if any: {"specs", "dt", "chunk", "next_sample", "t_start",
+		# "started_at"}. Runtime bookkeeping, not state - see the module docstring.
+		self._stream = None
+
+		# How the most recent stream ended: {"reason", "samples"}, or None if none has. Lets a
+		# consumer such as HDF5StreamRecorder say in its file why a recording stopped.
+		self.last_stream_end = None
 
 		# A DAQ is not a SCPI instrument - is_scpi=False disables the base class's *IDN?/*RST/*OPC
 		# machinery, which would be meaningless here.
@@ -177,18 +208,19 @@ class DataAcquisition(Driver):
 		if self.max_channels > 1:
 			self.set_ai_channel(self.first_channel + 1, -5.0, 5.0, DataAcquisition.TERM_DIFF, enabled=True)
 
-	def _dummy_sample(self, channel:int, k:int=0, dt:float=0.0) -> float:
-		''' Synthesises a plausible voltage sample for `channel` at sample index `k` (spacing `dt`):
-		a per-channel sine wave plus a little noise, clipped to the channel's configured range. '''
+	def _dummy_block(self, channel:int, k0:int, n:int, dt:float) -> np.ndarray:
+		''' Synthesises `n` plausible voltage samples for `channel`, starting at sample index `k0`
+		with spacing `dt`: a per-channel sine wave plus a little noise, clipped to the channel's
+		configured range. Indexed from k0 so consecutive stream chunks continue the same wave. '''
 
-		t = k * dt
+		t = (k0 + np.arange(n)) * dt
 		freq = 10.0 * (channel - self.first_channel + 1)          # distinct tone per channel
 		amp = 0.5 + 0.2 * (channel - self.first_channel)
-		val = amp * math.sin(2.0 * math.pi * freq * t) + random.uniform(-0.02, 0.02)
+		val = amp * np.sin(2.0 * math.pi * freq * t) + np.random.uniform(-0.02, 0.02, n)
 
 		cs = self.state.ai_channels[channel]
 		if cs is not None:
-			val = max(cs.range_min_V, min(cs.range_max_V, val))
+			val = np.clip(val, cs.range_min_V, cs.range_max_V)
 		return val
 
 	# ==================================================================================
@@ -272,7 +304,8 @@ class DataAcquisition(Driver):
 		return self.state.samples_per_channel
 
 	def set_acquisition_mode(self, mode:str):
-		''' One of MODE_FINITE / MODE_CONTINUOUS / MODE_ON_DEMAND. '''
+		''' acquire()'s timing: MODE_FINITE (hardware-clocked) or MODE_ON_DEMAND (software-timed).
+		For continuous recording use start_stream(). '''
 		if mode not in DataAcquisition.ACQUISITION_MODES:
 			self.error(f"Unrecognised acquisition mode >{mode}<.")
 			return None
@@ -363,13 +396,16 @@ class DataAcquisition(Driver):
 		to call interactively. Returns {} if nothing was read (no channels, or a hardware error,
 		which is logged). '''
 
+		if self._busy_streaming("read_ai_single"):
+			return {}
+
 		specs = self._enabled_channel_specs(channels)
 		if len(specs) == 0:
 			self.warning("read_ai_single: no channels enabled/requested.")
 			return {}
 
 		if self.dummy:
-			values = [self._dummy_sample(s["channel"]) for s in specs]
+			values = [float(self._dummy_block(s["channel"], 0, 1, 0.0)[0]) for s in specs]
 		else:
 			ok, values = self._run_hw("read_ai_single", self._hw_read_ai_single, specs)
 			if not ok:
@@ -395,6 +431,9 @@ class DataAcquisition(Driver):
 		configured rate (DAQ clocks coerce to an achievable divisor). Returns {} if nothing was
 		acquired (no channels, or a hardware error, which is logged). '''
 
+		if self._busy_streaming("acquire"):
+			return {}
+
 		specs = self._enabled_channel_specs(channels)
 		if len(specs) == 0:
 			self.warning("acquire: no channels enabled/requested.")
@@ -407,12 +446,15 @@ class DataAcquisition(Driver):
 
 		if self.dummy:
 			dt = 1.0 / rate if rate else 0.0
-			data = {s["channel"]: [self._dummy_sample(s["channel"], k, dt) for k in range(n)] for s in specs}
+			data = {s["channel"]: self._dummy_block(s["channel"], 0, n, dt) for s in specs}
 		else:
 			ok, out = self._run_hw("acquire", self._hw_acquire, specs, rate, n, mode, clock)
 			if not ok:
 				return {}
 			dt, data = out
+
+		# Plain lists from here: this result is stored in state and crosses labmesh as JSON.
+		data = {ch: np.asarray(v, dtype=np.float64).tolist() for ch, v in data.items()}
 
 		actual_rate = 1.0 / dt if dt else rate
 
@@ -429,6 +471,225 @@ class DataAcquisition(Driver):
 		n_pts = max((len(v) for v in data.values()), default=0)
 		return {"dt_s": dt, "sample_rate_Hz": actual_rate, "t_s": [k * dt for k in range(n_pts)],
 			"channels": {ch: list(v) for ch, v in data.items()}}
+
+	# ==================================================================================
+	# Streaming (continuous, gapless recording - see module docstring)
+	# ==================================================================================
+
+	def _busy_streaming(self, operation:str) -> bool:
+		''' Analog-input snapshots can't run while a stream holds the AI subsystem. Digital I/O
+		is a separate subsystem and keeps working. '''
+		if self._stream is None:
+			return False
+		self.error(f"{operation}: analog input is busy streaming - stop_stream() first.")
+		return True
+
+	def start_stream(self, channels=None, chunk_samples:int=None) -> bool:
+		''' Starts continuous, hardware-clocked sampling of the requested (default: all enabled)
+		AI channels at the configured sample rate and clock source. Sampling runs from here until
+		stop_stream(), whether or not anything is reading; a host-side buffer holds the samples
+		until read_stream() drains them. Read faster than the board fills it, or the buffer
+		overflows and the stream stops.
+
+		Args:
+			channels (list): AI channels to stream. Default: every enabled channel.
+			chunk_samples (int): Samples per channel that read_stream() returns by default.
+				Default: samples_per_channel.
+
+		Returns:
+			bool: True if the stream started.
+		'''
+
+		if self._stream is not None:
+			self.error("start_stream: a stream is already running - stop_stream() first.")
+			return False
+
+		specs = self._enabled_channel_specs(channels)
+		if len(specs) == 0:
+			self.warning("start_stream: no channels enabled/requested.")
+			return False
+
+		chunk = int(chunk_samples if chunk_samples is not None else self.state.samples_per_channel)
+		if chunk < 1:
+			self.error(f"start_stream: chunk_samples must be at least 1, got >{chunk}<.")
+			return False
+
+		rate = self.state.sample_rate_Hz
+		if self.dummy:
+			dt = 1.0 / rate
+		else:
+			ok, dt = self._run_hw("start_stream", self._hw_start_stream, specs, rate, chunk, self.state.clock_source)
+			if not ok:
+				return False
+
+		self._stream = {"specs": specs, "dt": float(dt), "chunk": chunk, "next_sample": 0, "t_start": time.perf_counter(),
+			"started_at": datetime.datetime.now(datetime.timezone.utc)}
+		self._record(["streaming"], True)
+		self.debug(f"Stream started: {[s['channel'] for s in specs]} at {1.0 / dt:.6g} S/s, {chunk}-sample chunks.")
+		return True
+
+	def read_stream(self, n_samples:int=None, timeout_s:float=None) -> dict:
+		''' Returns the next contiguous block of the running stream, blocking until it has been
+		sampled.
+
+		Args:
+			n_samples (int): Samples per channel. Default: the stream's chunk size.
+			timeout_s (float): How long to wait. Default: the block's duration plus 5 s.
+
+		Returns:
+			dict: {"first_sample": int, "dt_s": float, "t_s": ndarray, "channels": {ch:int -> ndarray}},
+				float64 arrays of n_samples each. `first_sample` counts from the start of the
+				stream and `t_s` is time since the stream started, so consecutive chunks
+				concatenate into one record. Returns {} if
+				no stream is running or the read failed - in which case the stream has been
+				stopped (an overflowed buffer can't be resumed without a gap) and a new one must
+				be started.
+		'''
+
+		st = self._stream
+		if st is None:
+			self.error("read_stream: no stream is running - start_stream() first.")
+			return {}
+
+		n = st["chunk"] if n_samples is None else int(n_samples)
+		if n < 1:
+			self.error(f"read_stream: n_samples must be at least 1, got >{n}<.")
+			return {}
+		if timeout_s is None:
+			timeout_s = n * st["dt"] + 5.0
+
+		first = st["next_sample"]
+		dt = st["dt"]
+
+		if self.dummy:
+			# Pace like hardware: a block isn't available until it has been "sampled".
+			wait = st["t_start"] + (first + n) * dt - time.perf_counter()
+			if wait > 0:
+				time.sleep(wait)
+			data = {s["channel"]: self._dummy_block(s["channel"], first, n, dt) for s in st["specs"]}
+		else:
+			ok, data = self._run_hw("read_stream", self._hw_read_stream, n, timeout_s)
+			if not ok:
+				self.error(f"read_stream: read failed after {first} samples; the stream has been stopped. Call start_stream() to begin a new one.")
+				self._end_stream(f"read failed ({self.relay.last_error_kind.value} error)")
+				return {}
+
+		st["next_sample"] = first + n
+		data = {ch: np.asarray(v, dtype=np.float64) for ch, v in data.items()}
+
+		for ch, v in data.items():
+			if len(v) > 0:
+				self._record(["ai_channels", "last_value_V"], float(v[-1]), indices=[ch])
+
+		return {"first_sample": first, "dt_s": dt, "t_s": (first + np.arange(n)) * dt, "channels": data}
+
+	def stop_stream(self) -> int:
+		''' Stops the running stream and releases the hardware. Samples taken but not yet read are
+		discarded.
+
+		Returns:
+			int: Samples per channel read from the stream, or 0 if none was running.
+		'''
+
+		if self._stream is None:
+			self.warning("stop_stream: no stream is running.")
+			return 0
+
+		total = self._stream["next_sample"]
+		self._end_stream("stopped")
+		self.debug(f"Stream stopped after {total} samples per channel.")
+		return total
+
+	def _end_stream(self, reason:str) -> None:
+		''' Tears the stream down unconditionally, recording why in `last_stream_end`. Not gated on
+		being online, unlike _run_hw(): a stream whose device dropped off still holds a task that
+		must be released. '''
+
+		self.last_stream_end = {"reason": reason, "samples": self._stream["next_sample"]}
+		if not self.dummy:
+			try:
+				self._hw_stop_stream()
+			except Exception as e:
+				self.warning(f"Stopping the stream raised; its hardware may still be reserved. ({e})")
+		self._stream = None
+		self._record(["streaming"], False)
+
+	def is_streaming(self) -> bool:
+		return self._stream is not None
+
+	def stream_info(self) -> dict:
+		''' Describes the running stream - what a recording's metadata needs - or None.
+
+		Returns:
+			dict: {"started_at": aware UTC datetime, "dt_s", "sample_rate_Hz" (the rate the
+				hardware really uses), "chunk_samples", "samples_read", "channels":
+				{ch:int -> {"terminal_config", "range_min_V", "range_max_V"}}}.
+		'''
+
+		st = self._stream
+		if st is None:
+			return None
+
+		return {"started_at": st["started_at"], "dt_s": st["dt"], "sample_rate_Hz": 1.0 / st["dt"],
+			"chunk_samples": st["chunk"], "samples_read": st["next_sample"],
+			"channels": {s["channel"]: {k: s[k] for k in ("terminal_config", "range_min_V", "range_max_V")} for s in st["specs"]}}
+
+	def stream(self, callback, duration_s:float=None, max_chunks:int=None, channels=None, chunk_samples:int=None) -> int:
+		''' Records continuously, handing each chunk to `callback(chunk)` as it arrives - the
+		"record until I say stop" loop. Blocks until `callback` returns False, `duration_s` of
+		signal has been recorded, `max_chunks` chunks have been read, a read fails, or the caller
+		interrupts (Ctrl+C). The stream is stopped however the loop ends.
+
+		Keep `callback` quicker than one chunk's duration on average, or the buffer eventually
+		overflows. Run this in a thread if the caller has other work to do meanwhile.
+
+		Args:
+			callback (callable): chunk dict (see read_stream()) -> anything; False stops.
+			duration_s (float): Stop once this much signal time has been recorded.
+			max_chunks (int): Stop after this many chunks.
+			channels, chunk_samples: As for start_stream().
+
+		Returns:
+			int: Samples per channel recorded.
+		'''
+
+		if not self.start_stream(channels=channels, chunk_samples=chunk_samples):
+			return 0
+
+		chunks = 0
+		reason = "stopped"
+		try:
+			while True:
+				chunk = self.read_stream()
+				if not chunk:
+					break          # read_stream() has already ended the stream, with its reason
+				chunks += 1
+				if callback(chunk) is False:
+					reason = "callback returned False"
+					break
+				if max_chunks is not None and chunks >= max_chunks:
+					reason = f"max_chunks={max_chunks} reached"
+					break
+				if duration_s is not None and (chunk["first_sample"] + len(chunk["t_s"])) * chunk["dt_s"] >= duration_s:
+					reason = f"duration_s={duration_s:g} reached"
+					break
+		except KeyboardInterrupt:
+			reason = "interrupted"
+			raise
+		except Exception as e:
+			reason = f"callback raised {type(e).__name__}: {e}"
+			raise
+		finally:
+			if self._stream is not None:
+				self._end_stream(reason)
+
+		return self.last_stream_end["samples"]
+
+	def close(self) -> None:
+		''' Stops any running stream before closing, so the hardware isn't left reserved. '''
+		if self._stream is not None:
+			self._end_stream("driver closed")
+		super().close()
 
 	def read_digital_line(self, line:int):
 		''' Reads a single digital input line. Updates state.digital_in. Returns None on error. '''
@@ -477,7 +738,11 @@ class DataAcquisition(Driver):
 		self.lowdebug("apply_state(): DAQ configuration is applied at acquisition time; nothing to push now.")
 
 	def refresh_data(self):
-		''' Best-effort single-shot read of all enabled channels. '''
+		''' Best-effort single-shot read of all enabled channels. Skipped while streaming: the
+		stream's consumer keeps each channel's last_value_V current, and a poll must never steal
+		samples from a recording. '''
+		if self._stream is not None:
+			return
 		try:
 			self.read_ai_single()
 		except Exception as e:
@@ -496,9 +761,28 @@ class DataAcquisition(Driver):
 
 	@abstractmethod
 	def _hw_acquire(self, specs:list, sample_rate:float, n_samples:int, mode:str, clock_source:str) -> tuple:
-		''' Run a buffered acquisition of `n_samples` per channel. Return
+		''' Run one snapshot of `n_samples` per channel, then release the hardware. Return
 		(dt_s, {channel:int -> [floats]}), where dt_s is the spacing the hardware really used.
 		MODE_ON_DEMAND has no sample clock: software-timed reads, with dt_s the mean interval. '''
+		...
+
+	@abstractmethod
+	def _hw_start_stream(self, specs:list, sample_rate:float, chunk_samples:int, clock_source:str) -> float:
+		''' Start continuous hardware-clocked sampling of `specs` into a host buffer comfortably
+		larger than one chunk, running until _hw_stop_stream(). Return the sample spacing the
+		hardware really used (dt_s). Release anything acquired if starting fails. '''
+		...
+
+	@abstractmethod
+	def _hw_read_stream(self, n_samples:int, timeout_s:float) -> dict:
+		''' Return the next `n_samples` per channel of the running stream, contiguous with the
+		previous read, as {channel:int -> array-like of floats} (numpy preferred). Block until available; raise on timeout or
+		overflow - never return a short or gapped block. '''
+		...
+
+	@abstractmethod
+	def _hw_stop_stream(self) -> None:
+		''' Stop the stream and release its hardware. Must be safe after a failed read. '''
 		...
 
 	@abstractmethod
