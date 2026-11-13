@@ -43,4 +43,4 @@ Issues = "https://github.com/Grant-Giesbrecht/constellation/issues"
 # indicator icons and needs the same treatment.
 [tool.setuptools.package-data]
 "constellation" = ["assets/*"]
-"constellation.instrument_control.*.drivers" = ["verification.yaml"]
+"*" = ["verification.yaml"]
